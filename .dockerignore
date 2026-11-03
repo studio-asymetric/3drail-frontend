@@ -1,0 +1,10 @@
+node_modules
+dist
+.vite
+.git
+proxy/osm-cache
+proxy/cache.json
+proxy/proxy.log
+*.log
+**/*.blend
+**/*.blend1

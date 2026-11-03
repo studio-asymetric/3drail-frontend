@@ -1,0 +1,2 @@
+"feed_publisher_name","feed_publisher_url","feed_lang","feed_start_date","feed_end_date","feed_version"
+"ŽSR","https://www.zsr.sk/","sk","20250408","20251213","1000"

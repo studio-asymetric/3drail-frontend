@@ -1,0 +1,15 @@
+node_modules
+dist
+.vite
+.cursor
+proxy/cache.json
+proxy/proxy.log
+proxy/osm-cache
+data
+temp_dem
+tmp
+*.log
+*.pbf
+*.tif
+*.pptx
+.DS_Store
