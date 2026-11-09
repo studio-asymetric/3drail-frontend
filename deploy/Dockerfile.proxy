@@ -3,6 +3,10 @@ FROM node:22-alpine
 WORKDIR /app
 
 COPY proxy/server.mjs ./server.mjs
+COPY proxy/simplifyRail.mjs ./simplifyRail.mjs
+COPY proxy/maptilerRails.mjs ./maptilerRails.mjs
+COPY proxy/trainDetail.mjs ./trainDetail.mjs
+RUN npm install --omit=dev pbf @mapbox/vector-tile
 COPY proxy/osm-cache ./osm-cache
 
 RUN mkdir -p /app/osm-cache

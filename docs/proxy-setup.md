@@ -20,7 +20,7 @@ This service impersonates the mapa.zsr.sk browser client so our frontend can acc
 - `App.tsx` exposes **Use proxy live API (server handles cookies)** so the app can switch between the cached feed and the static mirror.
 - `TrainService` records `hypothesisId=TS2` to show whether the proxy was used.
 - The dev server proxies `/proxy` to `http://127.0.0.1:9000`, so run `npm run dev` and the PHP server together during development.
-- Railway tiles now come through `/proxy?mode=osm&minLat=...`; the proxy caches every tile in `proxy/osm-cache` for a week and only hits Overpass when stale or missing.
+- Railway tiles now come through `/proxy?mode=osm&minLat=...`. The proxy simplifies each tile (every fourth point, joined ends) once, caches that geometry in `proxy/osm-cache` for 30 days, and only hits Overpass when the cache is missing or older than that.
 
 ## Deploying to Wedos (or any static+PHP host)
 

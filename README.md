@@ -37,8 +37,9 @@ Mount a persistent volume at `/data` so the train cache and the railway-vector c
 | `OSM_CACHE_DIR` | `/data/osm-cache` |
 | `PROXY_CACHE_FILE` | `/data/cache.json` |
 | `PROXY_LOG_FILE` | `/data/proxy.log` |
+| `MAPTILER_KEY` | key for the same vector tiles as the geographic map on mapa.zsr.sk |
 
-No secrets are required. After the first visit the railway tiles fill in and are kept for seven days.
+Set `MAPTILER_KEY` in Coolify. Without it the railway tiles fall back to Overpass. After the first visit the tiles are kept for 30 days.
 
 Check:
 

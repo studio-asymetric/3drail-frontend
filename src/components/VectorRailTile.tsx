@@ -1,9 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { useThree } from '@react-three/fiber';
-import { Group } from 'three';
-import { Line2 } from 'three/examples/jsm/lines/Line2.js';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
-import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { BufferAttribute, BufferGeometry, LineBasicMaterial } from 'three';
 
 interface VectorRailTileProps {
   chains: Float32Array[];
@@ -11,52 +7,56 @@ interface VectorRailTileProps {
 }
 
 /**
- * Screen-space strokes for one batch of railway polylines.
- * WebGL's built-in lines ignore width, which hid the curves.
+ * One LineSegments draw for a tile. Fat Line2 strokes were a few thousand
+ * extra meshes and were the main frame-time cost of the network.
  */
 export function VectorRailTile({ chains, opacity = 1 }: VectorRailTileProps) {
-  const { size } = useThree();
+  const geometry = useMemo(() => {
+    let segmentCount = 0;
+    chains.forEach((chain) => {
+      const points = Math.floor(chain.length / 3);
+      if (points >= 2) {
+        segmentCount += points - 1;
+      }
+    });
+    const positions = new Float32Array(segmentCount * 6);
+    let offset = 0;
+    chains.forEach((chain) => {
+      const points = Math.floor(chain.length / 3);
+      for (let index = 0; index < points - 1; index += 1) {
+        const a = index * 3;
+        const b = (index + 1) * 3;
+        positions[offset++] = chain[a];
+        positions[offset++] = chain[a + 1];
+        positions[offset++] = chain[a + 2];
+        positions[offset++] = chain[b];
+        positions[offset++] = chain[b + 1];
+        positions[offset++] = chain[b + 2];
+      }
+    });
+    const next = new BufferGeometry();
+    next.setAttribute('position', new BufferAttribute(positions, 3));
+    return next;
+  }, [chains]);
+
   const material = useMemo(
     () =>
-      new LineMaterial({
+      new LineBasicMaterial({
         color: 0xf4f7fb,
-        linewidth: 2.4,
-        transparent: true,
+        transparent: opacity < 1,
         opacity,
-        depthTest: false,
+        depthTest: true,
         depthWrite: false,
       }),
     [opacity]
   );
 
-  const group = useMemo(() => {
-    const next = new Group();
-    chains.forEach((chain) => {
-      if (chain.length < 6) {
-        return;
-      }
-      const geometry = new LineGeometry();
-      geometry.setPositions(chain);
-      const line = new Line2(geometry, material);
-      line.renderOrder = 1400;
-      next.add(line);
-    });
-    return next;
-  }, [chains, material]);
-
-  useEffect(() => {
-    material.resolution.set(size.width, size.height);
-  }, [material, size.width, size.height]);
-
   useEffect(() => {
     return () => {
-      group.traverse((object) => {
-        const line = object as Line2;
-        line.geometry?.dispose();
-      });
+      geometry.dispose();
       material.dispose();
     };
-  }, [group, material]);
+  }, [geometry, material]);
 
-  return <primitive object={group} />;
+  return <lineSegments geometry={geometry} material={material} renderOrder={1400} />;
 }

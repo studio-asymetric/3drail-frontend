@@ -703,6 +703,18 @@ body,
   overflow: hidden;
 }
 
+.map-basemap-credit {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
 .map-view-canvas {
   width: 100%;
   height: 100%;
@@ -906,5 +918,242 @@ body,
   font-size: 0.85rem;
   text-decoration: underline;
   display: none;
+}
+
+.shell {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #000;
+  color: #f4f4f4;
+}
+
+.shell__map {
+  position: absolute;
+  inset: 0;
+}
+
+.dock {
+  position: absolute;
+  z-index: 30;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(24rem, 100vw);
+  display: flex;
+  flex-direction: column;
+  background: #0c0c0c;
+  border-right: 1px solid #242424;
+  color: #f4f4f4;
+}
+
+.dock__bar {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.25rem 0.85rem;
+  border-bottom: 1px solid #242424;
+}
+
+.dock__mark {
+  border: 0;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-weight: 560;
+  letter-spacing: -0.04em;
+  font-size: 1.05rem;
+  padding: 0;
+  cursor: pointer;
+}
+
+.dock__status {
+  margin: 0;
+  color: #8d8d8d;
+  font-size: 0.75rem;
+}
+
+.dock__status.is-error {
+  color: #e8b4b4;
+}
+
+.dock__index,
+.dock__train {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.dock__search {
+  margin: 0.9rem 1.25rem 0.4rem;
+  border: 0;
+  border-bottom: 1px solid #2c2c2c;
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.45rem 0;
+  outline: none;
+}
+
+.dock__list,
+.dock__stops {
+  overflow: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 0.35rem 0 1.5rem;
+  list-style: none;
+}
+
+.dock__row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 2rem 1fr auto;
+  gap: 0.75rem;
+  align-items: baseline;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0.72rem 1.25rem;
+  cursor: pointer;
+}
+
+.dock__row:hover {
+  background: #161616;
+}
+
+.dock__index-no,
+.dock__row-sub,
+.dock__kicker,
+.dock__facts dt {
+  color: #8d8d8d;
+  font-size: 0.75rem;
+}
+
+.dock__row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.dock__row-title {
+  font-weight: 520;
+}
+
+.dock__row-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dock__row-delay {
+  font-size: 0.75rem;
+}
+
+.dock__train {
+  overflow: auto;
+  padding: 0.9rem 1.25rem 2rem;
+}
+
+.dock__back {
+  border: 0;
+  background: transparent;
+  color: #8d8d8d;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.dock__kicker {
+  margin: 1.1rem 0 0;
+}
+
+.dock__title {
+  margin: 0.15rem 0 0;
+  font-size: 1.7rem;
+  font-weight: 560;
+  letter-spacing: -0.045em;
+  line-height: 1.05;
+}
+
+.dock__delay {
+  margin: 0.45rem 0 0;
+}
+
+.dock__facts {
+  display: grid;
+  grid-template-columns: 6.5rem 1fr;
+  gap: 0.35rem 0.75rem;
+  margin: 1.1rem 0 0;
+}
+
+.dock__facts dd {
+  margin: 0;
+}
+
+.dock__note {
+  color: #c8c8c8;
+  font-size: 0.85rem;
+}
+
+.dock__stops {
+  padding: 1rem 0 0;
+}
+
+.dock__stops li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.42rem 0;
+  border-top: 1px solid #1c1c1c;
+  font-size: 0.92rem;
+}
+
+.dock__stops time {
+  color: #8d8d8d;
+  font-variant-numeric: tabular-nums;
+}
+
+.dock__stops .is-passed {
+  color: #6f6f6f;
+}
+
+.dock__stops .is-current {
+  color: #fff;
+}
+
+.dock__stops .is-current span::before {
+  content: '';
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-right: 0.45rem;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateY(-0.05rem);
+}
+
+.dock__stops .is-muted {
+  color: #8d8d8d;
+  border: 0;
+}
+
+@media (max-width: 800px) {
+  .dock {
+    top: auto;
+    right: 0;
+    width: auto;
+    height: 46svh;
+    border-right: 0;
+    border-top: 1px solid #242424;
+  }
 }
 

@@ -1,5 +1,5 @@
-import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
-import { Canvas, useFrame, useThree, useLoader } from '@react-three/fiber';
+import React, { useMemo, useRef, useState, useEffect, useCallback, useLayoutEffect } from 'react';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { OrbitControls, Text } from '@react-three/drei';
 import {
   Vector3,
@@ -7,51 +7,68 @@ import {
   BufferAttribute,
   Line,
   LineBasicMaterial,
-  Raycaster,
   Group,
   type Mesh,
-  PlaneGeometry,
   AxesHelper,
   BoxGeometry,
   CylinderGeometry,
   SphereGeometry,
   TorusGeometry,
   EdgesGeometry,
-  Box3,
+  CircleGeometry,
+  Object3D,
   type Camera,
+  type InstancedMesh,
   type PerspectiveCamera,
-  MeshStandardMaterial,
+  MeshBasicMaterial,
   CatmullRomCurve3,
   TubeGeometry,
+  Texture,
   MOUSE,
   TOUCH,
 } from 'three';
-import { Line2 } from 'three/examples/jsm/lines/Line2';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial';
-import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import type { Coordinate, GtfsDataset } from '../data/gtfsParser';
 import type { OsmDetailLevel } from '../types/osm';
-import { getDelayColor, type TrainRenderState } from '../data/trainService';
-import type { OSMWay, OsmProxyMeta, OsmFetchResult } from '../data/osmRailService';
-import { isBridge, isTunnel } from '../data/osmRailService';
+import {
+  getDelayColor,
+  placeOnPath,
+  routeCursor,
+  type JourneyStop,
+  type TrainRenderState,
+} from '../data/trainService';
+import {
+  fetchDisplayRailsInBounds,
+  fetchSimplifiedNetwork,
+  isBridge,
+  isSideRailwayTrack,
+  isTunnel,
+  type OSMWay,
+  type OsmProxyMeta,
+  type OsmFetchResult,
+} from '../data/osmRailService';
 import {
   extendOsmGraph,
   findOsmPath,
+  resetSpatialIndex,
   setSimplifyToleranceMeters,
   simplifyGeometryNodes,
+  traceWaypoints,
   type OsmGraph,
   type LatLngBounds,
   type OsmPathResult,
 } from '../data/trainOsmMapper';
 import { RailwayLine } from './RailwayLine';
-import { VectorRailTile } from './VectorRailTile';
 import { DebugWindow, type DebugInfo } from './DebugWindow';
+import { closeRailGaps } from '../data/railStitch';
 import { fetchSlovakiaOutline, type SlovakiaOutline } from '../data/slovakiaOutlineService';
+import { getCachedBasemapTexture, loadBasemapTexture } from '../data/basemapTextures';
 import logoLong from '../logo long.svg';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
-import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader';
 import { SVGLoader } from 'three/examples/jsm/loaders/SVGLoader';
-import type { GLTF } from 'three/examples/jsm/loaders/GLTFLoader';
 
 // Slovakia's real-world bounding box (from outline service)
 // These are the EXACT geographical bounds of Slovakia
@@ -96,13 +113,71 @@ const HIGHLIGHT_VERTICAL_OFFSET = 1.5;
 const HIGHLIGHT_LINE_WIDTH = 4;
 const HIGHLIGHT_LINE_OPACITY = 0.95;
 const HIGHLIGHT_RENDER_ORDER = 1300;
+const RAIL_FILL_COLOR = '#f4f7fb';
+const RAIL_CASING_COLOR = '#0b0d10';
+const RAIL_MAIN_FILL_WIDTH = 1.9;
+const RAIL_MAIN_CASING_WIDTH = 4.6;
+const RAIL_BRANCH_FILL_WIDTH = 1.15;
+const RAIL_BRANCH_CASING_WIDTH = 2.9;
+const RAIL_CASING_RENDER_ORDER = 1490;
+const RAIL_FILL_RENDER_ORDER = 1500;
+const RAIL_FINE_FILL_WIDTH = 1.05;
+const RAIL_FINE_CASING_WIDTH = 2.4;
+const RAIL_SIDE_FILL_WIDTH = 0.8;
+const RAIL_SIDE_CASING_WIDTH = 1.85;
+const RAIL_SIDE_OPACITY = 0.42;
+const RAIL_DISPLAY_TILE_DEG = 0.08;
+const RAIL_DISPLAY_LOAD_Y = 520;
+type WorldRect = { minX: number; maxX: number; minZ: number; maxZ: number };
+type FineRailView = {
+  main: Float32Array | null;
+  branch: Float32Array | null;
+  side: Float32Array | null;
+  hideRects: WorldRect[];
+};
+const STATION_FILL_COLOR = '#f4f7fb';
+const STATION_CASING_COLOR = '#0b0d10';
+const STATION_DISK_Y = 1.2;
+const STATION_LABEL_Y = 1.45;
+const STATION_CASING_RENDER_ORDER = 1540;
+const STATION_FILL_RENDER_ORDER = 1550;
+const STATION_LABEL_RENDER_ORDER = 1560;
+const STATION_TINY_LABEL_POOL = 40;
+const STATION_DISK_GEOMETRY = (() => {
+  const geometry = new CircleGeometry(1, 22);
+  geometry.rotateX(-Math.PI / 2);
+  return geometry;
+})();
+const STATION_MATRIX_DUMMY = new Object3D();
+type StationRank = 'large' | 'medium' | 'small' | 'tiny';
+const STATION_DISK_PIXEL_RADIUS: Record<StationRank, number> = {
+  large: 3.1,
+  medium: 2.55,
+  small: 2.2,
+  tiny: 1.85,
+};
+const STATION_DISK_CASING_SCALE = 1.28;
+const STATION_FONT_SIZE: Record<StationRank, number> = {
+  large: 9,
+  medium: 5.6,
+  small: 3.7,
+  tiny: 2.45,
+};
+const STATION_LABEL_MAX_Y: Record<StationRank, number> = {
+  large: 9000,
+  medium: 2600,
+  small: 980,
+  tiny: 280,
+};
+const STATION_TINY_DISK_MAX_Y = 720;
+const BASEMAP_RENDER_ORDER = 5;
+const BASEMAP_HEIGHT = 0.02;
+const BASEMAP_MAX_TILES = 36;
+const BASEMAP_RETAIN_TILES = 48;
 const TRAIN_BASE_SIZE = 5; // Increase/decrease this constant to scale the train cubes globally.
 const TRAIN_SELECTED_SIZE = 8;
 const TRAIN_VERTICAL_OFFSET = 20; // Raise the cubes vertically; adjust this constant to tweak altitude.
-const ROUTE_LIGHT_SAMPLE_STEP = 4;
-const ROUTE_LIGHT_INTENSITY = 600;
-const ROUTE_LIGHT_DISTANCE = 100;
-const ROUTE_LIGHT_DECAY = 1.5;
+const TRAIN_BOX_GEOMETRY = new BoxGeometry(1, 1, 1);
 // Camera animation controls for the post-loading zoom-in.
 const CAMERA_LOAD_START_HEIGHT = 1500; // Initial camera height while loading.
 const CAMERA_LOAD_END_HEIGHT = 2200; // Final height after animation completes.
@@ -231,46 +306,7 @@ function unproject(x: number, z: number): { lat: number; lng: number } {
   return { lat, lng };
 }
 
-const SLOVAKIA_PROJECTED_SW = project({
-  lat: SLOVAKIA_BOUNDS.minLat,
-  lng: SLOVAKIA_BOUNDS.minLng,
-});
-
-const SLOVAKIA_PROJECTED_NE = project({
-  lat: SLOVAKIA_BOUNDS.maxLat,
-  lng: SLOVAKIA_BOUNDS.maxLng,
-});
-
-const SLOVAKIA_MAP_CENTER_X = (SLOVAKIA_PROJECTED_SW[0] + SLOVAKIA_PROJECTED_NE[0]) / 2;
-const SLOVAKIA_MAP_CENTER_Z = (SLOVAKIA_PROJECTED_SW[2] + SLOVAKIA_PROJECTED_NE[2]) / 2;
-const SLOVAKIA_MAP_WIDTH = Math.abs(SLOVAKIA_PROJECTED_NE[0] - SLOVAKIA_PROJECTED_SW[0]);
-const SLOVAKIA_MAP_DEPTH = Math.abs(SLOVAKIA_PROJECTED_NE[2] - SLOVAKIA_PROJECTED_SW[2]);
-
-const TERRAIN_GLB_URL = encodeURI('/slovakia terrain V2.glb');
 const SVG_OUTLINE_URL = encodeURI('/slovakia outlined simple.svg');
-const TERRAIN_RAY_SOURCE_HEIGHT = 800;
-
-function sampleTerrainHeightFromGroup(
-  terrainGroup: Group | null,
-  worldX: number,
-  worldZ: number
-): number | null {
-  if (!terrainGroup) {
-    return null;
-  }
-  terrainRayOrigin.set(worldX, TERRAIN_RAY_SOURCE_HEIGHT, worldZ);
-  terrainRaycaster.set(terrainRayOrigin, terrainDownVector);
-  const intersections = terrainRaycaster.intersectObject(terrainGroup, true);
-  if (intersections.length === 0) {
-    return null;
-  }
-  return intersections[0].point.y;
-}
-const terrainRaycaster = new Raycaster();
-const terrainDownVector = new Vector3(0, -1, 0);
-const terrainRayOrigin = new Vector3();
-
-const DETAIL_LEVEL_ORDER: OsmDetailLevel[] = ['coarse', 'medium', 'fine'];
 
 type OsmStatus = {
   tilesLoaded: number;
@@ -305,38 +341,6 @@ type TileWorkerResponse =
       error: string;
     };
 
-const TILE_LEVELS: { name: OsmDetailLevel; tileSize: number; bounds: typeof SLOVAKIA_BOUNDS | { minLat: number; maxLat: number; minLng: number; maxLng: number }; pause: number }[] = [
-  {
-    name: 'coarse',
-    tileSize: 1.0,
-    bounds: SLOVAKIA_BOUNDS,
-    pause: 150,
-  },
-  {
-    name: 'medium',
-    tileSize: 0.5,
-    bounds: SLOVAKIA_BOUNDS,
-    pause: 100,
-  },
-  {
-    name: 'fine',
-    tileSize: 0.25,
-    bounds: {
-      minLat: 48.3,
-      maxLat: 49.2,
-      minLng: 17.3,
-      maxLng: 21.4,
-    },
-    pause: 80,
-  },
-];
-
-function countTiles(bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number }, tileSize: number): number {
-  const latSteps = Math.ceil((bounds.maxLat - bounds.minLat) / tileSize);
-  const lngSteps = Math.ceil((bounds.maxLng - bounds.minLng) / tileSize);
-  return Math.max(0, latSteps * lngSteps);
-}
-
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type RailTile = {
@@ -370,22 +374,19 @@ function routeSegmentColor(key: string): string {
 
 function waysToChains(ways: OSMWay[]): Float32Array[] {
   const elevation = OSM_RAIL_BASE_HEIGHT + OSM_TRACK_ELEVATION_OFFSET;
-  const chains: Float32Array[] = [];
-  ways.forEach((way) => {
-    const geometry = simplifyGeometryNodes(way.geometry || []);
-    if (geometry.length < 2) {
-      return;
-    }
-    const positions = new Float32Array(geometry.length * 3);
-    geometry.forEach((node, index) => {
-      const [x, , z] = project({ lat: node.lat, lng: node.lon });
+  const lines = ways
+    .map((way) => (way.geometry || []).map((node) => ({ lat: node.lat, lng: node.lon })))
+    .filter((line) => line.length >= 2);
+  return lines.map((line) => {
+    const positions = new Float32Array(line.length * 3);
+    line.forEach((node, index) => {
+      const [x, , z] = project(node);
       positions[index * 3] = x;
       positions[index * 3 + 1] = elevation;
       positions[index * 3 + 2] = z;
     });
-    chains.push(positions);
+    return positions;
   });
-  return chains;
 }
 
 type BoundingBox = {
@@ -746,6 +747,20 @@ function pointInPolygon(point: LatLngPoint, polygon: LatLngPolygon): boolean {
   return inside;
 }
 
+function simplifyRing(points: LatLngPoint[], maxPoints = 120): LatLngPoint[] {
+  if (points.length <= maxPoints) {
+    return points;
+  }
+  const step = Math.ceil(points.length / maxPoints);
+  const simplified = points.filter((_, index) => index % step === 0);
+  const last = points[points.length - 1];
+  const tail = simplified[simplified.length - 1];
+  if (!tail || tail.lat !== last.lat || tail.lng !== last.lng) {
+    simplified.push(last);
+  }
+  return simplified;
+}
+
 function isCoordinateInsideOutline(
   coord: LatLngPoint,
   polygons: LatLngPolygon[]
@@ -756,17 +771,138 @@ function isCoordinateInsideOutline(
   return polygons.some((polygon) => pointInPolygon(coord, polygon));
 }
 
-function doesWayIntersectOutline(
-  way: OSMWay,
-  polygons: LatLngPolygon[]
-): boolean {
-  const geometry = way.geometry ?? [];
-  if (geometry.length === 0) {
-    return false;
+function lerpLatLng(a: LatLngPoint, b: LatLngPoint, t: number): LatLngPoint {
+  return {
+    lat: a.lat + (b.lat - a.lat) * t,
+    lng: a.lng + (b.lng - a.lng) * t,
+  };
+}
+
+function segmentEdgeT(
+  a: LatLngPoint,
+  b: LatLngPoint,
+  c: LatLngPoint,
+  d: LatLngPoint
+): number | null {
+  const rLng = b.lng - a.lng;
+  const rLat = b.lat - a.lat;
+  const sLng = d.lng - c.lng;
+  const sLat = d.lat - c.lat;
+  const denom = rLng * sLat - rLat * sLng;
+  if (Math.abs(denom) < 1e-18) {
+    return null;
   }
-  return geometry.some((node) =>
-    isCoordinateInsideOutline({ lat: node.lat, lng: node.lon }, polygons)
-  );
+  const t = ((c.lng - a.lng) * sLat - (c.lat - a.lat) * sLng) / denom;
+  const u = ((c.lng - a.lng) * rLat - (c.lat - a.lat) * rLng) / denom;
+  if (t <= 1e-6 || t >= 1 - 1e-6 || u < 0 || u > 1) {
+    return null;
+  }
+  return t;
+}
+
+function clipPolylineToOutline(
+  points: LatLngPoint[],
+  polygons: LatLngPolygon[]
+): LatLngPoint[][] {
+  if (points.length < 2) {
+    return [];
+  }
+  if (polygons.length === 0) {
+    return [points];
+  }
+  const chains: LatLngPoint[][] = [];
+  let current: LatLngPoint[] = [];
+  const push = (point: LatLngPoint) => {
+    const last = current[current.length - 1];
+    if (
+      last &&
+      Math.abs(last.lat - point.lat) < 1e-10 &&
+      Math.abs(last.lng - point.lng) < 1e-10
+    ) {
+      return;
+    }
+    current.push(point);
+  };
+  const flush = () => {
+    if (current.length >= 2) {
+      chains.push(current);
+    }
+    current = [];
+  };
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    const crossings = polygons
+      .flatMap((polygon) => {
+        const hits: number[] = [];
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+          const t = segmentEdgeT(start, end, polygon[j], polygon[i]);
+          if (t != null) {
+            hits.push(t);
+          }
+        }
+        return hits;
+      })
+      .sort((a, b) => a - b)
+      .filter((t, i, list) => i === 0 || t - list[i - 1] > 1e-6);
+    let inside = isCoordinateInsideOutline(start, polygons);
+    if (inside) {
+      push(start);
+    }
+    crossings.forEach((t) => {
+      const hit = lerpLatLng(start, end, t);
+      push(hit);
+      if (inside) {
+        flush();
+      }
+      inside = !inside;
+    });
+    if (inside) {
+      push(end);
+    } else {
+      flush();
+    }
+  }
+  flush();
+  return chains;
+}
+
+function clipWaysToOutline(ways: OSMWay[], polygons: LatLngPolygon[]): OSMWay[] {
+  if (polygons.length === 0) {
+    return ways;
+  }
+  const clipped: OSMWay[] = [];
+  ways.forEach((way) => {
+    const points = (way.geometry || []).map((node) => ({
+      lat: node.lat,
+      lng: node.lon,
+    }));
+    if (points.length < 2) {
+      return;
+    }
+    let insideCount = 0;
+    points.forEach((point) => {
+      if (isCoordinateInsideOutline(point, polygons)) {
+        insideCount += 1;
+      }
+    });
+    if (insideCount === points.length) {
+      clipped.push(way);
+      return;
+    }
+    if (insideCount === 0) {
+      return;
+    }
+    clipPolylineToOutline(points, polygons).forEach((chain, chainIndex) => {
+      clipped.push({
+        ...way,
+        id: way.id * 100 + chainIndex,
+        geometry: chain.map((point) => ({ lat: point.lat, lon: point.lng })),
+      });
+    });
+  });
+  return clipped;
 }
 
 interface TrainAnimationState {
@@ -812,7 +948,8 @@ type PathfinderWorkerResponse =
       durationMs: number;
       reason?: string;
     }
-  | { type: 'error'; requestId: string; message: string };
+  | { type: 'error'; requestId: string; message: string }
+  | { type: 'graphReady'; nodeCount: number };
 
 type PathfinderWorkerResult = OsmPathResult;
 
@@ -1008,6 +1145,310 @@ const TrackLine: React.FC<TrackLineProps> = ({
   return <primitive object={line} />;
 };
 
+function isMainRailway(way: OSMWay): boolean {
+  const kind = way.tags?.railway ?? 'rail';
+  return kind === 'rail';
+}
+
+const CasedRailLayer: React.FC<{
+  positions: Float32Array;
+  fillWidth: number;
+  casingWidth: number;
+  opacity?: number;
+}> = ({ positions, fillWidth, casingWidth, opacity = 1 }) => {
+  const { size } = useThree();
+  const geometry = useMemo(() => {
+    const lineGeometry = new LineSegmentsGeometry();
+    lineGeometry.setPositions(positions);
+    return lineGeometry;
+  }, [positions]);
+  const casingMaterial = useMemo(() => {
+    const material = new LineMaterial({
+      color: RAIL_CASING_COLOR,
+      linewidth: casingWidth,
+      transparent: true,
+      opacity,
+      depthTest: false,
+      depthWrite: false,
+    });
+    material.resolution.set(size.width, size.height);
+    return material;
+  }, [casingWidth, opacity, size.width, size.height]);
+  const fillMaterial = useMemo(() => {
+    const material = new LineMaterial({
+      color: RAIL_FILL_COLOR,
+      linewidth: fillWidth,
+      transparent: true,
+      opacity: opacity * 0.98,
+      depthTest: false,
+      depthWrite: false,
+    });
+    material.resolution.set(size.width, size.height);
+    return material;
+  }, [fillWidth, opacity, size.width, size.height]);
+  useEffect(() => {
+    casingMaterial.resolution.set(size.width, size.height);
+    fillMaterial.resolution.set(size.width, size.height);
+  }, [casingMaterial, fillMaterial, size.width, size.height]);
+  const casing = useMemo(() => {
+    const line = new LineSegments2(geometry, casingMaterial);
+    line.renderOrder = RAIL_CASING_RENDER_ORDER;
+    line.frustumCulled = false;
+    return line;
+  }, [geometry, casingMaterial]);
+  const fill = useMemo(() => {
+    const line = new LineSegments2(geometry, fillMaterial);
+    line.renderOrder = RAIL_FILL_RENDER_ORDER;
+    line.frustumCulled = false;
+    return line;
+  }, [geometry, fillMaterial]);
+  useEffect(() => {
+    return () => {
+      geometry.dispose();
+      casingMaterial.dispose();
+      fillMaterial.dispose();
+    };
+  }, [geometry, casingMaterial, fillMaterial]);
+  return (
+    <group>
+      <primitive object={casing} />
+      <primitive object={fill} />
+    </group>
+  );
+};
+
+function convertRawWaysToPositions(ways: OSMWay[]): Float32Array {
+  let segmentCount = 0;
+  ways.forEach((way) => {
+    const geometry = way.geometry || [];
+    if (geometry.length > 1) {
+      segmentCount += geometry.length - 1;
+    }
+  });
+  if (segmentCount === 0) {
+    return new Float32Array(0);
+  }
+  const positions = new Float32Array(segmentCount * 6);
+  let offset = 0;
+  const elevation = OSM_RAIL_BASE_HEIGHT + OSM_TRACK_ELEVATION_OFFSET;
+  ways.forEach((way) => {
+    const geometry = way.geometry || [];
+    for (let i = 0; i < geometry.length - 1; i += 1) {
+      const start = project({ lat: geometry[i].lat, lng: geometry[i].lon });
+      const end = project({ lat: geometry[i + 1].lat, lng: geometry[i + 1].lon });
+      positions[offset++] = start[0];
+      positions[offset++] = elevation;
+      positions[offset++] = start[2];
+      positions[offset++] = end[0];
+      positions[offset++] = elevation;
+      positions[offset++] = end[2];
+    }
+  });
+  return positions.subarray(0, offset);
+}
+
+function displayTileKey(minLat: number, minLng: number): string {
+  return `${minLat.toFixed(3)}_${minLng.toFixed(3)}`;
+}
+
+function displayTileWorldRect(minLat: number, minLng: number): WorldRect {
+  const sw = project({ lat: minLat, lng: minLng });
+  const ne = project({ lat: minLat + RAIL_DISPLAY_TILE_DEG, lng: minLng + RAIL_DISPLAY_TILE_DEG });
+  return {
+    minX: Math.min(sw[0], ne[0]),
+    maxX: Math.max(sw[0], ne[0]),
+    minZ: Math.min(sw[2], ne[2]),
+    maxZ: Math.max(sw[2], ne[2]),
+  };
+}
+
+function pointInWorldRects(x: number, z: number, rects: WorldRect[]): boolean {
+  for (let i = 0; i < rects.length; i += 1) {
+    const rect = rects[i];
+    if (x >= rect.minX && x <= rect.maxX && z >= rect.minZ && z <= rect.maxZ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function omitSegmentsInRects(positions: Float32Array | null, rects: WorldRect[]): Float32Array | null {
+  if (!positions || positions.length === 0) {
+    return positions;
+  }
+  if (rects.length === 0) {
+    return positions;
+  }
+  const kept = new Float32Array(positions.length);
+  let offset = 0;
+  for (let i = 0; i < positions.length; i += 6) {
+    const x1 = positions[i];
+    const z1 = positions[i + 2];
+    const x2 = positions[i + 3];
+    const z2 = positions[i + 5];
+    if (pointInWorldRects(x1, z1, rects) || pointInWorldRects(x2, z2, rects)) {
+      continue;
+    }
+    kept[offset] = x1;
+    kept[offset + 1] = positions[i + 1];
+    kept[offset + 2] = z1;
+    kept[offset + 3] = x2;
+    kept[offset + 4] = positions[i + 4];
+    kept[offset + 5] = z2;
+    offset += 6;
+  }
+  if (offset === 0) {
+    return null;
+  }
+  return kept.subarray(0, offset);
+}
+
+const FineRailLoader: React.FC<{
+  outline: LatLngPolygon[];
+  onPositions: (view: FineRailView | null) => void;
+}> = ({ outline, onPositions }) => {
+  const cacheRef = useRef<Map<string, {
+    minLat: number;
+    minLng: number;
+    main: OSMWay[];
+    branch: OSMWay[];
+    side: OSMWay[];
+  }>>(new Map());
+  const loadingRef = useRef<Set<string>>(new Set());
+  const hiddenRef = useRef(false);
+  const neededRef = useRef<string[]>([]);
+  const lastPublishRef = useRef('');
+
+  const publish = useCallback((neededKeys: string[]) => {
+    const mains: OSMWay[] = [];
+    const branches: OSMWay[] = [];
+    const sides: OSMWay[] = [];
+    const hideRects: WorldRect[] = [];
+    const loadedKeys: string[] = [];
+    neededKeys.forEach((key) => {
+      const tile = cacheRef.current.get(key);
+      if (!tile) {
+        return;
+      }
+      loadedKeys.push(key);
+      mains.push(...tile.main);
+      branches.push(...tile.branch);
+      sides.push(...tile.side);
+      if (tile.main.length > 0 || tile.branch.length > 0 || tile.side.length > 0) {
+        hideRects.push(displayTileWorldRect(tile.minLat, tile.minLng));
+      }
+    });
+    const main = convertRawWaysToPositions(mains);
+    const branch = convertRawWaysToPositions(branches);
+    const side = convertRawWaysToPositions(sides);
+    const signature = `${loadedKeys.join('|')}:${main.length}:${branch.length}:${side.length}`;
+    if (signature === lastPublishRef.current) {
+      return;
+    }
+    lastPublishRef.current = signature;
+    onPositions({
+      main: main.length > 0 ? main : null,
+      branch: branch.length > 0 ? branch : null,
+      side: side.length > 0 ? side : null,
+      hideRects,
+    });
+  }, [onPositions]);
+
+  useFrame(({ camera, size }) => {
+    if (outline.length === 0) {
+      return;
+    }
+    if (camera.position.y > RAIL_DISPLAY_LOAD_Y) {
+      if (!hiddenRef.current) {
+        hiddenRef.current = true;
+        lastPublishRef.current = '';
+        onPositions(null);
+      }
+      return;
+    }
+    hiddenRef.current = false;
+    const persp = camera as PerspectiveCamera;
+    const fov = ((Number.isFinite(persp.fov) ? persp.fov : 16) * Math.PI) / 180;
+    const halfHeight = Math.tan(fov / 2) * camera.position.y;
+    const halfWidth = halfHeight * (size.width / Math.max(size.height, 1));
+    const southWest = unproject(camera.position.x - halfWidth, camera.position.z + halfHeight);
+    const northEast = unproject(camera.position.x + halfWidth, camera.position.z - halfHeight);
+    const viewMinLat = Math.min(southWest.lat, northEast.lat);
+    const viewMaxLat = Math.max(southWest.lat, northEast.lat);
+    const viewMinLng = Math.min(southWest.lng, northEast.lng);
+    const viewMaxLng = Math.max(southWest.lng, northEast.lng);
+    const latStart = Math.floor(viewMinLat / RAIL_DISPLAY_TILE_DEG) * RAIL_DISPLAY_TILE_DEG;
+    const lngStart = Math.floor(viewMinLng / RAIL_DISPLAY_TILE_DEG) * RAIL_DISPLAY_TILE_DEG;
+    const needed: string[] = [];
+    const pending: Array<{ key: string; minLat: number; minLng: number }> = [];
+    for (let lat = latStart; lat < viewMaxLat + 1e-9; lat += RAIL_DISPLAY_TILE_DEG) {
+      for (let lng = lngStart; lng < viewMaxLng + 1e-9; lng += RAIL_DISPLAY_TILE_DEG) {
+        const key = displayTileKey(lat, lng);
+        needed.push(key);
+        if (!cacheRef.current.has(key) && !loadingRef.current.has(key)) {
+          pending.push({ key, minLat: lat, minLng: lng });
+        }
+      }
+    }
+    if (needed.length > 9) {
+      needed.length = 0;
+      pending.length = 0;
+      const center = unproject(camera.position.x, camera.position.z);
+      const centerLat = Math.floor(center.lat / RAIL_DISPLAY_TILE_DEG) * RAIL_DISPLAY_TILE_DEG;
+      const centerLng = Math.floor(center.lng / RAIL_DISPLAY_TILE_DEG) * RAIL_DISPLAY_TILE_DEG;
+      for (let latOffset = -1; latOffset <= 1; latOffset += 1) {
+        for (let lngOffset = -1; lngOffset <= 1; lngOffset += 1) {
+          const lat = centerLat + latOffset * RAIL_DISPLAY_TILE_DEG;
+          const lng = centerLng + lngOffset * RAIL_DISPLAY_TILE_DEG;
+          const key = displayTileKey(lat, lng);
+          needed.push(key);
+          if (!cacheRef.current.has(key) && !loadingRef.current.has(key)) {
+            pending.push({ key, minLat: lat, minLng: lng });
+          }
+        }
+      }
+    }
+    neededRef.current = needed;
+    pending.slice(0, 2).forEach(({ key, minLat, minLng }) => {
+      loadingRef.current.add(key);
+      fetchDisplayRailsInBounds(
+        minLat,
+        minLat + RAIL_DISPLAY_TILE_DEG,
+        minLng,
+        minLng + RAIL_DISPLAY_TILE_DEG
+      ).then((result) => {
+        loadingRef.current.delete(key);
+        const clipped = clipWaysToOutline(result.ways, outline);
+        const sideWays = clipped.filter((way) => isSideRailwayTrack(way));
+        const runningWays = clipped.filter((way) => !isSideRailwayTrack(way));
+        cacheRef.current.set(key, {
+          minLat,
+          minLng,
+          main: runningWays.filter((way) => isMainRailway(way)),
+          branch: runningWays.filter((way) => !isMainRailway(way)),
+          side: sideWays,
+        });
+        if (cacheRef.current.size > 16) {
+          Array.from(cacheRef.current.keys()).forEach((cachedKey) => {
+            if (cacheRef.current.size <= 12) {
+              return;
+            }
+            if (!neededRef.current.includes(cachedKey)) {
+              cacheRef.current.delete(cachedKey);
+            }
+          });
+        }
+        publish(neededRef.current);
+      }).catch(() => {
+        loadingRef.current.delete(key);
+      });
+    });
+    publish(needed);
+  });
+
+  return null;
+};
+
 const HighlightedRouteLine: React.FC<{ positions: number[]; color: string }> = ({
   positions,
   color,
@@ -1122,129 +1563,672 @@ const BRATISLAVA_STATION = { lat: 48.159111, lng: 17.106528 }; // 48°09'32.8"N 
 const KOSICE_STATION = { lat: 48.722917, lng: 21.268583 };     // 48°43'22.5"N 21°16'06.9"E
 const ZILINA_STATION = { lat: 49.226972, lng: 18.746944 };     // 49°13'37.1"N 18°44'49.0"E
 
-// City label component
-const CityLabel: React.FC<{ name: string; lat: number; lng: number; size: string }> = ({ name, lat, lng, size }) => {
-  const groupRef = useRef<Group>(null);
-  const { camera } = useThree();
-  const [x, y, z] = project({ lat, lng });
-  const fontSize = size === 'large' ? 8 : size === 'medium' ? 6 : 4;
+type StationDiskItem = {
+  x: number;
+  z: number;
+  rank: StationRank;
+};
 
-  useFrame(() => {
-    if (!groupRef.current) {
+function stationWorldPerPixel(camera: Camera, viewportHeight: number): number {
+  const height = Math.max(camera.position.y, 1);
+  const fovDeg = 'fov' in camera ? Number((camera as PerspectiveCamera).fov) : 75;
+  const fov = (Number.isFinite(fovDeg) ? fovDeg : 75) * (Math.PI / 180);
+  return (2 * height * Math.tan(fov / 2)) / Math.max(viewportHeight, 1);
+}
+
+type NamedStationLabel = {
+  key: string;
+  name: string;
+  x: number;
+  z: number;
+  rank: Exclude<StationRank, 'tiny'>;
+  font: number;
+  maxY: number;
+  offsetX: number;
+};
+
+type TinyStationLabel = {
+  key: string;
+  name: string;
+  x: number;
+  z: number;
+};
+
+function stationNameKey(name: string): string {
+  return normalizeStopName(name);
+}
+
+function namedPlaceRank(size: string | undefined): Exclude<StationRank, 'tiny'> {
+  if (size === 'large') return 'large';
+  if (size === 'medium') return 'medium';
+  return 'small';
+}
+
+function labelBoxOverlaps(
+  x: number,
+  z: number,
+  w: number,
+  h: number,
+  boxes: Array<{ x: number; z: number; w: number; h: number }>
+): boolean {
+  for (let i = 0; i < boxes.length; i += 1) {
+    const box = boxes[i];
+    if (Math.abs(x - box.x) * 2 < w + box.w && Math.abs(z - box.z) * 2 < h + box.h) {
+      return true;
+    }
+  }
+  return false;
+}
+
+const StationDiskInstances: React.FC<{
+  items: StationDiskItem[];
+  visibleMaxY?: number;
+}> = ({ items, visibleMaxY }) => {
+  const strokeRef = useRef<InstancedMesh>(null);
+  const fillRef = useRef<InstancedMesh>(null);
+  const groupRef = useRef<Group>(null);
+  const last = useRef({ y: Number.NaN, h: 0 });
+
+  const writeMatrices = (camera: Camera, viewportHeight: number) => {
+    const stroke = strokeRef.current;
+    const fill = fillRef.current;
+    if (!stroke || !fill) {
       return;
     }
-    // Lock the label orientation so up always follows north (world -Z) instead of camera rotation
-    groupRef.current.rotation.set(-Math.PI / 2, 0, 0);
+    const worldPerPixel = stationWorldPerPixel(camera, viewportHeight);
+    items.forEach((item, index) => {
+      const radius = STATION_DISK_PIXEL_RADIUS[item.rank] * worldPerPixel;
+      STATION_MATRIX_DUMMY.position.set(item.x, STATION_DISK_Y, item.z);
+      STATION_MATRIX_DUMMY.scale.setScalar(radius * STATION_DISK_CASING_SCALE);
+      STATION_MATRIX_DUMMY.updateMatrix();
+      stroke.setMatrixAt(index, STATION_MATRIX_DUMMY.matrix);
+      STATION_MATRIX_DUMMY.scale.setScalar(radius);
+      STATION_MATRIX_DUMMY.updateMatrix();
+      fill.setMatrixAt(index, STATION_MATRIX_DUMMY.matrix);
+    });
+    stroke.instanceMatrix.needsUpdate = true;
+    fill.instanceMatrix.needsUpdate = true;
+  };
+
+  useLayoutEffect(() => {
+    last.current = { y: Number.NaN, h: 0 };
+  }, [items]);
+
+  useFrame(({ camera, size }) => {
+    if (groupRef.current && visibleMaxY != null) {
+      groupRef.current.visible = camera.position.y <= visibleMaxY;
+      if (!groupRef.current.visible) {
+        return;
+      }
+    }
+    if (
+      Math.abs(camera.position.y - last.current.y) < 1 &&
+      size.height === last.current.h
+    ) {
+      return;
+    }
+    last.current = { y: camera.position.y, h: size.height };
+    writeMatrices(camera, size.height);
+  });
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <group ref={groupRef}>
+      <instancedMesh
+        ref={strokeRef}
+        args={[STATION_DISK_GEOMETRY, undefined, items.length]}
+        frustumCulled={false}
+        renderOrder={STATION_CASING_RENDER_ORDER}
+      >
+        <meshBasicMaterial
+          color={STATION_CASING_COLOR}
+          depthTest={false}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </instancedMesh>
+      <instancedMesh
+        ref={fillRef}
+        args={[STATION_DISK_GEOMETRY, undefined, items.length]}
+        frustumCulled={false}
+        renderOrder={STATION_FILL_RENDER_ORDER}
+      >
+        <meshBasicMaterial
+          color={STATION_FILL_COLOR}
+          depthTest={false}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </instancedMesh>
+    </group>
+  );
+};
+
+const NamedStationLabels: React.FC<{ labels: NamedStationLabel[] }> = ({ labels }) => {
+  const refs = useRef<Array<Group | null>>([]);
+  const last = useRef({ x: Number.NaN, y: Number.NaN, z: Number.NaN });
+
+  useFrame(({ camera }) => {
+    const { x, y, z } = camera.position;
+    if (
+      Math.abs(y - last.current.y) < 10 &&
+      Math.abs(x - last.current.x) < 18 &&
+      Math.abs(z - last.current.z) < 18
+    ) {
+      return;
+    }
+    last.current = { x, y, z };
+    const rankWeight: Record<NamedStationLabel['rank'], number> = {
+      large: 0,
+      medium: 1,
+      small: 2,
+    };
+    const order = labels
+      .map((_, index) => index)
+      .sort((a, b) => rankWeight[labels[a].rank] - rankWeight[labels[b].rank]);
+    const boxes: Array<{ x: number; z: number; w: number; h: number }> = [];
+    const visible = new Set<number>();
+    for (let n = 0; n < order.length; n += 1) {
+      const index = order[n];
+      const label = labels[index];
+      if (y > label.maxY) {
+        continue;
+      }
+      const width = Math.max(12, label.name.length * label.font * 0.55);
+      const height = label.font * 1.6;
+      const lx = label.x + label.offsetX + width * 0.5;
+      const lz = label.z;
+      if (labelBoxOverlaps(lx, lz, width, height, boxes)) {
+        continue;
+      }
+      boxes.push({ x: lx, z: lz, w: width, h: height });
+      visible.add(index);
+    }
+    refs.current.forEach((group, index) => {
+      if (group) {
+        group.visible = visible.has(index);
+      }
+    });
   });
 
   return (
-    <group ref={groupRef} position={[x, y + 5, z]}>
-      <Text
-        position={[0, 0, 0]}
-        fontSize={fontSize}
-        color="#ffffff"
-        anchorX="center"
-        anchorY="middle"
-        outlineWidth={0.5}
-        outlineColor="#000000"
-      >
-        {name}
-      </Text>
+    <group>
+      {labels.map((label, index) => (
+        <group
+          key={label.key}
+          ref={(node) => {
+            refs.current[index] = node;
+          }}
+          position={[label.x + label.offsetX, STATION_LABEL_Y, label.z]}
+          rotation={[-Math.PI / 2, 0, 0]}
+          visible={label.rank === 'large'}
+        >
+          <Text
+            fontSize={label.font}
+            color={STATION_FILL_COLOR}
+            anchorX="left"
+            anchorY="middle"
+            outlineWidth={0.08}
+            outlineColor={STATION_CASING_COLOR}
+            renderOrder={STATION_LABEL_RENDER_ORDER}
+            depthOffset={-2}
+          >
+            {label.name}
+          </Text>
+        </group>
+      ))}
     </group>
   );
 };
 
-// Simple house shape
-const House: React.FC<{ lat: number; lng: number }> = ({ lat, lng }) => {
-  const [x, y, z] = project({ lat, lng });
-  
+const TinyStationLabels: React.FC<{ stops: TinyStationLabel[] }> = ({ stops }) => {
+  const refs = useRef<Array<Group | null>>([]);
+  const last = useRef({ x: Number.NaN, y: Number.NaN, z: Number.NaN });
+
+  useFrame(({ camera, size }) => {
+    const { x, y, z } = camera.position;
+    if (
+      Math.abs(y - last.current.y) < 8 &&
+      Math.abs(x - last.current.x) < 12 &&
+      Math.abs(z - last.current.z) < 12
+    ) {
+      return;
+    }
+    last.current = { x, y, z };
+    const slots = refs.current;
+    if (y > STATION_LABEL_MAX_Y.tiny) {
+      for (let i = 0; i < slots.length; i += 1) {
+        const group = slots[i];
+        if (group) {
+          group.visible = false;
+        }
+      }
+      return;
+    }
+    const font = STATION_FONT_SIZE.tiny;
+    const viewPad = y * 0.85;
+    const nearby: Array<{ stop: TinyStationLabel; dist: number }> = [];
+    for (let i = 0; i < stops.length; i += 1) {
+      const stop = stops[i];
+      const dx = stop.x - x;
+      const dz = stop.z - z;
+      if (Math.abs(dx) > viewPad || Math.abs(dz) > viewPad) {
+        continue;
+      }
+      nearby.push({ stop, dist: dx * dx + dz * dz });
+    }
+    nearby.sort((a, b) => a.dist - b.dist);
+    const boxes: Array<{ x: number; z: number; w: number; h: number }> = [];
+    let used = 0;
+    const offsetX = Math.max(1.1, stationWorldPerPixel(camera, size.height) * 8);
+    for (let i = 0; i < nearby.length && used < STATION_TINY_LABEL_POOL; i += 1) {
+      const stop = nearby[i].stop;
+      const width = Math.max(8, stop.name.length * font * 0.55);
+      const height = font * 1.55;
+      const lx = stop.x + offsetX + width * 0.5;
+      if (labelBoxOverlaps(lx, stop.z, width, height, boxes)) {
+        continue;
+      }
+      boxes.push({ x: lx, z: stop.z, w: width, h: height });
+      const group = slots[used];
+      if (group) {
+        group.visible = true;
+        group.position.set(stop.x + offsetX, STATION_LABEL_Y, stop.z);
+        const text = group.children[0] as { text?: string } | undefined;
+        if (text && text.text !== stop.name) {
+          text.text = stop.name;
+        }
+      }
+      used += 1;
+    }
+    for (let i = used; i < slots.length; i += 1) {
+      const group = slots[i];
+      if (group) {
+        group.visible = false;
+      }
+    }
+  });
+
   return (
-    <group position={[x, y + 2, z]}>
-      {/* House base */}
-      <mesh>
-        <boxGeometry args={[3, 2, 3]} />
-        <meshStandardMaterial color="#8b7355" />
-      </mesh>
-      {/* Roof */}
-      <mesh position={[0, 1.5, 0]}>
-        <coneGeometry args={[2.5, 1.5, 4]} />
-        <meshStandardMaterial color="#6b4e3d" />
-      </mesh>
+    <group>
+      {Array.from({ length: STATION_TINY_LABEL_POOL }, (_, index) => (
+        <group
+          key={`tiny-stop-${index}`}
+          ref={(node) => {
+            refs.current[index] = node;
+          }}
+          rotation={[-Math.PI / 2, 0, 0]}
+          visible={false}
+        >
+          <Text
+            fontSize={STATION_FONT_SIZE.tiny}
+            color="#d7dde4"
+            anchorX="left"
+            anchorY="middle"
+            outlineWidth={0.06}
+            outlineColor={STATION_CASING_COLOR}
+            renderOrder={STATION_LABEL_RENDER_ORDER}
+            depthOffset={-2}
+          >
+            {' '}
+          </Text>
+        </group>
+      ))}
     </group>
   );
 };
 
-interface TerrainModelProps {
-  terrainRef?: React.MutableRefObject<Group | null>;
-  onLoaded?: () => void;
+function mercatorLatFromTile(nFraction: number): number {
+  const merc = Math.PI * (1 - 2 * nFraction);
+  return (Math.atan(Math.sinh(merc)) * 180) / Math.PI;
 }
 
-const TerrainModel: React.FC<TerrainModelProps> = ({ terrainRef, onLoaded }) => {
-  const gltf = useLoader(
-    GLTFLoader,
-    TERRAIN_GLB_URL,
-    (loader) => {
-      const dracoLoader = new DRACOLoader();
-      dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
-      if ('setDRACOLoader' in loader) {
-        (loader as GLTFLoader).setDRACOLoader(dracoLoader);
+function latLngToTile(lat: number, lng: number, zoom: number) {
+  const n = 2 ** zoom;
+  const x = Math.floor(((lng + 180) / 360) * n);
+  const latRad = (lat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  return {
+    x: Math.max(0, Math.min(n - 1, x)),
+    y: Math.max(0, Math.min(n - 1, y)),
+  };
+}
+
+function tileLatLngBounds(zoom: number, tileX: number, tileY: number) {
+  const n = 2 ** zoom;
+  return {
+    minLng: (tileX / n) * 360 - 180,
+    maxLng: ((tileX + 1) / n) * 360 - 180,
+    maxLat: mercatorLatFromTile(tileY / n),
+    minLat: mercatorLatFromTile((tileY + 1) / n),
+  };
+}
+
+function tileOverlapsBounds(
+  zoom: number,
+  tileX: number,
+  tileY: number,
+  bounds: { minLat: number; maxLat: number; minLng: number; maxLng: number }
+) {
+  const tile = tileLatLngBounds(zoom, tileX, tileY);
+  return (
+    tile.maxLng >= bounds.minLng &&
+    tile.minLng <= bounds.maxLng &&
+    tile.maxLat >= bounds.minLat &&
+    tile.minLat <= bounds.maxLat
+  );
+}
+
+function zoomForCameraY(height: number) {
+  if (height > 1500) {
+    return 7;
+  }
+  if (height > 850) {
+    return 8;
+  }
+  if (height > 480) {
+    return 10;
+  }
+  if (height > 220) {
+    return 11;
+  }
+  return 12;
+}
+
+function makeTileGeometry(zoom: number, tileX: number, tileY: number): BufferGeometry {
+  const bounds = tileLatLngBounds(zoom, tileX, tileY);
+  const northWest = project({ lat: bounds.maxLat, lng: bounds.minLng });
+  const northEast = project({ lat: bounds.maxLat, lng: bounds.maxLng });
+  const southWest = project({ lat: bounds.minLat, lng: bounds.minLng });
+  const southEast = project({ lat: bounds.minLat, lng: bounds.maxLng });
+  const geometry = new BufferGeometry();
+  geometry.setAttribute(
+    'position',
+    new BufferAttribute(
+      new Float32Array([
+        northWest[0],
+        BASEMAP_HEIGHT,
+        northWest[2],
+        northEast[0],
+        BASEMAP_HEIGHT,
+        northEast[2],
+        southWest[0],
+        BASEMAP_HEIGHT,
+        southWest[2],
+        southEast[0],
+        BASEMAP_HEIGHT,
+        southEast[2],
+      ]),
+      3
+    )
+  );
+  geometry.setAttribute('uv', new BufferAttribute(new Float32Array([0, 1, 1, 1, 0, 0, 1, 0]), 2));
+  geometry.setIndex([0, 2, 1, 1, 2, 3]);
+  return geometry;
+}
+
+type BasemapTileRef = { zoom: number; x: number; y: number };
+
+function slovakiaTilesAtZoom(zoom: number): BasemapTileRef[] {
+  const northWest = latLngToTile(SLOVAKIA_BOUNDS.maxLat, SLOVAKIA_BOUNDS.minLng, zoom);
+  const southEast = latLngToTile(SLOVAKIA_BOUNDS.minLat, SLOVAKIA_BOUNDS.maxLng, zoom);
+  const tiles: BasemapTileRef[] = [];
+  const xMin = Math.min(northWest.x, southEast.x);
+  const xMax = Math.max(northWest.x, southEast.x);
+  const yMin = Math.min(northWest.y, southEast.y);
+  const yMax = Math.max(northWest.y, southEast.y);
+  for (let x = xMin; x <= xMax; x += 1) {
+    for (let y = yMin; y <= yMax; y += 1) {
+      if (tileOverlapsBounds(zoom, x, y, SLOVAKIA_BOUNDS)) {
+        tiles.push({ zoom, x, y });
       }
     }
-  ) as GLTF;
+  }
+  return tiles;
+}
 
-  useEffect(() => {
-    onLoaded?.();
-  }, [gltf, onLoaded]);
-
-  const terrainMaterial = useMemo(
-    () =>
-      new MeshStandardMaterial({
-        color: '#2b2b2b',
-        roughness: 0.8,
-        metalness: 0.1,
-        emissive: '#000000',
-      }),
-    []
+const BasemapTileMesh: React.FC<{
+  zoom: number;
+  tileX: number;
+  tileY: number;
+  onReady?: () => void;
+}> = ({ zoom, tileX, tileY, onReady }) => {
+  const [texture, setTexture] = useState<Texture | null>(() =>
+    getCachedBasemapTexture(zoom, tileX, tileY)
   );
-  const { normalizedScene, size, normalizedMinY } = useMemo(() => {
-    const boundingBox = new Box3().setFromObject(gltf.scene);
-    const center = boundingBox.getCenter(new Vector3());
-    const normalizedScene = gltf.scene.clone(true);
-    normalizedScene.position.set(-center.x, -center.y, -center.z);
-    const normalizedMinY = boundingBox.min.y - center.y;
-    normalizedScene.traverse((child: any) => {
-      if (child.isMesh) {
-        child.material = terrainMaterial;
-        child.castShadow = false;
-        child.receiveShadow = true;
+  const geometry = useMemo(() => makeTileGeometry(zoom, tileX, tileY), [zoom, tileX, tileY]);
+  useEffect(() => {
+    let cancelled = false;
+    if (texture) {
+      onReady?.();
+      return undefined;
+    }
+    loadBasemapTexture(zoom, tileX, tileY).then((loaded) => {
+      if (!cancelled && loaded) {
+        setTexture(loaded);
+        onReady?.();
       }
     });
-    return {
-      normalizedScene,
-      size: boundingBox.getSize(new Vector3()),
-      normalizedMinY,
+    return () => {
+      cancelled = true;
     };
-  }, [gltf.scene, terrainMaterial]);
-
-  const widthScale = SLOVAKIA_MAP_WIDTH / Math.max(size.x, 0.0001);
-  const depthScale = SLOVAKIA_MAP_DEPTH / Math.max(size.z, 0.0001);
-  const verticalScale = (widthScale + depthScale) / 2;
-  const verticalLift = -normalizedMinY * verticalScale;
-  const groupRef = useRef<Group | null>(null);
+  }, [zoom, tileX, tileY, onReady, texture]);
   useEffect(() => {
-    if (terrainRef && groupRef.current) {
-      terrainRef.current = groupRef.current;
+    return () => {
+      geometry.dispose();
+    };
+  }, [geometry]);
+  if (!texture) {
+    return null;
+  }
+  return (
+    <mesh geometry={geometry} frustumCulled={false} renderOrder={BASEMAP_RENDER_ORDER + zoom}>
+      <meshBasicMaterial map={texture} depthTest={false} depthWrite={false} toneMapped={false} />
+    </mesh>
+  );
+};
+
+const BasemapLayer: React.FC<{ onReady?: () => void }> = ({ onReady }) => {
+  const [tiles, setTiles] = useState<BasemapTileRef[]>([]);
+  const signatureRef = useRef('');
+  const retainedRef = useRef<Map<string, BasemapTileRef>>(new Map());
+  const readyRef = useRef(false);
+  const handleReady = useCallback(() => {
+    if (readyRef.current) {
+      return;
     }
-  }, [terrainRef]);
+    readyRef.current = true;
+    onReady?.();
+  }, [onReady]);
+
+  useEffect(() => {
+    slovakiaTilesAtZoom(7).forEach((tile) => {
+      loadBasemapTexture(tile.zoom, tile.x, tile.y);
+    });
+  }, []);
+
+  useFrame(({ camera, size }) => {
+    const persp = camera as PerspectiveCamera;
+    const zoom = zoomForCameraY(camera.position.y);
+    const fov = ((Number.isFinite(persp.fov) ? persp.fov : 16) * Math.PI) / 180;
+    const halfHeight = Math.tan(fov / 2) * camera.position.y * 1.15;
+    const halfWidth = halfHeight * (size.width / Math.max(size.height, 1));
+    const southWest = unproject(camera.position.x - halfWidth, camera.position.z + halfHeight);
+    const northEast = unproject(camera.position.x + halfWidth, camera.position.z - halfHeight);
+    const viewMinLat = Math.min(southWest.lat, northEast.lat);
+    const viewMaxLat = Math.max(southWest.lat, northEast.lat);
+    const viewMinLng = Math.min(southWest.lng, northEast.lng);
+    const viewMaxLng = Math.max(southWest.lng, northEast.lng);
+    const northWest = latLngToTile(viewMaxLat, viewMinLng, zoom);
+    const southEast = latLngToTile(viewMinLat, viewMaxLng, zoom);
+    const needed: BasemapTileRef[] = [];
+    const xMin = Math.min(northWest.x, southEast.x);
+    const xMax = Math.max(northWest.x, southEast.x);
+    const yMin = Math.min(northWest.y, southEast.y);
+    const yMax = Math.max(northWest.y, southEast.y);
+    for (let x = xMin; x <= xMax; x += 1) {
+      for (let y = yMin; y <= yMax; y += 1) {
+        if (tileOverlapsBounds(zoom, x, y, SLOVAKIA_BOUNDS)) {
+          needed.push({ zoom, x, y });
+        }
+      }
+    }
+    if (needed.length > BASEMAP_MAX_TILES) {
+      const center = unproject(camera.position.x, camera.position.z);
+      const mid = latLngToTile(center.lat, center.lng, zoom);
+      needed.sort((a, b) => {
+        const da = Math.abs(a.x - mid.x) + Math.abs(a.y - mid.y);
+        const db = Math.abs(b.x - mid.x) + Math.abs(b.y - mid.y);
+        return da - db;
+      });
+      needed.length = BASEMAP_MAX_TILES;
+    }
+    const retained = retainedRef.current;
+    const neededKeys = new Set(needed.map((tile) => `${tile.zoom}/${tile.x}/${tile.y}`));
+    needed.forEach((tile) => {
+      retained.set(`${tile.zoom}/${tile.x}/${tile.y}`, tile);
+    });
+    if (retained.size > BASEMAP_RETAIN_TILES) {
+      Array.from(retained.keys()).forEach((key) => {
+        if (retained.size <= BASEMAP_RETAIN_TILES) {
+          return;
+        }
+        if (!neededKeys.has(key)) {
+          retained.delete(key);
+        }
+      });
+    }
+    const next = Array.from(retained.values());
+    const signature = next.map((tile) => `${tile.zoom}/${tile.x}/${tile.y}`).join('|');
+    if (signature !== signatureRef.current) {
+      signatureRef.current = signature;
+      setTiles(next);
+    }
+  });
 
   return (
-    <group
-      ref={groupRef}
-      position={[SLOVAKIA_MAP_CENTER_X, verticalLift, SLOVAKIA_MAP_CENTER_Z]}
-      scale={[widthScale, verticalScale, depthScale]}
-      rotation={[0, 0, 0]}
-    >
-      <primitive object={normalizedScene} />
+    <group>
+      {tiles.map((tile) => (
+        <BasemapTileMesh
+          key={`${tile.zoom}/${tile.x}/${tile.y}`}
+          zoom={tile.zoom}
+          tileX={tile.x}
+          tileY={tile.y}
+          onReady={handleReady}
+        />
+      ))}
+    </group>
+  );
+};
+
+
+const StationLayer: React.FC<{
+  dataset?: GtfsDataset | null;
+  isCoordinateVisible: (coord: { lat: number; lng: number }) => boolean;
+}> = ({ dataset, isCoordinateVisible }) => {
+  const catalog = useMemo(() => {
+    const namedPlaces = [
+      ...MAJOR_CITIES.map((city) => ({
+        name: city.name,
+        lat: city.lat,
+        lng: city.lng,
+        rank: namedPlaceRank(city.size),
+      })),
+      ...SLOVAK_CITIES.map((city) => ({
+        name: city.name,
+        lat: city.lat,
+        lng: city.lng,
+        rank: 'small' as const,
+      })),
+    ];
+    const uniqueNamed: typeof namedPlaces = [];
+    const namedKeys = new Set<string>();
+    namedPlaces.forEach((place) => {
+      const key = stationNameKey(place.name);
+      if (namedKeys.has(key)) {
+        return;
+      }
+      namedKeys.add(key);
+      uniqueNamed.push(place);
+    });
+
+    const stops = dataset
+      ? Object.values(dataset.stops).filter((stop) =>
+          isCoordinateVisible({ lat: stop.lat, lng: stop.lng })
+        )
+      : [];
+
+    const namedDisks: StationDiskItem[] = [];
+    const namedLabels: NamedStationLabel[] = [];
+    const occupied = uniqueNamed.map((place) => {
+      let lat = place.lat;
+      let lng = place.lng;
+      let best = Number.POSITIVE_INFINITY;
+      stops.forEach((stop) => {
+        const dLat = stop.lat - place.lat;
+        const dLng = stop.lng - place.lng;
+        const dist = dLat * dLat + dLng * dLng;
+        if (dist < best && dist < 0.045 * 0.045) {
+          best = dist;
+          lat = stop.lat;
+          lng = stop.lng;
+        }
+      });
+      const [x, , z] = project({ lat, lng });
+      namedDisks.push({
+        x,
+        z,
+        rank: place.rank,
+      });
+      namedLabels.push({
+        key: `named-${place.name}`,
+        name: place.name,
+        x,
+        z,
+        rank: place.rank,
+        font: STATION_FONT_SIZE[place.rank],
+        maxY: STATION_LABEL_MAX_Y[place.rank],
+        offsetX: 2.1,
+      });
+      return { x, z };
+    });
+
+    const tinyByName = new Map<string, TinyStationLabel>();
+    stops.forEach((stop) => {
+      const key = stationNameKey(stop.name);
+      if (!key || namedKeys.has(key) || tinyByName.has(key)) {
+        return;
+      }
+      const [x, , z] = project({ lat: stop.lat, lng: stop.lng });
+      const tooClose = occupied.some((place) => {
+        const dx = place.x - x;
+        const dz = place.z - z;
+        return dx * dx + dz * dz < 9;
+      });
+      if (tooClose) {
+        return;
+      }
+      tinyByName.set(key, { key, name: stop.name, x, z });
+    });
+    const tinyStops = Array.from(tinyByName.values());
+    const tinyDisks: StationDiskItem[] = tinyStops.map((stop) => ({
+      x: stop.x,
+      z: stop.z,
+      rank: 'tiny',
+    }));
+
+    return { namedDisks, namedLabels, tinyDisks, tinyStops };
+  }, [dataset, isCoordinateVisible]);
+
+  return (
+    <group>
+      <StationDiskInstances items={catalog.namedDisks} />
+      <StationDiskInstances items={catalog.tinyDisks} visibleMaxY={STATION_TINY_DISK_MAX_Y} />
+      <NamedStationLabels labels={catalog.namedLabels} />
+      <TinyStationLabels stops={catalog.tinyStops} />
     </group>
   );
 };
@@ -1253,60 +2237,72 @@ const TrainMesh: React.FC<{
   train: TrainRenderState;
   isSelected?: boolean;
   onClick?: (trainNumber: string) => void;
-  animationState?: TrainAnimationState | null;
-}> = ({ train, isSelected = false, onClick, animationState }) => {
+  focusedPositionRef?: React.MutableRefObject<Coordinate | null>;
+  tracedRouteRef?: React.MutableRefObject<Coordinate[] | null>;
+  focusedStations?: Array<Coordinate | null>;
+  journeyStops?: JourneyStop[];
+}> = ({
+  train,
+  isSelected = false,
+  onClick,
+  focusedPositionRef,
+  tracedRouteRef,
+  focusedStations,
+  journeyStops,
+}) => {
   const ref = useRef<Mesh>(null);
   const targetVector = useMemo(() => new Vector3(), []);
   const { camera } = useThree();
 
   useFrame(() => {
-    if (!ref.current) {
+    if (!isSelected || !ref.current) {
       return;
     }
-    const liveCoordinate =
-      animationState !== undefined && animationState !== null
-        ? interpolateAnimationCoordinate(animationState, getTodayTimeMs())
-        : train.position;
+    let liveCoordinate = focusedPositionRef?.current ?? train.position;
+    const traced = tracedRouteRef?.current;
+    if (
+      traced &&
+      traced.length > 1 &&
+      focusedStations &&
+      journeyStops &&
+      journeyStops.length > 0
+    ) {
+      const cursor = routeCursor(focusedStations, journeyStops, new Date());
+      if (cursor.from && cursor.to) {
+        liveCoordinate = placeOnPath(traced, cursor.from, cursor.to, cursor.fraction);
+      }
+    }
     if (!liveCoordinate) {
       return;
     }
     const [x, y, z] = project(liveCoordinate);
     targetVector.set(x, y + TRAIN_VERTICAL_OFFSET, z);
-    ref.current.position.lerp(targetVector, 0.05);
+    ref.current.position.lerp(targetVector, 0.35);
     if (camera) {
       ref.current.quaternion.copy(camera.quaternion);
     }
   });
 
-  const initialCoordinate =
-    animationState !== undefined && animationState !== null
-      ? interpolateAnimationCoordinate(animationState, getTodayTimeMs())
-      : train.position;
-  if (!initialCoordinate) {
+  if (!train.position) {
     return null;
   }
-  const [initialX, initialY, initialZ] = project(initialCoordinate);
+  const [initialX, initialY, initialZ] = project(train.position);
   const initialYWithOffset = initialY + TRAIN_VERTICAL_OFFSET;
 
   const handleClick = (e: any) => {
     e.stopPropagation();
     if (onClick) {
-      // Toggle: if clicking the same train, deselect it; otherwise select the new train
-      if (isSelected) {
-        onClick(''); // Deselect - parent will handle converting to null
-      } else {
-        onClick(train.trainNumber);
-      }
+      onClick(isSelected ? '' : train.trainNumber);
     }
   };
 
-  // Make selected train larger and brighter
   const size = isSelected ? TRAIN_SELECTED_SIZE : TRAIN_BASE_SIZE;
-  const emissiveIntensity = isSelected ? 1.0 : 0.5;
 
   return (
-    <mesh 
-      ref={ref} 
+    <mesh
+      ref={ref}
+      geometry={TRAIN_BOX_GEOMETRY}
+      scale={size}
       position={[initialX, initialYWithOffset, initialZ]}
       onClick={handleClick}
       onPointerOver={(e) => {
@@ -1317,12 +2313,37 @@ const TrainMesh: React.FC<{
         document.body.style.cursor = 'default';
       }}
     >
-      <boxGeometry args={[size, size, size]} />
-      <meshStandardMaterial
-        color={train.color}
-        emissive={train.color}
-        emissiveIntensity={emissiveIntensity}
-      />
+      <meshBasicMaterial color={train.color} />
+    </mesh>
+  );
+};
+
+const StaticTrainMesh: React.FC<{
+  train: TrainRenderState;
+  onClick?: (trainNumber: string) => void;
+}> = ({ train, onClick }) => {
+  if (!train.position) {
+    return null;
+  }
+  const [x, y, z] = project(train.position);
+  return (
+    <mesh
+      geometry={TRAIN_BOX_GEOMETRY}
+      scale={TRAIN_BASE_SIZE}
+      position={[x, y + TRAIN_VERTICAL_OFFSET, z]}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick?.(train.trainNumber);
+      }}
+      onPointerOver={(e) => {
+        e.stopPropagation();
+        document.body.style.cursor = 'pointer';
+      }}
+      onPointerOut={() => {
+        document.body.style.cursor = 'default';
+      }}
+    >
+      <meshBasicMaterial color={train.color} />
     </mesh>
   );
 };
@@ -1330,6 +2351,9 @@ const TrainMesh: React.FC<{
 interface MapSceneProps {
   trains: TrainRenderState[];
   focusedTrainNumber?: string | null;
+  focusedPositionRef?: React.MutableRefObject<Coordinate | null>;
+  focusedStations?: Array<Coordinate | null>;
+  journeyStops?: JourneyStop[];
   onTrainClick?: (trainNumber: string) => void;
   dataset?: GtfsDataset | null;
   onOsmStatusChange?: (status: OsmStatus) => void;
@@ -1338,9 +2362,12 @@ interface MapSceneProps {
   onCanvasStateChange?: (state: 'loading' | 'loaded') => void;
 }
 
-export const MapScene: React.FC<MapSceneProps> = ({
+export const MapScene: React.FC<MapSceneProps> = React.memo(({
   trains,
   focusedTrainNumber,
+  focusedPositionRef,
+  focusedStations,
+  journeyStops,
   onTrainClick,
   dataset,
   onOsmStatusChange,
@@ -1348,8 +2375,6 @@ export const MapScene: React.FC<MapSceneProps> = ({
   onToggleLiveApi,
   onCanvasStateChange,
 }) => {
-  console.log(`🗺️ MapScene received ${trains.length} trains`);
-  
   const controlsRef = useRef<any>(null);
   const CAMERA_PAN_FACTOR = 0.02;
   const tileWorkerRef = useRef<Worker | null>(null);
@@ -1463,12 +2488,16 @@ export const MapScene: React.FC<MapSceneProps> = ({
   
   const wayOccurrencesRef = useRef<Map<number, number>>(new Map());
   const [railTiles, setRailTiles] = useState<RailTile[]>([]);
+  const [fineRailPositions, setFineRailPositions] = useState<FineRailView | null>(null);
   const tileCacheRef = useRef<Set<string>>(new Set());
   const duplicateTileLogKeysRef = useRef<Set<string>>(new Set());
   const createdGeometriesRef = useRef<Set<BufferGeometry>>(new Set());
   const osmWaysRef = useRef<Map<number, OSMWay>>(new Map());
+  const clippedNetworkRef = useRef<OSMWay[]>([]);
   const osmGraphRef = useRef<OsmGraph>(new Map());
   const [osmGraphTick, setOsmGraphTick] = useState(0);
+  const [networkRoute, setNetworkRoute] = useState<Coordinate[] | null>(null);
+  const tracedRouteRef = useRef<Coordinate[] | null>(null);
   const [osmWayCount, setOsmWayCount] = useState(0);
   const [osmStatus, setOsmStatus] = useState<OsmStatus>({
     tilesLoaded: 0,
@@ -1488,22 +2517,6 @@ export const MapScene: React.FC<MapSceneProps> = ({
     animating: false,
     startTime: 0,
   });
-  const [canvasDpr, setCanvasDpr] = useState(() => {
-    if (typeof window === 'undefined') {
-      return 1;
-    }
-    return Math.min(1.25, Math.max(0.75, window.devicePixelRatio * 0.75));
-  });
-  useEffect(() => {
-    const handleResize = () => {
-      const deviceDpr = typeof window !== 'undefined' ? window.devicePixelRatio : 1;
-      setCanvasDpr(Math.min(1.25, Math.max(0.75, deviceDpr * 0.75)));
-    };
-    window.addEventListener('resize', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-    };
-  }, []);
   useEffect(() => {
     if (onOsmStatusChange) {
       onOsmStatusChange(osmStatus);
@@ -1529,10 +2542,12 @@ export const MapScene: React.FC<MapSceneProps> = ({
       return { total, completed: nextCompleted };
     });
   }, [appendLoadingMessage]);
-  const handleTerrainLoaded = useCallback(() => {
+  const handleBasemapReady = useCallback(() => {
     setTerrainLoaded(true);
   }, []);
+  const loadingSkippedRef = useRef(false);
   const handleLoadingSkip = useCallback(() => {
+    loadingSkippedRef.current = true;
     appendLoadingMessage('Loading skipped by user');
     setLoadingDismissed(true);
   }, [appendLoadingMessage]);
@@ -1543,22 +2558,18 @@ export const MapScene: React.FC<MapSceneProps> = ({
   }, [tileLoadPlan.total, appendLoadingMessage]);
   useEffect(() => {
     if (terrainLoaded) {
-      appendLoadingMessage('Loaded terrain');
+      appendLoadingMessage('Loaded basemap');
     }
   }, [terrainLoaded, appendLoadingMessage]);
   const [osmRefreshTrigger, setOsmRefreshTrigger] = useState(0);
   const [osmDetailLevel, setOsmDetailLevel] = useState<OsmDetailLevel>('coarse');
   const [svgOutlinePolygons, setSvgOutlinePolygons] = useState<LatLngPolygon[]>([]);
   const outlineLoadedRef = useRef(false);
-  const terrainGroupRef = useRef<Group | null>(null);
-  const [viewMode] = useState<'2d' | '3d'>('3d');
+  const [viewMode] = useState<'2d' | '3d'>('2d');
   const embankmentMaterial = useMemo(
     () =>
-      new MeshStandardMaterial({
+      new MeshBasicMaterial({
         color: '#ffffff',
-        roughness: 0.9,
-        metalness: 0.1,
-        flatShading: true,
       }),
     []
   );
@@ -1587,7 +2598,7 @@ export const MapScene: React.FC<MapSceneProps> = ({
         const polygons = svgData.paths
           .flatMap((path) =>
             path.subPaths.map((subPath) =>
-              subPath.getPoints().map((point) => ({
+              subPath.getPoints(24).map((point) => ({
                 lat:
                   SLOVAKIA_BOUNDS.maxLat -
                   ((point.y - vbY) / Math.max(vbHeight, 1)) * latSpan,
@@ -1597,16 +2608,15 @@ export const MapScene: React.FC<MapSceneProps> = ({
               }))
             )
           )
-          .filter((polygon) => polygon.length >= 3);
+          .filter((polygon) => polygon.length >= 3)
+          .sort((a, b) => b.length - a.length)
+          .slice(0, 1);
         if (cancelled) {
           return;
         }
         if (polygons.length > 0) {
           setSvgOutlinePolygons(polygons);
-          if (!outlineLoadedRef.current) {
-            outlineLoadedRef.current = true;
-            setOsmRefreshTrigger((prev) => prev + 1);
-          }
+          outlineLoadedRef.current = true;
         }
       } catch (error) {
         console.warn('Failed to load SVG outline:', error);
@@ -1619,14 +2629,7 @@ export const MapScene: React.FC<MapSceneProps> = ({
       cancelled = true;
     };
   }, [setOsmRefreshTrigger]);
-  const is3DView = viewMode === '3d';
-  const terrainSampler = useMemo(() => {
-    if (!is3DView) {
-      return undefined;
-    }
-    return (worldX: number, worldZ: number) =>
-      sampleTerrainHeightFromGroup(terrainGroupRef.current, worldX, worldZ);
-  }, [is3DView]);
+  const terrainSampler = undefined;
   const isCoordinateVisible = useCallback(
     (coord: LatLngPoint) => isCoordinateInsideOutline(coord, svgOutlinePolygons),
     [svgOutlinePolygons]
@@ -1634,6 +2637,7 @@ export const MapScene: React.FC<MapSceneProps> = ({
   const finePositionsRef = useRef<number[]>([]);
   const finePositionsByTypeRef = useRef<Map<string, number[]>>(new Map());
   const pathfinderWorkerRef = useRef<Worker | null>(null);
+  const pathfinderGraphReadyRef = useRef(false);
   const pathfinderResolversRef = useRef<Map<string, (result: PathfinderWorkerResult) => void>>(new Map());
   const pathfinderRejectorsRef = useRef<Map<string, (message: string) => void>>(new Map());
   const workerRequestIdByTrainRef = useRef<Map<string, string>>(new Map());
@@ -1799,6 +2803,7 @@ export const MapScene: React.FC<MapSceneProps> = ({
       return;
     }
     const newGraph: OsmGraph = new Map();
+    resetSpatialIndex();
     extendOsmGraph(newGraph, storedWays);
     osmGraphRef.current = newGraph;
     setOsmGraphTick((prev) => prev + 1);
@@ -2000,7 +3005,7 @@ type AnimationParams = {
     ): Promise<PathfinderWorkerResult> => {
       const worker = pathfinderWorkerRef.current;
       const graph = osmGraphRef.current;
-      if (!worker || graph.size === 0) {
+      if (!worker || graph.size === 0 || !pathfinderGraphReadyRef.current) {
         return Promise.resolve(
           findOsmPath(graph, searchParams.liveStart, searchParams.liveEnd, bounds)
         );
@@ -2118,6 +3123,10 @@ type AnimationParams = {
   const handleWorkerMessage = useCallback(
     (event: MessageEvent<PathfinderWorkerResponse>) => {
       const response = event.data;
+      if (response.type === 'graphReady') {
+        pathfinderGraphReadyRef.current = response.nodeCount > 0;
+        return;
+      }
       const trainNumber = workerRequestInfoRef.current.get(response.requestId);
       workerRequestInfoRef.current.delete(response.requestId);
       if (trainNumber) {
@@ -2127,12 +3136,15 @@ type AnimationParams = {
       const rejector = pathfinderRejectorsRef.current.get(response.requestId);
       pathfinderResolversRef.current.delete(response.requestId);
       pathfinderRejectorsRef.current.delete(response.requestId);
-      if (!trainNumber) {
-        return;
-      }
       if (response.type === 'result') {
         resolver?.({ path: response.path, reason: response.reason });
       } else {
+        const graph = osmGraphRef.current;
+        if (response.message === 'Graph not initialized' && graph.size > 0) {
+          pathfinderGraphReadyRef.current = false;
+          resolver?.({ path: [], reason: 'graph_not_ready' });
+          return;
+        }
         rejector?.(response.message);
       }
     },
@@ -2158,8 +3170,10 @@ type AnimationParams = {
   useEffect(() => {
     const worker = pathfinderWorkerRef.current;
     if (!worker || osmGraph.size === 0) {
+      pathfinderGraphReadyRef.current = false;
       return;
     }
+    pathfinderGraphReadyRef.current = false;
     try {
       worker.postMessage({
         type: 'initGraph',
@@ -2167,6 +3181,7 @@ type AnimationParams = {
       });
     } catch (error) {
       console.error('Failed to send graph to worker', error);
+      pathfinderGraphReadyRef.current = false;
     }
   }, [osmGraph, osmGraphTick]);
 
@@ -2174,9 +3189,17 @@ type AnimationParams = {
     let cancelled = false;
 
     const loadTiles = async () => {
+      if (svgOutlinePolygons.length === 0) {
+        return;
+      }
       const loadVersion = ++tileLoadVersionRef.current;
       tileCacheRef.current.clear();
       wayOccurrencesRef.current = new Map();
+      clippedNetworkRef.current = [];
+      osmWaysRef.current = new Map();
+      osmGraphRef.current = new Map();
+      resetSpatialIndex();
+      pathfinderGraphReadyRef.current = false;
       setRailTiles([]);
       setBridgeLineGeometries([]);
       setTunnelLineGeometries([]);
@@ -2188,178 +3211,109 @@ type AnimationParams = {
         lastStatus: 'loading',
         loading: true,
       }));
-      setLoadingDismissed(false);
+      if (!loadingSkippedRef.current) {
+        setLoadingDismissed(false);
+      }
       setLoadingConsole(['Loading terrain...']);
       plannedTileTotalRef.current = 0;
 
-      const detailIndex = DETAIL_LEVEL_ORDER.indexOf(osmDetailLevel);
-      const levelsToLoad = TILE_LEVELS.filter(
-        (level) => DETAIL_LEVEL_ORDER.indexOf(level.name) <= detailIndex
-      );
-      const plannedTiles = levelsToLoad.reduce(
-        (sum, level) => sum + countTiles(level.bounds, level.tileSize),
-        0
-      );
-      plannedTileTotalRef.current = plannedTiles;
-      setTileLoadPlan({ total: plannedTiles, completed: 0 });
+      plannedTileTotalRef.current = 1;
+      setTileLoadPlan({ total: 1, completed: 0 });
       const bridgeGeometries: BufferGeometry[] = [];
       const tunnelGeometries: BufferGeometry[] = [];
-      for (const level of levelsToLoad) {
-        const { bounds, tileSize, name, pause } = level;
-        for (let lat = bounds.minLat; lat < bounds.maxLat; lat += tileSize) {
-          for (let lng = bounds.minLng; lng < bounds.maxLng; lng += tileSize) {
-            if (cancelled) return;
-            const maxLat = Math.min(lat + tileSize, bounds.maxLat);
-            const maxLng = Math.min(lng + tileSize, bounds.maxLng);
-            const key = tileKey(name, lat, lng);
-            if (tileCacheRef.current.has(key)) {
-              if (!duplicateTileLogKeysRef.current.has(key)) {
-                duplicateTileLogKeysRef.current.add(key);
-              }
-              continue;
-            }
-            let ways: OSMWay[] = [];
-            let meta: OsmProxyMeta | undefined;
-            try {
-              const result = await requestTile(
-                { minLat: lat, maxLat, minLng: lng, maxLng },
-                name
-              );
-              if (loadVersion !== tileLoadVersionRef.current || cancelled) {
-                return;
-              }
-              ways = result.ways;
-              meta = result.meta;
-              if (meta) {
-                const metaStatus = meta.status;
-                setOsmStatus((prev) => ({
-                  ...prev,
-                  tilesLoaded: prev.tilesLoaded + (ways.length > 0 ? 1 : 0),
-                  lastStatus: metaStatus ?? prev.lastStatus,
-                  lastFetch: new Date().toLocaleTimeString(),
-                }));
-              }
-            } catch (err) {
-              console.error('Rail tile fetch failed:', err);
-            }
-            tileCacheRef.current.add(key);
-            markTileProgress();
-
-            if (cancelled) return;
-            if (ways.length === 0) {
-              continue;
-            }
-
-            let duplicates = 0;
-            const filteredWays: OSMWay[] = [];
-            ways.forEach((way) => {
-              const seen = wayOccurrencesRef.current.get(way.id) ?? 0;
-              if (seen > 0) {
-                duplicates++;
-              } else {
-                filteredWays.push(way);
-              }
-              wayOccurrencesRef.current.set(way.id, seen + 1);
-            });
-            const newGraphWays = filteredWays.filter(
-              (way) => !osmWaysRef.current.has(way.id)
-            );
-            if (newGraphWays.length > 0) {
-              newGraphWays.forEach((way) => osmWaysRef.current.set(way.id, way));
-              extendOsmGraph(osmGraphRef.current, newGraphWays);
-              setOsmGraphTick((prev) => prev + 1);
-              setOsmWayCount(osmWaysRef.current.size);
-            }
-            const filtered = filteredWays;
-            if (filtered.length === 0) {
-              continue;
-            }
-            const bridgeWays = filtered.filter((way) => isBridge(way));
-            if (bridgeWays.length > 0) {
-              const positions = convertWaysToPositions(bridgeWays);
-              if (positions.length > 0) {
-                const geometry = new BufferGeometry();
-                geometry.setAttribute('position', new BufferAttribute(positions, 3));
-                createdGeometriesRef.current.add(geometry);
-                bridgeGeometries.push(geometry);
-              }
-            }
-            const tunnelWays = filtered.filter((way) => isTunnel(way));
-            if (tunnelWays.length > 0) {
-              const positions = convertWaysToPositions(tunnelWays);
-              if (positions.length > 0) {
-                const geometry = new BufferGeometry();
-                geometry.setAttribute('position', new BufferAttribute(positions, 3));
-                createdGeometriesRef.current.add(geometry);
-                tunnelGeometries.push(geometry);
-              }
-            }
-            const insideWays = filtered.filter((way) =>
-              svgOutlinePolygons.length === 0
-                ? true
-                : doesWayIntersectOutline(way, svgOutlinePolygons)
-            );
-            const outsideWays = filtered.filter(
-              (way) =>
-                svgOutlinePolygons.length === 0
-                  ? false
-                  : !doesWayIntersectOutline(way, svgOutlinePolygons)
-            );
-            const renderWayGroup = (
-              waySet: OSMWay[],
-              tag: 'inside' | 'outside'
-            ) => {
-              if (waySet.length === 0) {
-                return;
-              }
-              const grouped = groupWaysByRailway(waySet);
-              const newTiles: RailTile[] = [];
-              grouped.forEach((groupWays, railwayType) => {
-                const conversionStart = Date.now();
-                const positions = convertWaysToPositions(groupWays);
-                if (positions.length === 0) {
-                  return;
-                }
-                const processed = positions;
-                if (name === 'fine') {
-                  appendPositions(finePositionsRef.current, processed);
-                  appendPositionsToType(
-                    finePositionsByTypeRef.current,
-                    railwayType,
-                    processed
-                  );
-                } else {
-                  const geometryStart = Date.now();
-                  const geometry = new BufferGeometry();
-                  geometry.setAttribute('position', new BufferAttribute(processed, 3));
-                  createdGeometriesRef.current.add(geometry);
-                  const geometryDuration = Date.now() - geometryStart;
-                newTiles.push({
-                  key: `${key}-${railwayType}-${tag}`,
-                  geometry,
-                  chains: waysToChains(groupWays),
-                  level: name,
-                  railwayType,
-                  opacity: tag === 'outside' ? 0.35 : 0.95,
-                });
-                }
-              });
-              if (newTiles.length === 0) {
-                return;
-              }
-              const setTilesStart = Date.now();
-              setRailTiles((prev) => {
-                const nextTiles = [...prev, ...newTiles];
-                return nextTiles;
-              });
-            };
-
-            renderWayGroup(insideWays, 'inside');
-            renderWayGroup(outsideWays, 'outside');
-
-            const wait = pause ?? 100;
-            await sleep(wait);
+      let ways: OSMWay[] = [];
+      let meta: OsmProxyMeta | undefined;
+      let fetched = false;
+      for (let attempt = 0; attempt < 3 && !fetched; attempt += 1) {
+        if (cancelled || loadVersion !== tileLoadVersionRef.current) {
+          return;
+        }
+        try {
+          const result = await fetchSimplifiedNetwork();
+          if (loadVersion !== tileLoadVersionRef.current || cancelled) {
+            return;
           }
+          ways = result.ways;
+          meta = result.meta;
+          fetched = ways.length > 0 || Boolean(meta);
+        } catch (err) {
+          console.error('Simplified railway fetch failed:', err);
+        }
+        if (!fetched && attempt < 2) {
+          await sleep(600 * (attempt + 1));
+        }
+      }
+      if (meta) {
+        setOsmStatus((prev) => ({
+          ...prev,
+          tilesLoaded: ways.length > 0 ? 1 : 0,
+          lastStatus: meta.status ?? prev.lastStatus,
+          lastFetch: new Date().toLocaleTimeString(),
+        }));
+      }
+      tileCacheRef.current.add('network');
+      markTileProgress();
+
+      if (!cancelled && ways.length > 0) {
+        const filteredWays: OSMWay[] = [];
+        ways.forEach((way) => {
+          const seen = wayOccurrencesRef.current.get(way.id) ?? 0;
+          if (seen === 0) {
+            filteredWays.push(way);
+          }
+          wayOccurrencesRef.current.set(way.id, seen + 1);
+        });
+        const clipped = clipWaysToOutline(filteredWays, svgOutlinePolygons);
+        clippedNetworkRef.current.push(...clipped);
+        const filtered = closeRailGaps(clippedNetworkRef.current);
+        filtered.forEach((way) => osmWaysRef.current.set(way.id, way));
+        extendOsmGraph(osmGraphRef.current, filtered);
+        setOsmGraphTick((prev) => prev + 1);
+        setOsmWayCount(osmWaysRef.current.size);
+        const bridgeWays = clippedNetworkRef.current.filter((way) => isBridge(way));
+        if (bridgeWays.length > 0) {
+          const positions = convertWaysToPositions(bridgeWays);
+          if (positions.length > 0) {
+            const geometry = new BufferGeometry();
+            geometry.setAttribute('position', new BufferAttribute(positions, 3));
+            createdGeometriesRef.current.add(geometry);
+            bridgeGeometries.push(geometry);
+          }
+        }
+        const tunnelWays = clippedNetworkRef.current.filter((way) => isTunnel(way));
+        if (tunnelWays.length > 0) {
+          const positions = convertWaysToPositions(tunnelWays);
+          if (positions.length > 0) {
+            const geometry = new BufferGeometry();
+            geometry.setAttribute('position', new BufferAttribute(positions, 3));
+            createdGeometriesRef.current.add(geometry);
+            tunnelGeometries.push(geometry);
+          }
+        }
+        const publishGroup = (groupWays: OSMWay[], railwayType: string) => {
+          const positions = convertWaysToPositions(groupWays);
+          if (positions.length === 0) {
+            return null;
+          }
+          const geometry = new BufferGeometry();
+          geometry.setAttribute('position', new BufferAttribute(positions, 3));
+          createdGeometriesRef.current.add(geometry);
+          return {
+            key: `network-${railwayType}`,
+            geometry,
+            level: 'coarse',
+            railwayType,
+            opacity: 0.95,
+          } satisfies RailTile;
+        };
+        const mainWays = filtered.filter((way) => isMainRailway(way));
+        const branchWays = filtered.filter((way) => !isMainRailway(way));
+        const tiles = [
+          publishGroup(mainWays, 'rail'),
+          publishGroup(branchWays, 'light_rail'),
+        ].filter((tile): tile is RailTile => tile != null);
+        if (tiles.length > 0) {
+          setRailTiles(tiles);
         }
       }
 
@@ -2403,7 +3357,7 @@ type AnimationParams = {
     return () => {
       cancelled = true;
     };
-  }, [osmRefreshTrigger, osmDetailLevel]);
+  }, [osmRefreshTrigger, osmDetailLevel, svgOutlinePolygons.length]);
 
   const purgeOsmCache = async () => {
     setOsmStatus((prev) => ({
@@ -2573,9 +3527,10 @@ type AnimationParams = {
         
         if (!cancelled) {
           setSlovakiaOutline(outline);
-          console.log(`🗺️ Slovakia outline loaded: ${outline.points.length} points`);
-          console.log(`   Bounds: [${outline.bounds.minLat.toFixed(4)}, ${outline.bounds.minLng.toFixed(4)}] to [${outline.bounds.maxLat.toFixed(4)}, ${outline.bounds.maxLng.toFixed(4)}]`);
-          
+          if (outline.points.length > 8) {
+            setSvgOutlinePolygons([simplifyRing(outline.points)]);
+            setOsmRefreshTrigger((prev) => prev + 1);
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -2617,40 +3572,66 @@ type AnimationParams = {
     return <primitive object={circleLine} />;
   }, [searchCircle]);
 
-  const routes = useMemo(() => {
-    const trainsWithRoutes = trains.filter(
-      (train) => train.shapePath && train.shapePath.length > 0
+  useEffect(() => {
+    tracedRouteRef.current = null;
+    setNetworkRoute(null);
+    const waypoints = (focusedStations ?? []).filter(
+      (point): point is Coordinate => point != null
     );
-    if (trainsWithRoutes.length > 0) {
-      console.log(`📊 ${trainsWithRoutes.length} trains have routes (out of ${trains.length})`);
-      console.log(`Sample route length: ${trainsWithRoutes[0].shapePath.length} points`);
+    if (!focusedTrainNumber || waypoints.length < 2 || osmGraphRef.current.size === 0) {
+      return;
     }
-    return trainsWithRoutes.flatMap((train) => {
-      const isSelected = train.trainNumber === focusedTrainNumber;
-      if (isSelected && train.routeSegments && train.routeSegments.length > 0) {
-        return train.routeSegments.map((segment, index) => (
-          <TrackLine
-            key={`${train.trainNumber}-${segment.key}-${index}`}
-            path={segment.points}
-            color={routeSegmentColor(segment.key)}
-            opacity={1}
-            lineWidth={segment.key === '50' || segment.key === '60' ? 6 : 4}
-            heightOffset={ANIMATED_PATH_HEIGHT_OFFSET}
-          />
-        ));
+    let cancelled = false;
+    const requestId = `trace-${focusedTrainNumber}-${Date.now()}`;
+    const applyPath = (path: Coordinate[]) => {
+      if (cancelled || path.length < 2) {
+        return;
       }
-      return (
-        <TrackLine
-          key={train.trainNumber}
-          path={train.shapePath}
-          color={train.color}
-          opacity={isSelected ? 1 : 0}
-          lineWidth={isSelected ? 8 : 3}
-          heightOffset={ANIMATED_PATH_HEIGHT_OFFSET}
-        />
-      );
-    });
-  }, [trains, focusedTrainNumber]);
+      tracedRouteRef.current = path;
+      setNetworkRoute(path);
+    };
+    const timer = window.setTimeout(() => {
+      const worker = pathfinderWorkerRef.current;
+      const graph = osmGraphRef.current;
+      if (!worker || graph.size === 0 || !pathfinderGraphReadyRef.current) {
+        applyPath(traceWaypoints(graph, waypoints));
+        return;
+      }
+      const resultPromise = new Promise<Coordinate[]>((resolve, reject) => {
+        pathfinderResolversRef.current.set(requestId, (result) => resolve(result.path));
+        pathfinderRejectorsRef.current.set(requestId, reject);
+        worker.postMessage({
+          type: 'trace',
+          requestId,
+          waypoints,
+        });
+      });
+      const timeoutPromise = new Promise<Coordinate[]>((_, reject) => {
+        window.setTimeout(() => reject(new Error('trace timeout')), 8000);
+      });
+      Promise.race([resultPromise, timeoutPromise])
+        .then((path) => {
+          if (path.length >= 2) {
+            applyPath(path);
+            return;
+          }
+          applyPath(traceWaypoints(graph, waypoints));
+        })
+        .catch(() => {
+          if (!cancelled) {
+            applyPath(traceWaypoints(graph, waypoints));
+          }
+        });
+    }, osmStatus.loading ? 400 : 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      pathfinderResolversRef.current.delete(requestId);
+      pathfinderRejectorsRef.current.delete(requestId);
+    };
+  }, [focusedTrainNumber, focusedStations, journeyStops, osmGraphTick, osmStatus.loading]);
+
+  const routes: React.ReactNode[] = [];
 
   const focusedAnimationState = useMemo<TrainAnimationState | null>(() => {
     if (!focusedTrainNumber) return null;
@@ -2669,46 +3650,28 @@ type AnimationParams = {
 
   const highlightedRoute = useMemo(() => {
     const path =
-      focusedAnimationState?.path?.length
-        ? focusedAnimationState.path
-        : trains.find((train) => train.trainNumber === focusedTrainNumber)
-            ?.shapePath ?? [];
+      networkRoute && networkRoute.length > 1
+        ? networkRoute
+        : trains.find((train) => train.trainNumber === focusedTrainNumber)?.shapePath ?? [];
     if (!path || path.length < 2) {
       return null;
     }
     const highlightHeight = TERRAIN_HEIGHT_MARGIN + 1 + HIGHLIGHT_VERTICAL_OFFSET;
     const positions: number[] = [];
-    const samplePoints: Vector3[] = [];
     path.forEach((coord) => {
       const [x, , z] = project(coord);
-      const y = highlightHeight;
-      positions.push(x, y, z);
-      samplePoints.push(new Vector3(x, y, z));
+      positions.push(x, highlightHeight, z);
     });
     const highlightColor = trainColorForHighlight(trains, focusedTrainNumber);
     return {
       positions,
-      samplePoints,
       color: highlightColor,
     };
-  }, [focusedAnimationState, focusedTrainNumber, trains]);
+  }, [focusedAnimationState, focusedTrainNumber, trains, networkRoute]);
 
   const highlightedAnimationPaths = useMemo(() => {
-    const states = Array.from(animationStatesRef.current.values()).filter(
-      (state) => state.path && state.path.length > 1
-    );
-    return states.map((state) => (
-      <TrackLine
-        key={`anim-path-${state.trainNumber}-${state.boundingBoxKey}`}
-        path={state.path}
-        color="#ff1a1a"
-        opacity={1}
-        lineWidth={18}
-      heightOffset={ANIMATED_PATH_HEIGHT_OFFSET}
-      terrainSampler={terrainSampler}
-      />
-    ));
-  }, [animationVersion]);
+    return [];
+  }, []);
 
   const animationEmbankments = useMemo(() => {
     const states = Array.from(animationStatesRef.current.values()).filter(
@@ -2721,6 +3684,9 @@ type AnimationParams = {
       return items;
     }
     states.forEach((state) => {
+      if (state.trainNumber === focusedTrainNumber) {
+        return;
+      }
       const key = state.trainNumber;
       usedKeys.add(key);
       let geometry: BufferGeometry | null | undefined = embankmentCacheRef.current.get(key);
@@ -2758,7 +3724,7 @@ type AnimationParams = {
       }
     });
     return items;
-  }, [animationVersion]);
+  }, [animationVersion, focusedTrainNumber]);
 
   const animatedLiveRouteLines = useMemo(() => {
     const animatedTrainNumbers = new Set(animationStatesRef.current.keys());
@@ -2768,16 +3734,21 @@ type AnimationParams = {
         train.liveRoute &&
         train.liveRoute.length > 1
     );
-    return trainsWithLiveRoutes.map((train) => (
-      <TrackLine
-        key={`live-route-${train.trainNumber}`}
-        path={train.liveRoute!}
-        color="#facc15"
-        opacity={0.7}
-        lineWidth={8}
-      />
-    ));
-  }, [trains, animationVersion]);
+    return trainsWithLiveRoutes.map((train) => {
+      if (train.trainNumber === focusedTrainNumber) {
+        return null;
+      }
+      return (
+        <TrackLine
+          key={`live-route-${train.trainNumber}`}
+          path={train.liveRoute!}
+          color="#facc15"
+          opacity={0.7}
+          lineWidth={8}
+        />
+      );
+    });
+  }, [trains, animationVersion, focusedTrainNumber, networkRoute]);
 
   const animatedLiveRoutePoints = useMemo(() => {
     const animatedTrainNumbers = new Set(animationStatesRef.current.keys());
@@ -2839,13 +3810,7 @@ type AnimationParams = {
           return (
             <mesh key={`next-map-point-${trainNumber}`} position={[x, y + 2, z]}>
               <sphereGeometry args={[2.5, 12, 12]} />
-              <meshStandardMaterial
-                color={color}
-                emissive={color}
-                emissiveIntensity={0.8}
-                transparent
-                opacity={0.95}
-              />
+              <meshBasicMaterial color={color} transparent opacity={0.95} />
             </mesh>
           );
         })}
@@ -2853,84 +3818,85 @@ type AnimationParams = {
     );
   }, [nextMapPoints, trains, isCoordinateVisible]);
 
-  const stationPoints = useMemo(() => {
-    if (!dataset) {
-      return null;
-    }
-
-    const stops = Object.values(dataset.stops);
-    if (stops.length === 0) {
-      return null;
-    }
-    const filteredStops = stops.filter((stop) =>
-      isCoordinateVisible({ lat: stop.lat, lng: stop.lng })
-    );
-    if (filteredStops.length === 0) {
-      return null;
-    }
-
-    const positions = new Float32Array(filteredStops.length * 3);
-
-    filteredStops.forEach((stop, index) => {
-      const [x, , z] = project({ lat: stop.lat, lng: stop.lng });
-      positions[index * 3] = x;
-      positions[index * 3 + 1] = 1;
-      positions[index * 3 + 2] = z;
-    });
-
-    return (
-      <points>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-        </bufferGeometry>
-        <pointsMaterial
-          color="#ffffff"
-          size={1}
-          sizeAttenuation={true}
-          depthWrite={false}
-          transparent={true}
-          opacity={0.9}
-        />
-      </points>
-    );
-  }, [dataset]);
-
-  const railLineElements = useMemo(() => {
-    if (railTiles.length === 0) {
-      return null;
-    }
-    const tileCount = railTiles.length;
-    const buildStart = performance.now();
-    const elements = railTiles.map((tile) => {
-      if (tile.chains && tile.chains.length > 0) {
-        return (
-          <VectorRailTile
-            key={tile.key}
-            chains={tile.chains}
-            opacity={tile.opacity ?? 1}
-          />
-        );
-      }
-      const material = new LineBasicMaterial({
-        color: '#f4f7fb',
-        linewidth: 1,
-        transparent: true,
-        opacity: tile.opacity ?? 1,
-        depthTest: false,
-        depthWrite: false,
+  const railLayerPositions = useMemo(() => {
+    const collect = (railwayType: string) => {
+      let floatCount = 0;
+      railTiles.forEach((tile) => {
+        if (tile.railwayType !== railwayType) {
+          return;
+        }
+        const attribute = tile.geometry.getAttribute('position');
+        if (attribute) {
+          floatCount += attribute.array.length;
+        }
       });
-      return (
-        <lineSegments
-          key={tile.key}
-          geometry={tile.geometry}
-          material={material}
-          renderOrder={1500}
-        />
-      );
-    });
-    const buildDuration = performance.now() - buildStart;
-    return elements;
+      if (floatCount === 0) {
+        return null;
+      }
+      const positions = new Float32Array(floatCount);
+      let offset = 0;
+      railTiles.forEach((tile) => {
+        if (tile.railwayType !== railwayType) {
+          return;
+        }
+        const attribute = tile.geometry.getAttribute('position');
+        if (!attribute) {
+          return;
+        }
+        positions.set(attribute.array as Float32Array, offset);
+        offset += attribute.array.length;
+      });
+      return positions;
+    };
+    return {
+      main: collect('rail'),
+      branch: collect('light_rail'),
+    };
   }, [railTiles]);
+
+  const hideRects = fineRailPositions?.hideRects ?? [];
+  const simplifiedMain = omitSegmentsInRects(railLayerPositions.main, hideRects);
+  const simplifiedBranch = omitSegmentsInRects(railLayerPositions.branch, hideRects);
+  const railLineElements = (
+    <group>
+      {simplifiedMain ? (
+        <CasedRailLayer
+          positions={simplifiedMain}
+          fillWidth={RAIL_MAIN_FILL_WIDTH}
+          casingWidth={RAIL_MAIN_CASING_WIDTH}
+        />
+      ) : null}
+      {simplifiedBranch ? (
+        <CasedRailLayer
+          positions={simplifiedBranch}
+          fillWidth={RAIL_BRANCH_FILL_WIDTH}
+          casingWidth={RAIL_BRANCH_CASING_WIDTH}
+        />
+      ) : null}
+      {fineRailPositions?.side ? (
+        <CasedRailLayer
+          positions={fineRailPositions.side}
+          fillWidth={RAIL_SIDE_FILL_WIDTH}
+          casingWidth={RAIL_SIDE_CASING_WIDTH}
+          opacity={RAIL_SIDE_OPACITY}
+        />
+      ) : null}
+      {fineRailPositions?.branch ? (
+        <CasedRailLayer
+          positions={fineRailPositions.branch}
+          fillWidth={RAIL_BRANCH_FILL_WIDTH}
+          casingWidth={RAIL_BRANCH_CASING_WIDTH}
+        />
+      ) : null}
+      {fineRailPositions?.main ? (
+        <CasedRailLayer
+          positions={fineRailPositions.main}
+          fillWidth={RAIL_FINE_FILL_WIDTH}
+          casingWidth={RAIL_FINE_CASING_WIDTH}
+        />
+      ) : null}
+    </group>
+  );
 
   const bridgeLineElements = useMemo(() => {
     if (bridgeLineGeometries.length === 0) {
@@ -2960,60 +3926,46 @@ type AnimationParams = {
     ));
   }, [tunnelLineGeometries, tunnelMaterial]);
 
-  const visibleMajorCities = useMemo(
-    () =>
-      MAJOR_CITIES.filter((city) =>
-        isCoordinateVisible({ lat: city.lat, lng: city.lng })
-      ),
-    [isCoordinateVisible]
-  );
-  const visibleHouseCities = useMemo(
-    () =>
-      visibleMajorCities.filter(
-        (city) => city.size === 'large' || city.size === 'medium'
-      ),
-    [visibleMajorCities]
-  );
-  const slovakCityLabels = useMemo(
-    () =>
-      SLOVAK_CITIES.filter((city) =>
-        isCoordinateVisible({ lat: city.lat, lng: city.lng })
-      ).map((city) => (
-        <CityLabel
-          key={`slovak-city-${city.name}`}
-          name={city.name}
-          lat={city.lat}
-          lng={city.lng}
-          size="small"
-        />
-      )),
-    [isCoordinateVisible]
-  );
-
   const trainMeshes = useMemo(() => {
-    const trainsWithPosition = trains.filter((train) => train.position);
-    console.log(`🚂 ${trainsWithPosition.length} trains have positions (out of ${trains.length})`);
-    return trainsWithPosition
+    return trains
+      .filter((train) => train.position)
       .filter((train) => {
         if (!boundingBoxActive) return true;
         return !boundingTrains.has(train.trainNumber);
       })
-      .map((train) => (
-      <TrainMesh 
-        key={train.trainNumber} 
-        train={train}
-        isSelected={train.trainNumber === focusedTrainNumber}
-        onClick={onTrainClick}
-        animationState={animationStatesRef.current.get(train.trainNumber) ?? null}
-      />
-    ));
+      .map((train) => {
+        const isSelected = train.trainNumber === focusedTrainNumber;
+        if (isSelected) {
+          return (
+            <TrainMesh
+              key={train.trainNumber}
+              train={train}
+              isSelected
+              onClick={onTrainClick}
+              focusedPositionRef={focusedPositionRef}
+              tracedRouteRef={tracedRouteRef}
+              focusedStations={focusedStations}
+              journeyStops={journeyStops}
+            />
+          );
+        }
+        return (
+          <StaticTrainMesh
+            key={train.trainNumber}
+            train={train}
+            onClick={onTrainClick}
+          />
+        );
+      });
   }, [
     trains,
     focusedTrainNumber,
     onTrainClick,
-    animationVersion,
     boundingBoxActive,
     boundingTrains,
+    focusedPositionRef,
+    focusedStations,
+    journeyStops,
   ]);
 
   // Debug: Calculate actual map bounds from all train coordinates
@@ -3053,20 +4005,6 @@ type AnimationParams = {
     return stableMapBoundsRef.current;
   }, [trains.length]); // Only depend on train count, not the entire trains array
   
-  // Debug: Log sample coordinates to verify projection
-  if (trains.length > 0 && trains[0].shapePath.length > 0) {
-    const sampleCoord = trains[0].shapePath[0];
-    const [x, y, z] = project(sampleCoord);
-    console.log(`📍 Sample coordinate: lat=${sampleCoord.lat}, lng=${sampleCoord.lng} -> [${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}]`);
-    
-    // Log a few more points to see the range
-    if (trains[0].shapePath.length > 10) {
-      const midCoord = trains[0].shapePath[Math.floor(trains[0].shapePath.length / 2)];
-      const [mx, my, mz] = project(midCoord);
-      console.log(`📍 Mid coordinate: lat=${midCoord.lat}, lng=${midCoord.lng} -> [${mx.toFixed(1)}, ${my.toFixed(1)}, ${mz.toFixed(1)}]`);
-    }
-  }
-  
   // Camera positioned closer to see the map better
   const cameraPosition: [number, number, number] = [0, CAMERA_LOAD_START_HEIGHT, 0];
   const overlayActive = !loadingDismissed;
@@ -3083,7 +4021,7 @@ type AnimationParams = {
     ? tileLoadPlan.total > 0
       ? `Loaded: ${tileLoadPlan.completed}/${tileLoadPlan.total} OSM tiles`
       : 'Loaded OSM tiles'
-    : 'Loading terrain...';
+    : 'Loading basemap...';
   const tileStepComplete =
     tileLoadPlan.total > 0 && tileLoadPlan.completed >= tileLoadPlan.total;
   const allLoaded = terrainLoaded && tileStepComplete;
@@ -3125,7 +4063,8 @@ type AnimationParams = {
         <div className={`map-canvas-wrapper ${canvasStateClass}`}>
           <Canvas
             className="map-view-canvas"
-            dpr={canvasDpr}
+            dpr={1}
+            flat
             style={{ pointerEvents: overlayActive ? 'none' : 'auto' }}
             camera={{
               position: cameraPosition,
@@ -3133,10 +4072,16 @@ type AnimationParams = {
               near: 0.005,
             far: 10000,
             }}
-            gl={{ antialias: true }}
-            onCreated={({ camera }) => {
+            gl={{
+              antialias: false,
+              powerPreference: 'high-performance',
+              stencil: false,
+              depth: true,
+            }}
+            onCreated={({ camera, gl }) => {
               camera.up.set(0, 0, -1);
               camera.lookAt(0, 0, 0);
+              gl.setPixelRatio(1);
             }}
       >
         <color attach="background" args={['#000000']} />
@@ -3154,6 +4099,7 @@ type AnimationParams = {
         zoomSpeed={1.0}
         panSpeed={1.2}
         screenSpacePanning={true}
+        enableDamping={false}
         dampingFactor={0.05}
         mouseButtons={{
           LEFT: MOUSE.PAN,
@@ -3165,50 +4111,13 @@ type AnimationParams = {
           TWO: TOUCH_DOLLY_PAN,
         }}
       />
-      <ambientLight intensity={1.2} />
-      <directionalLight position={[1000, 2000, 1000]} intensity={1.5} />
-      <pointLight position={[0, 1000, 0]} intensity={0.5} />
+      <ambientLight intensity={1.1} />
+      <directionalLight position={[1000, 2000, 1000]} intensity={0.8} />
       
-      {/* Terrain model */}
-      {is3DView && (
-        <TerrainModel terrainRef={terrainGroupRef} onLoaded={handleTerrainLoaded} />
-      )}
+      <BasemapLayer onReady={handleBasemapReady} />
+      <FineRailLoader outline={svgOutlinePolygons} onPositions={setFineRailPositions} />
+      <StationLayer dataset={dataset} isCoordinateVisible={isCoordinateVisible} />
 
-      {/* Simple ground plane */}
-      {slovakiaOutline && (() => {
-        const [minX, , minZ] = project({ lat: slovakiaOutline.bounds.minLat, lng: slovakiaOutline.bounds.minLng });
-        const [maxX, , maxZ] = project({ lat: slovakiaOutline.bounds.maxLat, lng: slovakiaOutline.bounds.maxLng });
-        const width = maxX - minX;
-        const height = maxZ - minZ;
-        const centerX = (minX + maxX) / 2;
-        const centerZ = (minZ + maxZ) / 2;
-        
-        return (
-          <mesh rotation-x={-Math.PI / 2} position={[centerX, 0, centerZ]}>
-            <planeGeometry args={[width, height]} />
-            <meshStandardMaterial color="#3a5a3a" opacity={0.3} transparent={true} />
-          </mesh>
-        );
-      })()}
-      
-      {/* City labels - show based on zoom level (for now, show all) */}
-      {visibleMajorCities.map((city) => (
-        <CityLabel 
-          key={city.name} 
-          name={city.name} 
-          lat={city.lat} 
-          lng={city.lng} 
-          size={city.size} 
-        />
-      ))}
-      
-      {/* Simple houses at major cities */}
-      {visibleHouseCities.map((city) => (
-        <House key={`house-${city.name}`} lat={city.lat} lng={city.lng} />
-      ))}
-
-      {slovakCityLabels}
-      
       {/* Render OSM rail tiles */}
       {railLineElements}
       {bridgeLineElements && (
@@ -3261,21 +4170,6 @@ type AnimationParams = {
           color={highlightedRoute.color}
         />
       )}
-      {highlightedRoute &&
-        highlightedRoute.samplePoints
-          .filter((_, index) => index % ROUTE_LIGHT_SAMPLE_STEP === 0)
-          .map((position, index) => {
-            return (
-              <pointLight
-                key={`route-light-${index}`}
-                position={[position.x, position.y + 12, position.z]}
-                color={highlightedRoute.color}
-                intensity={ROUTE_LIGHT_INTENSITY}
-                distance={ROUTE_LIGHT_DISTANCE}
-                decay={ROUTE_LIGHT_DECAY}
-              />
-            );
-          })}
 
       {/* Search circle visualization */}
       {searchCirclePrimitive}
@@ -3288,9 +4182,6 @@ type AnimationParams = {
         </group>
       )}
       
-      {/* Render station dots */}
-      {stationPoints}
-
       {/* Render trains */}
       {trainMeshes}
         <CameraLoadAnimator />
@@ -3310,7 +4201,7 @@ type AnimationParams = {
                   className={`map-loading-step ${terrainLoaded ? 'is-complete' : 'is-active'}`}
                 >
                   <strong>1.</strong>
-                  <span>Terrain GLB</span>
+                  <span>Basemap</span>
                 </span>
                 <span className={`map-loading-step ${tileStepComplete ? 'is-complete' : ''}`}>
                   <strong>2.</strong>
@@ -3345,6 +4236,9 @@ type AnimationParams = {
                 </a>
               </div>
             </div>
+          </div>
+          <div className="map-basemap-credit">
+            © SBB/CFF/FFS · © geOps Tiles · © OpenStreetMap · © imagico
           </div>
         </div>
       </div>
@@ -3388,5 +4282,5 @@ type AnimationParams = {
     />
     </>
   );
-};
+});
 

@@ -16,7 +16,7 @@ Build a frontend-only interactive map that mirrors the `mapa.zsr.sk` experience 
 
 - **Unofficial Slovakrail API** (used by `IdemeVlakom`):
   - Base URL: `https://app.slovakrail.sk/api/v1`
-  - Authentication: shared API key (e.g., `x-api-key: PDh^2-$-M]8(dG8E+Q,FR}zsfz"Q~:N2pp\ykmg9ZEgKVrh42PHS?^sQ6<3;X,?-`).
+  - Authentication: shared API key via `x-api-key` (set `VITE_API_KEY`).
   - Endpoints of interest:
     - `/station/{stationName}/roster` – lists active trains with `train.number`, `delay`, and `timestamp`.
     - `/train/delay` (batch POST) – returns precise `currentUic`, `delayMinutes`, `nextStation` for a list of train numbers.
@@ -80,7 +80,7 @@ The goal is to remain serverless: static assets load once, realtime feeds come d
   - Download once, cache in the browser (IndexedDB/localStorage) or bundle as JSON assets.
 
 - **Slovakrail realtime API (unofficial but supplied by cp.sk/ZSSK app):**
-  - Base: `https://app.slovakrail.sk/api/v1` with shared header `x-api-key: PDh^2-$-M]8(dG8E+Q,FR}zsfz"Q~:N2pp\ykmg9ZEgKVrh42PHS?^sQ6<3;X,-`.
+  - Base: `https://app.slovakrail.sk/api/v1` with shared header `x-api-key` from `VITE_API_KEY`.
   - `/station/{stationName}/roster?departure=true`: current trains passing through a station.
   - `/train/delay`: POST with `[{"trainNumber","travelDate"}]` returns delay, `currentUic`, `nextStation`, `timestamp`.
   - `/station/name/{prefix}?maxCount=100`: search stations with GPS and UIC codes useful for interpolation.

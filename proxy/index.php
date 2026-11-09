@@ -235,7 +235,7 @@ function fetchOsmFromOverpass(array $bounds, $config, string $tileKey) {
     $query = sprintf(
         '[out:json][timeout:%d];
 (
-  way["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail|funicular)$"](%f,%f,%f,%f);
+  way["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail|funicular)$"]["service"!~"^(spur|siding|yard|crossover|driveway)$"]["usage"!~"^(industrial|military|test|tourism)$"](%f,%f,%f,%f);
 );
 out geom;',
         $timeout,

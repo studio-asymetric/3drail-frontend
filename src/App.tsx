@@ -1,15 +1,15 @@
-import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import Lenis from 'lenis/dist/lenis.mjs';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapScene } from './components/MapScene';
 import {
   TrainService,
   type JourneyStop,
   type TrainRenderState,
   getDelayColor,
+  routeCursor,
+  stationPoints,
 } from './data/trainService';
-import type { GtfsDataset } from './data/gtfsParser';
+import type { Coordinate, GtfsDataset } from './data/gtfsParser';
 import { buildGtfsDataset } from './data/gtfsParser';
-import logoLong from './logo long.svg';
 
 function timeToMs(value: string): number {
   const [hours = '0', minutes = '0', seconds = '0'] = value.split(':');
@@ -142,13 +142,7 @@ const App: React.FC = () => {
   const [focusedTrainNumber, setFocusedTrainNumber] = useState<string | null>(null);
   const [useLiveApi, setUseLiveApi] = useState(true);
   const [osmTilesLoaded, setOsmTilesLoaded] = useState(0);
-  const [selectorVisible, setSelectorVisible] = useState(
-    () => (typeof window !== 'undefined' ? window.innerWidth > 768 : true)
-  );
   const [trainSearch, setTrainSearch] = useState('');
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
-  const listWrapperRef = useRef<HTMLDivElement | null>(null);
-  const lenisRef = useRef<Lenis | null>(null);
   
   const service = useMemo(() => {
     if (!dataset) return null;
@@ -158,9 +152,9 @@ const App: React.FC = () => {
   const [statusKind, setStatusKind] = useState<'loading' | 'success' | 'error'>(
     'loading'
   );
-  const [canvasLoadingState, setCanvasLoadingState] = useState<'loading' | 'loaded'>('loading');
   const [journeyStops, setJourneyStops] = useState<JourneyStop[]>([]);
   const [journeyStatus, setJourneyStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [clock, setClock] = useState(() => new Date());
 
   // Load GTFS data on mount
   useEffect(() => {
@@ -179,13 +173,6 @@ const App: React.FC = () => {
         setStatusMessage('⚠ GTFS load failed, using demo data');
       });
   }, []);
-  const statusIndicatorColor =
-    statusKind === 'success'
-      ? '#22c55e'
-      : statusKind === 'error'
-      ? '#dc2626'
-      : '#fbbf24';
-  const selectorToggleLabel = selectorVisible ? 'Hide train selector' : 'Select train from list';
   const filteredTrains = useMemo(() => {
     const query = trainSearch.trim().toLowerCase();
     if (!query) {
@@ -201,6 +188,36 @@ const App: React.FC = () => {
     () => trains.find((train) => train.trainNumber === focusedTrainNumber) ?? null,
     [trains, focusedTrainNumber]
   );
+  const focusedStations = useMemo(() => {
+    if (!dataset || journeyStops.length === 0) {
+      return [] as Array<Coordinate | null>;
+    }
+    return stationPoints(journeyStops, Object.values(dataset.stops));
+  }, [dataset, journeyStops]);
+
+  const cursor = useMemo(() => {
+    if (!focusedTrain) {
+      return null;
+    }
+    return routeCursor(focusedStations, journeyStops, clock);
+  }, [focusedTrain, focusedStations, journeyStops, clock]);
+
+  const focusedPositionRef = useRef(cursor?.position ?? null);
+  focusedPositionRef.current = cursor?.position ?? null;
+
+  const shownTrains = useMemo(() => {
+    if (!focusedTrainNumber) {
+      return trains;
+    }
+    const straight = focusedStations.filter((point): point is NonNullable<typeof point> => point != null);
+    if (straight.length < 2) {
+      return trains;
+    }
+    return trains.map((train) =>
+      train.trainNumber === focusedTrainNumber ? { ...train, shapePath: straight } : train
+    );
+  }, [trains, focusedStations, focusedTrainNumber]);
+
   const selectedTrainDelayText = useMemo(() => {
     if (!focusedTrain) {
       return '';
@@ -213,85 +230,54 @@ const App: React.FC = () => {
       : 'On time';
   }, [focusedTrain]);
 
-  useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth <= 768);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  useEffect(() => {
-    if (!listWrapperRef.current) {
-      return;
-    }
-    if (lenisRef.current) {
-      lenisRef.current.destroy();
-      lenisRef.current = null;
-    }
-    if (isMobile) {
-      return;
-    }
-    const content = listWrapperRef.current.querySelector(
-      '.train-selector-panel__list'
-    ) as HTMLElement | null;
-    if (!content) {
-      return;
-    }
-    const lenis = new Lenis({
-      duration: 1,
-      easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
-      wrapper: listWrapperRef.current,
-      content,
-      smoothWheel: true,
-      smoothTouch: true,
-    });
-    lenisRef.current = lenis;
-    let animationId: number;
-    const raf = (time: number) => {
-      lenis.raf(time);
-      animationId = requestAnimationFrame(raf);
-    };
-    animationId = requestAnimationFrame(raf);
-    return () => {
-      cancelAnimationFrame(animationId);
-      lenis.destroy();
-      lenisRef.current = null;
-    };
-  }, [selectorVisible, trains, isMobile]);
-
-  // Fetch live trains once dataset is loaded
+  // Fetch live trains once dataset is loaded. A failed refresh keeps the last good list.
   useEffect(() => {
     if (!service || !dataset) return;
     service.setFetchConfig({ useLiveApi, useProxy: useLiveApi, proxyUrl: '/proxy' });
 
     let mounted = true;
+    let requestId = 0;
+    let haveTrains = false;
     const refresh = async () => {
-      try {
+      const id = ++requestId;
+      if (!haveTrains) {
         setStatusKind('loading');
-        setStatusMessage('🔄 Fetching live trains from mapa.zsr.sk...');
-        const live = await service.fetchLiveTrains();
-        if (mounted && live.length > 0) {
-          setTrains(live);
-          setStatusMessage(`${live.length} trains loaded from mapa.zsr.sk`);
-          setStatusKind('success');
-          console.log(`✓ Successfully loaded ${live.length} trains from live API:`, live.slice(0, 5).map(t => `${t.trainNumber} ${t.trainName || ''}`));
-        } else if (mounted) {
-          setStatusMessage(
-            `⚠ No trains returned (${live.length}) - check console for details`
-          );
-          setStatusKind('error');
-        }
-      } catch (error) {
-        console.warn('Realtime train fetch failed', error);
-        setStatusKind('error');
-        setStatusMessage('Realtime train fetch failed (see console)');
-      } finally {
-        if (mounted) {
-          setLoading(false);
-        }
       }
+      let lastError: unknown = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          const live = await service.fetchLiveTrains();
+          if (!mounted || id !== requestId) {
+            return;
+          }
+          if (live.length > 0) {
+            haveTrains = true;
+            setTrains(live);
+            setStatusMessage(`${live.length} trains`);
+            setStatusKind('success');
+            setLoading(false);
+            return;
+          }
+          lastError = new Error('empty train list');
+        } catch (error) {
+          lastError = error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 800 * (attempt + 1)));
+      }
+      if (!mounted || id !== requestId) {
+        return;
+      }
+      console.warn('Realtime train fetch failed', lastError);
+      setLoading(false);
+      if (haveTrains) {
+        setStatusKind('success');
+        return;
+      }
+      setStatusKind('error');
+      setStatusMessage('Train list unavailable');
     };
     refresh();
-    const interval = setInterval(refresh, 30_000);
+    const interval = setInterval(refresh, 45_000);
     return () => {
       mounted = false;
       clearInterval(interval);
@@ -328,186 +314,163 @@ const App: React.FC = () => {
           setJourneyStatus('error');
         }
       });
-    return () => controller.abort();
+    const interval = window.setInterval(() => {
+      fetch(`/proxy?mode=detail&train=${encodeURIComponent(focusedTrainNumber)}`, {
+        signal: controller.signal,
+      })
+        .then(async (response) => {
+          if (!response.ok) {
+            return;
+          }
+          const body = (await response.json()) as { stops?: JourneyStop[] };
+          if (!controller.signal.aborted && Array.isArray(body.stops) && body.stops.length > 0) {
+            setJourneyStops(body.stops);
+            setJourneyStatus('ready');
+          }
+        })
+        .catch(() => undefined);
+    }, 20_000);
+    return () => {
+      controller.abort();
+      window.clearInterval(interval);
+    };
   }, [focusedTrainNumber]);
 
-  const handleCanvasStateChange = useCallback(
-    (state: 'loading' | 'loaded') => {
-      setCanvasLoadingState(state);
-    },
-    []
-  );
+  useEffect(() => {
+    if (!focusedTrainNumber) {
+      return;
+    }
+    const timer = window.setInterval(() => setClock(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, [focusedTrainNumber]);
+
+  const handleCanvasStateChange = useCallback((_state: 'loading' | 'loaded') => {}, []);
+  const handleTrainClick = useCallback((trainNumber: string) => {
+    setFocusedTrainNumber(trainNumber || null);
+  }, []);
+  const handleOsmStatusChange = useCallback((status: { tilesLoaded: number }) => {
+    setOsmTilesLoaded(status.tilesLoaded);
+  }, []);
+  const handleToggleLiveApi = useCallback((enabled: boolean) => {
+    setUseLiveApi(enabled);
+  }, []);
 
   return (
-    <div className={`app-shell ${canvasLoadingState}`}>
-      <header className="app-header">
-        <div className="app-header__logo-wrap">
-          <img src={logoLong} alt="Railatlas" className="logo-mark" />
-        </div>
-        <div className="header-right">
-          <a href="#" className="header-info header-info--link">
-            Rail vectors: {osmTilesLoaded} tiles
-          </a>
-          <div className={`status-indicator status-${statusKind}`}>
-          <span className="status-indicator__dot" />
-          <span>{statusMessage}</span>
-        </div>
-          <button
-            className="selector-toggle-pill"
-            onClick={() => setSelectorVisible((prev) => !prev)}
-          >
-            {selectorToggleLabel}
+    <div className="shell">
+      <div className="shell__map">
+        <MapScene
+          trains={shownTrains}
+          focusedPositionRef={focusedPositionRef}
+          focusedStations={focusedStations}
+          journeyStops={journeyStops}
+          focusedTrainNumber={focusedTrainNumber}
+          onTrainClick={handleTrainClick}
+          dataset={dataset}
+          onOsmStatusChange={handleOsmStatusChange}
+          useLiveApi={useLiveApi}
+          onToggleLiveApi={handleToggleLiveApi}
+          onCanvasStateChange={handleCanvasStateChange}
+        />
+      </div>
+      <aside className="dock">
+        <header className="dock__bar">
+          <button type="button" className="dock__mark" onClick={() => setFocusedTrainNumber(null)}>
+            railatlas
           </button>
-        </div>
-      </header>
-      {loading && (
-        <div className="app-loading">
-          Loading trains... ({trains.length} loaded)
-        </div>
-      )}
-      {focusedTrain && (
-        <aside className="journey-card">
-          <div className="journey-card__kicker">
-            {focusedTrain.trainType ? `${focusedTrain.trainType} ` : ''}
-            {focusedTrain.trainNumber}
-          </div>
-          <h2 className="journey-card__title">
-            {focusedTrain.trainName || focusedTrain.summary || 'Train'}
-          </h2>
-          {focusedTrain.summary && (
-            <p className="journey-card__summary">{focusedTrain.summary}</p>
-          )}
-          <p className="journey-card__delay" style={{ color: focusedTrain.color }}>
-            {selectedTrainDelayText}
+          <p className={`dock__status is-${statusKind}`}>
+            {loading ? 'Loading trains' : statusMessage}
+            {osmTilesLoaded > 0 ? ` · ${osmTilesLoaded} tiles` : ''}
           </p>
-          <dl className="journey-card__facts">
-            {focusedTrain.currentStation && (
-              <>
-                <dt>Last report</dt>
-                <dd>{focusedTrain.currentStation}</dd>
-              </>
-            )}
-            {focusedTrain.actualTime && (
-              <>
-                <dt>Actual</dt>
-                <dd>{focusedTrain.actualTime}</dd>
-              </>
-            )}
-            {focusedTrain.plannedTime && (
-              <>
-                <dt>Scheduled</dt>
-                <dd>{focusedTrain.plannedTime}</dd>
-              </>
-            )}
-            {focusedTrain.operator && (
-              <>
-                <dt>Operator</dt>
-                <dd>{focusedTrain.operator}</dd>
-              </>
-            )}
-          </dl>
-          {focusedTrain.replacementFrom && focusedTrain.replacementTo && (
-            <p className="journey-card__note">
-              Replacement bus {focusedTrain.replacementFrom} – {focusedTrain.replacementTo}
+        </header>
+        {focusedTrain ? (
+          <div className="dock__train">
+            <button type="button" className="dock__back" onClick={() => setFocusedTrainNumber(null)}>
+              All trains
+            </button>
+            <p className="dock__kicker">
+              {focusedTrain.trainType ? `${focusedTrain.trainType} ` : ''}
+              {focusedTrain.trainNumber}
             </p>
-          )}
-          {focusedTrain.note && <p className="journey-card__note">{focusedTrain.note}</p>}
-          <div className="journey-card__legend">
-            <span><i style={{ background: '#12A5F4' }} /> already run</span>
-            <span><i style={{ background: '#22c55e' }} /> still ahead</span>
+            <h1 className="dock__title">{focusedTrain.trainName || focusedTrain.summary || 'Train'}</h1>
+            <p className="dock__delay">{selectedTrainDelayText}</p>
+            <dl className="dock__facts">
+              {focusedTrain.operator && (
+                <>
+                  <dt>Operator</dt>
+                  <dd>{focusedTrain.operator}</dd>
+                </>
+              )}
+              {focusedTrain.currentStation && (
+                <>
+                  <dt>Last report</dt>
+                  <dd>{focusedTrain.currentStation}</dd>
+                </>
+              )}
+              {focusedTrain.plannedTime && (
+                <>
+                  <dt>Scheduled</dt>
+                  <dd>{focusedTrain.plannedTime}</dd>
+                </>
+              )}
+            </dl>
+            {focusedTrain.note && <p className="dock__note">{focusedTrain.note}</p>}
+            <ol className="dock__stops">
+              {journeyStatus === 'loading' && <li className="is-muted">Loading stations</li>}
+              {journeyStatus === 'error' && <li className="is-muted">Station list unavailable</li>}
+              {journeyStops.map((stop, index) => {
+                const state =
+                  cursor && journeyStatus === 'ready'
+                    ? index < cursor.stopIndex
+                      ? 'passed'
+                      : index === cursor.stopIndex
+                        ? 'current'
+                        : 'ahead'
+                    : stop.state;
+                return (
+                  <li key={`${stop.name}-${index}`} className={`is-${state}`}>
+                    <span>{stop.name}</span>
+                    <time>{stop.departure || stop.arrival || stop.scheduledDeparture || stop.scheduledArrival || '—'}</time>
+                  </li>
+                );
+              })}
+            </ol>
           </div>
-          <ol className="journey-card__stops">
-            {journeyStatus === 'loading' && <li className="is-muted">Loading the station list…</li>}
-            {journeyStatus === 'error' && (
-              <li className="is-muted">The station list is not available right now.</li>
-            )}
-            {journeyStops.map((stop, index) => (
-              <li key={`${stop.name}-${index}`} className={`is-${stop.state}`}>
-                <span className="journey-card__stop-name">{stop.name}</span>
-                <span className="journey-card__stop-time">
-                  {stop.arrival || stop.departure || '—'}
-                  {(stop.scheduledArrival || stop.scheduledDeparture) && (
-                    <small>
-                      {' '}
-                      ({stop.scheduledArrival || '—'}
-                      {stop.scheduledDeparture && stop.scheduledDeparture !== stop.scheduledArrival
-                        ? `–${stop.scheduledDeparture}`
-                        : ''}
-                      )
-                    </small>
-                  )}
-                </span>
-              </li>
-            ))}
-          </ol>
-        </aside>
-      )}
-      <div className="app-body">
-        <div
-          className={`train-selector-panel ${
-            selectorVisible ? 'train-selector-panel--visible' : 'train-selector-panel--hidden'
-          } ${isMobile ? 'train-selector-panel--mobile' : ''}`}
-        >
-          <div className="train-selector-panel__handle" />
-          <div className="train-selector-panel__inner">
-            <label className="train-selector-panel__label">Select Train to Focus:</label>
+        ) : (
+          <div className="dock__index">
             <input
               type="search"
               value={trainSearch}
               onChange={(event) => setTrainSearch(event.target.value)}
-              className="train-selector-panel__search"
-              placeholder="Search type, number, name…"
+              className="dock__search"
+              placeholder="Number or name"
+              aria-label="Search trains"
             />
-            <div className="train-selector-panel__list" ref={listWrapperRef}>
-              {filteredTrains.map((train) => {
-                const isActive = focusedTrainNumber === train.trainNumber;
-                const delayText =
-                  train.delayMinutes > 0
-                    ? `${train.delayMinutes} min delay`
-                    : 'On time';
-                return (
-                  <button
-                    key={train.trainNumber}
-                    className={`train-selector-panel__train ${isActive ? 'is-active' : ''}`}
-                    onClick={() => {
-                      setFocusedTrainNumber(train.trainNumber);
-                      if (isMobile) {
-                        setSelectorVisible(false);
-                      }
-                    }}
-                  >
-                    <span
-                      className="train-selector-panel__dot"
-                      style={{ background: getDelayColor(train.delayMinutes) }}
-                    />
-                    <div>
-                      <div className="train-selector-panel__title">
-                        {train.trainType ? `${train.trainType} ` : ''}
-                        {train.trainNumber}
-                        {train.trainName ? ` - ${train.trainName}` : ''}
-                      </div>
-                      <div className="train-selector-panel__delay">
-                        {train.delayText || delayText}
-                        {train.summary ? ` · ${train.summary}` : ''}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
+            <div className="dock__list">
+              {filteredTrains.map((train, index) => (
+                <button
+                  key={train.trainNumber}
+                  type="button"
+                  className="dock__row"
+                  onClick={() => setFocusedTrainNumber(train.trainNumber)}
+                >
+                  <span className="dock__index-no">{String(index + 1).padStart(2, '0')}</span>
+                  <span className="dock__row-main">
+                    <span className="dock__row-title">
+                      {train.trainType ? `${train.trainType} ` : ''}
+                      {train.trainNumber}
+                      {train.trainName ? ` ${train.trainName}` : ''}
+                    </span>
+                    <span className="dock__row-sub">{train.summary || train.delayText || 'On time'}</span>
+                  </span>
+                  <span className="dock__row-delay" style={{ color: getDelayColor(train.delayMinutes) }}>
+                    {train.delayMinutes > 0 ? `${train.delayMinutes} min` : 'On time'}
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
-        </div>
-        <MapScene
-          trains={trains}
-          focusedTrainNumber={focusedTrainNumber}
-          onTrainClick={(trainNumber) => setFocusedTrainNumber(trainNumber || null)}
-          dataset={dataset}
-          onOsmStatusChange={(status) => setOsmTilesLoaded(status.tilesLoaded)}
-          useLiveApi={useLiveApi}
-          onToggleLiveApi={(enabled) => setUseLiveApi(enabled)}
-          onCanvasStateChange={handleCanvasStateChange}
-        />
-      </div>
+        )}
+      </aside>
     </div>
   );
 };

@@ -1,8 +1,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { parseTrainDetail } from './trainDetail.mjs';
+import { simplifyOsmPayload } from './simplifyRail.mjs';
+import {
+  fetchMaptilerRails,
+  fetchMaptilerRailsDisplay,
+  RAIL_SHAPE_VERSION,
+  simplifyStraights,
+  stitchRailNetwork,
+} from './maptilerRails.mjs';
+import { closeRailHoles, repairCachedRailTiles } from './closeRailHoles.mjs';
+import { fetchMaptilerLandcover, fetchMaptilerWater, WATER_ZOOM } from './maptilerWater.mjs';
+import { fetchBasemapTile, prefetchBasemap } from './maptilerBasemap.mjs';
+import { packRails } from './packRails.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -16,7 +29,11 @@ const config = {
   osmEndpoint: process.env.OSM_ENDPOINT ?? 'https://overpass-api.de/api/interpreter',
   osmTimeout: Number(process.env.OSM_TIMEOUT ?? 60),
   osmCacheDir: process.env.OSM_CACHE_DIR ?? path.join(__dirname, 'osm-cache'),
-  osmCacheDuration: Number(process.env.OSM_CACHE_DURATION ?? 604800),
+  osmCacheDuration: Number(process.env.OSM_CACHE_DURATION ?? 30 * 24 * 60 * 60),
+  maptilerKey: process.env.MAPTILER_KEY ?? '',
+  maptilerZoom: Number(process.env.MAPTILER_ZOOM ?? 13),
+  maptilerDisplayZoom: Number(process.env.MAPTILER_DISPLAY_ZOOM ?? 14),
+  geopsKey: process.env.GEOPS_MAPS_KEY ?? '',
 };
 
 const port = Number(process.env.PROXY_PORT ?? 3001);
@@ -48,6 +65,7 @@ const MIME_TYPES = {
 function logMessage(message) {
   const line = `[${new Date().toISOString()}] ${message}\n`;
   fs.appendFileSync(config.logFile, line);
+  console.log(message);
 }
 
 function readJson(filePath, fallback) {
@@ -67,13 +85,120 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value));
 }
 
-function sendJson(res, statusCode, payload, meta) {
-  const body = meta ? { ...payload, __proxy_meta: meta } : payload;
+const NETWORK_PACK_NAME = 'network_v2.rnet.gz';
+const NETWORK_STRAIGHT_METERS = 25;
+const NETWORK_CURVE_METERS = 8;
+const SLOVAKIA_NETWORK_BOUNDS = {
+  minLat: 47.7311798,
+  maxLat: 49.6138162,
+  minLng: 16.8331891,
+  maxLng: 22.5657103,
+};
+let networkPackBuild = null;
+
+function acceptsGzip(res) {
+  const accept = res.req?.headers?.['accept-encoding'] ?? '';
+  return String(accept).includes('gzip');
+}
+
+function sendCompressed(res, statusCode, buffer, contentType, extraHeaders = {}) {
+  const payload = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  const canGzip = acceptsGzip(res) && payload.length > 256;
+  const compressed = canGzip ? zlib.gzipSync(payload, { level: 6 }) : payload;
+  const useGzip = canGzip && compressed.length < payload.length;
+  const body = useGzip ? compressed : payload;
   res.writeHead(statusCode, {
-    'Content-Type': 'application/json',
+    'Content-Type': contentType,
     'Access-Control-Allow-Origin': '*',
+    ...(useGzip ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}),
+    ...extraHeaders,
   });
-  res.end(JSON.stringify(body));
+  res.end(body);
+}
+
+function sendJson(res, statusCode, payload, meta) {
+  const body = JSON.stringify(meta ? { ...payload, __proxy_meta: meta } : payload);
+  sendCompressed(res, statusCode, body, 'application/json; charset=utf-8');
+}
+
+function collectCoarseWays() {
+  const byId = new Map();
+  if (!fs.existsSync(config.osmCacheDir)) {
+    return [];
+  }
+  const files = fs.readdirSync(config.osmCacheDir).filter(
+    (file) => file.startsWith('coarse_') && file.endsWith('.json')
+  );
+  files.forEach((file) => {
+    const payload = storedTile(path.join(config.osmCacheDir, file));
+    if (!payload) {
+      return;
+    }
+    payload.elements.forEach((way) => {
+      const geometry = way?.geometry || [];
+      if (geometry.length < 2) {
+        return;
+      }
+      const existing = byId.get(way.id);
+      if (!existing || geometry.length > (existing.geometry || []).length) {
+        byId.set(way.id, way);
+      }
+    });
+  });
+  return Array.from(byId.values());
+}
+
+function sealNetwork(ways) {
+  const stitched = stitchRailNetwork(ways);
+  return closeRailHoles(stitched, { skipEdges: false });
+}
+
+async function buildNetworkPack() {
+  fs.mkdirSync(config.osmCacheDir, { recursive: true });
+  let ways = collectCoarseWays();
+  if (ways.length === 0 && config.maptilerKey) {
+    const maptiler = await fetchMaptilerRails(
+      SLOVAKIA_NETWORK_BOUNDS,
+      config.osmCacheDir,
+      config.maptilerKey,
+      config.maptilerZoom
+    );
+    ways = maptiler.elements ?? [];
+  }
+  const sealed = sealNetwork(ways);
+  const shaped = simplifyStraights(sealed.elements, {
+    straightMeters: NETWORK_STRAIGHT_METERS,
+    curveMeters: NETWORK_CURVE_METERS,
+  });
+  const resealed = sealNetwork(shaped.elements);
+  const packed = packRails(resealed.elements);
+  const gzipped = zlib.gzipSync(Buffer.from(packed.buffer, packed.byteOffset, packed.byteLength), {
+    level: 9,
+  });
+  const packPath = path.join(config.osmCacheDir, NETWORK_PACK_NAME);
+  fs.writeFileSync(packPath, gzipped);
+  logMessage(
+    `Packed simplified network: ${resealed.elements.length} ways, ${shaped.before} points to ${shaped.after}, holes ${resealed.found} found / ${resealed.closed} closed / ${resealed.remaining} left, ${gzipped.length} gzip bytes`
+  );
+  return { packPath, gzipped, wayCount: resealed.elements.length, pointsAfter: shaped.after };
+}
+
+function networkPackPath() {
+  return path.join(config.osmCacheDir, NETWORK_PACK_NAME);
+}
+
+async function ensureNetworkPack() {
+  const packPath = networkPackPath();
+  if (fs.existsSync(packPath) && fs.statSync(packPath).size > 16) {
+    return packPath;
+  }
+  if (!networkPackBuild) {
+    networkPackBuild = buildNetworkPack().finally(() => {
+      networkPackBuild = null;
+    });
+  }
+  const built = await networkPackBuild;
+  return built.packPath;
 }
 
 function parseCookies(headers) {
@@ -190,16 +315,93 @@ async function handleGtall(reqUrl, res) {
   });
 }
 
+function storedTile(cacheFile) {
+  const payload = readJson(cacheFile, {});
+  if (
+    payload?.source === 'maptiler' &&
+    payload.shapeVersion === RAIL_SHAPE_VERSION &&
+    payload.collapsed === true &&
+    payload.seamRepaired === true &&
+    Array.isArray(payload.elements)
+  ) {
+    return payload;
+  }
+  return null;
+}
+
 function buildOsmTileKey(level, bounds) {
   const format = (value) => String(Number(value).toFixed(5)).replace(/-/g, 'm');
   const safeLevel = level.toLowerCase().replace(/[^a-z0-9_-]/g, '');
   return `${safeLevel}_${format(bounds.minLat)}_${format(bounds.minLng)}_${format(bounds.maxLat)}_${format(bounds.maxLng)}`;
 }
 
-async function fetchOsmFromOverpass(bounds, tileKey) {
+const pendingOsm = new Map();
+const OVERPASS_STATE_FILE = path.join(config.osmCacheDir, '_overpass_state.json');
+
+function overpassStatePath() {
+  fs.mkdirSync(config.osmCacheDir, { recursive: true });
+  return OVERPASS_STATE_FILE;
+}
+
+function overpassBlockedUntil() {
+  const state = readJson(overpassStatePath(), {});
+  return Number(state.blockedUntil) || 0;
+}
+
+function overpassAllowed() {
+  return Date.now() >= overpassBlockedUntil();
+}
+
+function blockOverpass(status) {
+  const waitMs = status === 429 ? 60 * 60 * 1000 : 15 * 60 * 1000;
+  const blockedUntil = Date.now() + waitMs;
+  writeJson(overpassStatePath(), { blockedUntil, status, at: Date.now() });
+  logMessage(`Overpass paused for ${Math.round(waitMs / 60000)} min after HTTP ${status}`);
+}
+
+function isUsableDisplayCache(cached) {
+  if (!cached || !Array.isArray(cached.elements)) {
+    return false;
+  }
+  if (cached.source === 'overpass-display') {
+    return true;
+  }
+  return (
+    cached.source === 'maptiler-display' &&
+    Number(cached.maptilerZoom) >= config.maptilerDisplayZoom
+  );
+}
+
+function writeDisplayCache(cacheFile, payload) {
+  fs.writeFileSync(cacheFile, JSON.stringify(payload));
+}
+
+function withOsmLock(key, run) {
+  const existing = pendingOsm.get(key);
+  if (existing) {
+    return existing;
+  }
+  const pending = Promise.resolve()
+    .then(run)
+    .finally(() => {
+      pendingOsm.delete(key);
+    });
+  pendingOsm.set(key, pending);
+  return pending;
+}
+
+async function fetchOsmFromOverpass(bounds, tileKey, includeService = false) {
+  if (!overpassAllowed()) {
+    const waitMin = Math.ceil((overpassBlockedUntil() - Date.now()) / 60000);
+    logMessage(`Skipping Overpass (${tileKey}): cooling down ${waitMin} min`);
+    return null;
+  }
+  const extraFilters = includeService
+    ? ''
+    : '["service"!~"^(spur|siding|yard|crossover|driveway)$"]["usage"!~"^(industrial|military|test|tourism)$"]';
   const query = `[out:json][timeout:${config.osmTimeout}];
 (
-  way["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail|funicular)$"](${bounds.minLat},${bounds.minLng},${bounds.maxLat},${bounds.maxLng});
+  way["railway"~"^(rail|light_rail|subway|tram|narrow_gauge|monorail|funicular)$"]${extraFilters}(${bounds.minLat},${bounds.minLng},${bounds.maxLat},${bounds.maxLng});
 );
 out geom;`;
 
@@ -217,6 +419,9 @@ out geom;`;
     const result = await response.text();
     if (!response.ok || !result) {
       logMessage(`Overpass fetch failed (${tileKey}): HTTP ${response.status}`);
+      if (response.status === 429 || response.status === 502 || response.status === 504) {
+        blockOverpass(response.status);
+      }
       return null;
     }
 
@@ -225,11 +430,39 @@ out geom;`;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logMessage(`Overpass fetch failed (${tileKey}): ${message}`);
+    if (/429|502|504/.test(message)) {
+      blockOverpass(502);
+    }
     return null;
   }
 }
 
 async function handleOsm(reqUrl, res) {
+  const level = reqUrl.searchParams.get('level') ?? 'tile';
+  fs.mkdirSync(config.osmCacheDir, { recursive: true });
+
+  if (level === 'network') {
+    try {
+      const packPath = await ensureNetworkPack();
+      const gzipped = fs.readFileSync(packPath);
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Encoding': 'gzip',
+        'Vary': 'Accept-Encoding',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=86400',
+      });
+      res.end(gzipped);
+      logMessage(`Serving packed simplified network ${gzipped.length} bytes`);
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logMessage(`Network pack failed: ${message}`);
+      sendJson(res, 502, { error: message, elements: [] });
+      return;
+    }
+  }
+
   const minLat = Number(reqUrl.searchParams.get('minLat'));
   const maxLat = Number(reqUrl.searchParams.get('maxLat'));
   const minLng = Number(reqUrl.searchParams.get('minLng'));
@@ -241,11 +474,64 @@ async function handleOsm(reqUrl, res) {
   }
 
   const bounds = { minLat, maxLat, minLng, maxLng };
-  const level = reqUrl.searchParams.get('level') ?? 'tile';
-  fs.mkdirSync(config.osmCacheDir, { recursive: true });
+
+  if (level === 'display') {
+    const tileKey = buildOsmTileKey('display', bounds);
+    const cacheFile = path.join(config.osmCacheDir, `${tileKey}.json`);
+    const cached = readJson(cacheFile, null);
+    if (isUsableDisplayCache(cached)) {
+      logMessage(`Serving cached display rails ${tileKey} (${cached.source})`);
+      sendJson(res, 200, cached, { tileKey, status: 'cached' });
+      return;
+    }
+    try {
+      const display = await withOsmLock(tileKey, async () => {
+        const latest = readJson(cacheFile, null);
+        if (isUsableDisplayCache(latest)) {
+          return latest;
+        }
+        if (!config.maptilerKey) {
+          const empty = {
+            elements: [],
+            source: 'maptiler-display',
+            maptilerZoom: config.maptilerDisplayZoom,
+            collapsed: false,
+          };
+          writeDisplayCache(cacheFile, empty);
+          return empty;
+        }
+        const maptiler = await fetchMaptilerRailsDisplay(
+          bounds,
+          config.osmCacheDir,
+          config.maptilerKey,
+          config.maptilerDisplayZoom
+        );
+        const payload = {
+          ...maptiler,
+          source: 'maptiler-display',
+          collapsed: false,
+          simplified: false,
+        };
+        writeDisplayCache(cacheFile, payload);
+        return payload;
+      });
+      logMessage(
+        `Fetched display rails ${tileKey}: ${display.elements?.length ?? 0} ways (${display.source})`
+      );
+      sendJson(res, 200, display, { tileKey, status: 'display' });
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logMessage(`Display rail fetch failed (${tileKey}): ${message}`);
+      sendJson(res, 502, { error: message, elements: [] });
+      return;
+    }
+  }
 
   if (reqUrl.searchParams.has('purge')) {
-    const files = fs.readdirSync(config.osmCacheDir).filter((file) => file.endsWith('.json'));
+    const files = fs.readdirSync(config.osmCacheDir).filter(
+      (file) => file.endsWith('.json') || file.endsWith('.rnet.gz')
+    );
     for (const file of files) {
       fs.unlinkSync(path.join(config.osmCacheDir, file));
     }
@@ -265,20 +551,60 @@ async function handleOsm(reqUrl, res) {
     !forceRefresh && cachedAge !== null && cachedAge <= config.osmCacheDuration;
 
   if (shouldUseCache) {
-    const payload = readJson(cacheFile, {});
-    logMessage(`Serving cached osm tile ${tileKey}, age ${cachedAge}s`);
-    sendJson(res, 200, payload, {
-      tileKey,
-      cacheAge: cachedAge,
-      status: 'cached',
-    });
-    return;
+    const payload = storedTile(cacheFile);
+    if (payload) {
+      logMessage(`Serving cached osm tile ${tileKey}, age ${cachedAge}s`);
+      sendJson(res, 200, payload, {
+        tileKey,
+        cacheAge: cachedAge,
+        status: 'cached',
+      });
+      return;
+    }
+    logMessage(`Rebuilding osm tile ${tileKey} for rail shape ${RAIL_SHAPE_VERSION}`);
   }
 
-  const payload = await fetchOsmFromOverpass(bounds, tileKey);
-  if (payload) {
+  if (config.maptilerKey) {
+    try {
+      const maptiler = await fetchMaptilerRails(
+        bounds,
+        config.osmCacheDir,
+        config.maptilerKey,
+        config.maptilerZoom
+      );
+      if (maptiler) {
+        if (maptiler.complete) {
+          fs.writeFileSync(cacheFile, JSON.stringify(maptiler));
+          const holes = repairCachedRailTiles(config.osmCacheDir);
+          logMessage(
+            `Closed rail holes across ${holes.tiles} tiles: found ${holes.found}, closed ${holes.closed}, ${holes.remaining} termini left`
+          );
+        }
+        logMessage(
+          `Fetched osm tile ${tileKey} from MapTiler z${maptiler.maptilerZoom}, ${maptiler.collapsedFrom} lines to ${maptiler.collapsedTo}, ${maptiler.pointsBefore} points to ${maptiler.pointsAfter}, ${maptiler.maptilerTiles} tiles, missing ${maptiler.missingTiles ?? 0}`
+        );
+        const served = maptiler.complete ? storedTile(cacheFile) ?? maptiler : maptiler;
+        sendJson(res, 200, served, {
+          tileKey,
+          cacheAge: 0,
+          status: maptiler.complete ? 'maptiler' : 'partial',
+        });
+        return;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logMessage(`MapTiler fetch failed (${tileKey}): ${message}`);
+    }
+  }
+
+  const fetched = await fetchOsmFromOverpass(bounds, tileKey);
+  if (fetched) {
+    const payload = simplifyOsmPayload(fetched);
     fs.writeFileSync(cacheFile, JSON.stringify(payload));
-    logMessage(`Fetched osm tile ${tileKey} from Overpass`);
+    const points = payload.simplifiedPoints;
+    logMessage(
+      `Fetched osm tile ${tileKey} from Overpass, simplified ${points?.before ?? 0} points to ${points?.after ?? 0}`
+    );
     sendJson(res, 200, payload, {
       tileKey,
       cacheAge: 0,
@@ -288,7 +614,7 @@ async function handleOsm(reqUrl, res) {
   }
 
   if (cachedAge !== null) {
-    const stalePayload = readJson(cacheFile, {});
+    const stalePayload = storedTile(cacheFile);
     logMessage(`Returning stale osm tile ${tileKey} after fetch failure`);
     sendJson(res, 200, stalePayload, {
       tileKey,
@@ -299,6 +625,68 @@ async function handleOsm(reqUrl, res) {
   }
 
   sendJson(res, 502, { error: 'Failed to fetch osm tile', tileKey });
+}
+
+async function handleWater(res) {
+  fs.mkdirSync(config.osmCacheDir, { recursive: true });
+  if (!config.maptilerKey) {
+    sendJson(res, 503, { error: 'MAPTILER_KEY missing', polygons: [] });
+    return;
+  }
+  try {
+    const payload = await fetchMaptilerWater(config.osmCacheDir, config.maptilerKey, WATER_ZOOM);
+    logMessage(
+      `Serving water z${payload.zoom}: ${payload.polygons?.length ?? 0} polygons from ${payload.tiles} tiles, missing ${payload.missing ?? 0}`
+    );
+    sendJson(res, 200, payload, { status: 'water', zoom: payload.zoom });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logMessage(`Water fetch failed: ${message}`);
+    sendJson(res, 502, { error: message, polygons: [] });
+  }
+}
+
+async function handleBasemap(reqUrl, res) {
+  fs.mkdirSync(config.osmCacheDir, { recursive: true });
+  const zoom = Number(reqUrl.searchParams.get('z'));
+  const tileX = Number(reqUrl.searchParams.get('x'));
+  const tileY = Number(reqUrl.searchParams.get('y'));
+  const buffer = await fetchBasemapTile(config.osmCacheDir, config.geopsKey, zoom, tileX, tileY);
+  if (!buffer) {
+    res.writeHead(404, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify({ error: 'Basemap tile missing', zoom, tileX, tileY }));
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': 'image/png',
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'public, max-age=31536000, immutable',
+  });
+  res.end(buffer);
+}
+
+async function handleLandcover(res) {
+  fs.mkdirSync(config.osmCacheDir, { recursive: true });
+  if (!config.maptilerKey) {
+    sendJson(res, 503, { error: 'MAPTILER_KEY missing', polygons: [] });
+    return;
+  }
+  try {
+    const payload = await fetchMaptilerLandcover(config.osmCacheDir, config.maptilerKey, WATER_ZOOM);
+    const forests = payload.polygons?.filter((polygon) => polygon.kind === 'forest').length ?? 0;
+    const urban = payload.polygons?.filter((polygon) => polygon.kind === 'urban').length ?? 0;
+    logMessage(
+      `Serving landcover z${payload.zoom}: ${forests} forest / ${urban} urban from ${payload.tiles} tiles, missing ${payload.missing ?? 0}`
+    );
+    sendJson(res, 200, payload, { status: 'landcover', zoom: payload.zoom });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logMessage(`Landcover fetch failed: ${message}`);
+    sendJson(res, 502, { error: message, polygons: [] });
+  }
 }
 
 function readTrainState() {
@@ -438,6 +826,18 @@ const server = http.createServer(async (req, res) => {
       await handleOsm(reqUrl, res);
       return;
     }
+    if (mode === 'water') {
+      await handleWater(res);
+      return;
+    }
+    if (mode === 'landcover') {
+      await handleLandcover(res);
+      return;
+    }
+    if (mode === 'basemap') {
+      await handleBasemap(reqUrl, res);
+      return;
+    }
     if (mode === 'detail') {
       await handleDetail(reqUrl, res);
       return;
@@ -456,4 +856,12 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, '0.0.0.0', () => {
   fs.mkdirSync(config.osmCacheDir, { recursive: true });
   console.log(`3D Railmap proxy listening on http://0.0.0.0:${port}`);
+  prefetchBasemap(config.osmCacheDir, config.geopsKey)
+    .then((result) => {
+      logMessage(`Prefetched ${result.tiles} basemap tiles`);
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logMessage(`Basemap prefetch failed: ${message}`);
+    });
 });

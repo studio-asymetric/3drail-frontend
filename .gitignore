@@ -5,7 +5,7 @@ dist
 proxy/cache.json
 proxy/proxy.log
 proxy/osm-cache
-data
+/data
 temp_dem
 tmp
 *.log
@@ -13,3 +13,5 @@ tmp
 *.tif
 *.pptx
 .DS_Store
+.env
+.env.*

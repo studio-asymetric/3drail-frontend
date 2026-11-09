@@ -104,7 +104,7 @@ PHP proxy (`php -S ... index.php`) still works for local use but is no longer re
 | `/proxy` returns 404 HTML | nginx serving static files only | Use `deploy/nginx.conf`, not default nginx config |
 | `/proxy` returns 502 | proxy container down or wrong hostname | Check `docker compose ps`; nginx must reach `http://proxy:3001` |
 | Live trains empty | mapa.zsr.sk cookies/upstream issue | Check proxy logs at `/app/proxy.log` in proxy container |
-| OSM tiles slow first load | Cold cache, fetching from Overpass | Normal; tiles cache for 7 days in proxy volume |
+| OSM tiles slow first load | Cold cache, fetching from Overpass | Normal; simplified tiles cache for 30 days in the proxy volume |
 
 ## Files
 
