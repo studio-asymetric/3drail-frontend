@@ -1149,9 +1149,9 @@ const App: React.FC = () => {
                   const segmentColor = isFutureStop
                     ? null
                     : isPassedStop
-                      ? carriedColor
+                      ? delayColor ?? 'var(--dock-rail-on-time)'
                       : isNext
-                        ? carriedColor ?? accent
+                        ? delayColor ?? carriedColor ?? accent
                         : null;
                   const times = (
                     <span className="dock__stop-times">

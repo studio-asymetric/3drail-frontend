@@ -986,6 +986,7 @@ body,
   --enter-dur: 280ms;
   --dock-width: 383px;
   --dock-rail-future: #5f5f5f;
+  --dock-rail-on-time: #ffffff;
   --chrome-inset: 19px;
   --dock-stack-gap: 8px;
   --chrome-control-height: 47px;
@@ -1004,6 +1005,7 @@ body,
   --ui-hover: #ebebeb;
   --ui-press: #d4d4d4;
   --dock-rail-future: #757575;
+  --dock-rail-on-time: #111111;
 }
 
 .shell__map {
