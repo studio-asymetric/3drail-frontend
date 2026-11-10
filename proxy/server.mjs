@@ -327,6 +327,9 @@ function warmupNetworkPack() {
   });
 }
 
+const ZSR_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+
 function parseCookies(headers) {
   const setCookies = headers.getSetCookie?.() ?? [];
   const cookies = setCookies
@@ -335,15 +338,38 @@ function parseCookies(headers) {
   return cookies.length > 0 ? cookies.join('; ') : null;
 }
 
+function isTokenErrorPayload(data) {
+  if (data === 'tokenError') {
+    return true;
+  }
+  if (typeof data === 'string' && data.trim().toLowerCase() === 'tokenerror') {
+    return true;
+  }
+  return false;
+}
+
+function parseGtallPayload(result) {
+  const data = JSON.parse(result);
+  if (isTokenErrorPayload(data)) {
+    const error = new Error('tokenError');
+    error.tokenError = true;
+    throw error;
+  }
+  if (!Array.isArray(data)) {
+    throw new Error('gtall response is not an array');
+  }
+  return data;
+}
+
 async function performHandshake(state) {
   const response = await fetch('https://mapa.zsr.sk/index.aspx', {
-    method: 'HEAD',
+    method: 'GET',
     headers: {
-      Accept: 'text/html',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      Accept: 'text/html,application/xhtml+xml',
+      'User-Agent': ZSR_USER_AGENT,
     },
-    redirect: 'manual',
   });
+  await response.arrayBuffer();
 
   const cookie = parseCookies(response.headers);
   if (!cookie) {
@@ -351,10 +377,36 @@ async function performHandshake(state) {
     return false;
   }
 
-  state.cookies = cookie;
+  state.cookies = cookie.includes('MapaZsr_TechnicalCookieName')
+    ? cookie
+    : `MapaZsr_TechnicalCookieName=1; ${cookie}`;
   state.cookieUpdated = Math.floor(Date.now() / 1000);
   logMessage('Handshake succeeded, cookies refreshed');
   return true;
+}
+
+async function fetchGtallUpstream(cookie) {
+  const postFields = new URLSearchParams({
+    action: config.action,
+    args: config.args,
+  });
+  const response = await fetch(config.endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      Origin: 'https://mapa.zsr.sk',
+      Referer: 'https://mapa.zsr.sk/index.aspx',
+      'User-Agent': ZSR_USER_AGENT,
+      'X-Requested-With': 'XMLHttpRequest',
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+    body: postFields.toString(),
+  });
+  const result = await response.text();
+  if (!response.ok || !result) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  return parseGtallPayload(result);
 }
 
 async function handleGtall(reqUrl, res) {
@@ -372,60 +424,50 @@ async function handleGtall(reqUrl, res) {
   };
 
   state.lastPing = now;
+  if (isTokenErrorPayload(state.data) || (state.data != null && !Array.isArray(state.data))) {
+    state.data = [];
+    state.cookies = null;
+    state.cookieUpdated = 0;
+    state.status = 'idle';
+  }
   const force = reqUrl.searchParams.has('refresh');
   const handshakeNeeded = !state.cookies || now - (state.cookieUpdated ?? 0) >= 1800;
   const shouldFetch = force || now - (state.lastFetch ?? 0) >= 30;
 
   if (shouldFetch) {
-    if (handshakeNeeded) {
-      const handshakeOk = await performHandshake(state);
-      if (!handshakeOk) {
-        sendJson(res, 200, {
-          source: 'proxy',
-          status: state.status,
-          lastFetch: state.lastFetch,
-          error: state.error,
-          cookies: Boolean(state.cookies),
-          data: state.data ?? [],
-        });
-        return;
-      }
-    }
-
-    const cookie = state.cookies || config.cookies;
-    const postFields = new URLSearchParams({
-      action: config.action,
-      args: config.args,
-    });
-
     try {
-      const response = await fetch(config.endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          Origin: 'https://mapa.zsr.sk',
-          Referer: 'https://mapa.zsr.sk/index.aspx',
-          ...(cookie ? { Cookie: cookie } : {}),
-        },
-        body: postFields.toString(),
-      });
-
-      const result = await response.text();
-      if (!response.ok || !result) {
-        state.status = 'error';
-        state.error = `HTTP ${response.status}`;
-        logMessage(`Fetch failed: ${state.error}`);
-      } else {
-        state.data = JSON.parse(result);
-        state.lastFetch = now;
-        state.status = 'fresh';
-        state.error = null;
-        state.raw = result;
-        logMessage(`Fetched gtall at ${now}, {httpCode:${response.status}}`);
+      if (handshakeNeeded || !state.cookies) {
+        const handshakeOk = await performHandshake(state);
+        if (!handshakeOk) {
+          throw new Error('Handshake produced no cookies');
+        }
       }
+      try {
+        state.data = await fetchGtallUpstream(state.cookies || config.cookies);
+      } catch (error) {
+        if (!error?.tokenError) {
+          throw error;
+        }
+        logMessage('gtall tokenError, repeating handshake');
+        state.cookies = null;
+        state.cookieUpdated = 0;
+        const handshakeOk = await performHandshake(state);
+        if (!handshakeOk) {
+          throw new Error('Handshake produced no cookies');
+        }
+        state.data = await fetchGtallUpstream(state.cookies || config.cookies);
+      }
+      state.lastFetch = now;
+      state.status = 'fresh';
+      state.error = null;
+      state.raw = null;
+      logMessage(`Fetched gtall at ${now}, ${state.data.length} trains`);
     } catch (error) {
       state.status = 'error';
       state.error = error instanceof Error ? error.message : String(error);
+      if (!Array.isArray(state.data)) {
+        state.data = [];
+      }
       logMessage(`Fetch failed: ${state.error}`);
     }
   }
@@ -989,6 +1031,8 @@ async function handleDetail(reqUrl, res) {
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
         Origin: 'https://mapa.zsr.sk',
         Referer: 'https://mapa.zsr.sk/index.aspx',
+        'User-Agent': ZSR_USER_AGENT,
+        'X-Requested-With': 'XMLHttpRequest',
         Cookie: cookie,
       },
       body: new URLSearchParams({ cisloVlaku: train }).toString(),

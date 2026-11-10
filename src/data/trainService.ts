@@ -395,9 +395,13 @@ export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainR
       trains = parsedResponse;
     } else if (parsedResponse && Array.isArray(parsedResponse.result)) {
       trains = parsedResponse.result;
-    } else if (parsedResponse && parsedResponse.data && Array.isArray(parsedResponse.data)) {
+    } else if (parsedResponse && Array.isArray(parsedResponse.data)) {
       trains = parsedResponse.data;
     } else {
+      const payload = parsedResponse?.data ?? parsedResponse;
+      if (payload === 'tokenError') {
+        throw new Error('ZSR session token expired');
+      }
       console.error('Unexpected response format:', parsedResponse);
       throw new Error(`Response is not an array. Got: ${JSON.stringify(parsedResponse).substring(0, 200)}`);
   }
