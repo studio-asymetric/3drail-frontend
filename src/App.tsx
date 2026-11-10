@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapScene } from './components/MapScene';
 import { DockScroller } from './components/DockScroller';
+import { DockPanelControls } from './components/DockPanelControls';
 import { AboutPanel } from './components/AboutPanel';
 import {
   TrainService,
@@ -137,7 +138,7 @@ function indexByStationName(stops: JourneyStop[], name?: string): number {
   });
 }
 
-function coordFromDataset(name: string, dataset: GtfsDataset | null): Coordinate | null {
+function gtfsStopForName(name: string, dataset: GtfsDataset | null) {
   if (!dataset) {
     return null;
   }
@@ -148,10 +149,29 @@ function coordFromDataset(name: string, dataset: GtfsDataset | null): Coordinate
   for (const stop of Object.values(dataset.stops)) {
     const folded = foldName(stop.name);
     if (folded === key || folded.startsWith(key) || key.startsWith(folded)) {
-      return { lat: stop.lat, lng: stop.lng };
+      return stop;
     }
   }
   return null;
+}
+
+function coordFromDataset(name: string, dataset: GtfsDataset | null): Coordinate | null {
+  const stop = gtfsStopForName(name, dataset);
+  return stop ? { lat: stop.lat, lng: stop.lng } : null;
+}
+
+function stationFromDataset(name: string, dataset: GtfsDataset | null): FocusedStation | null {
+  const stop = gtfsStopForName(name, dataset);
+  if (!stop) {
+    return null;
+  }
+  const label = stop.name.trim();
+  return {
+    id: stop.stopId,
+    name: label || name,
+    lat: stop.lat,
+    lng: stop.lng,
+  };
 }
 
 function stopTimesView(stop: JourneyStop): {
@@ -666,6 +686,21 @@ const App: React.FC = () => {
     },
     [centerMapOn]
   );
+  const handleDockStopActivate = useCallback(
+    (index: number) => {
+      const stop = journeyStops[index];
+      if (!stop) {
+        return;
+      }
+      const station = stationFromDataset(stop.name, dataset);
+      if (station) {
+        handleStationClick(station);
+        return;
+      }
+      centerOnDockStop(index);
+    },
+    [centerOnDockStop, dataset, handleStationClick, journeyStops]
+  );
   const handleClearFocus = useCallback(() => {
     setDockLeaving((leaving) => leaving || Boolean(focusedTrainNumber || focusedStation || aboutOpen));
     setFocusedTrainNumber(null);
@@ -673,6 +708,14 @@ const App: React.FC = () => {
     setFollowing(false);
     setAboutOpen(false);
   }, [focusedTrainNumber, focusedStation, aboutOpen]);
+  const handleDockBack = useCallback(() => {
+    if (historyIndexRef.current > 0) {
+      window.history.back();
+      return;
+    }
+    applyingUrlRef.current = true;
+    handleClearFocus();
+  }, [handleClearFocus]);
   const handleAboutBack = useCallback(() => {
     if (historyIndexRef.current > 0) {
       window.history.back();
@@ -1208,6 +1251,12 @@ const App: React.FC = () => {
       >
         {displayTrain ? (
           <div className="dock__body">
+            <DockPanelControls
+              backLabel={t.back}
+              closeLabel={t.dockCloseAria}
+              onBack={handleDockBack}
+              onClose={handleClearFocus}
+            />
             <div className="dock__head">
               <p className="dock__identity">
                 <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
@@ -1228,13 +1277,6 @@ const App: React.FC = () => {
               </p>
               <div className="dock__meta">
                 <p className="dock__delay">{displayDelayText}</p>
-                <button
-                  type="button"
-                  className={`dock__follow ${following ? 'is-active' : ''}`}
-                  onClick={() => setFollowing((value) => !value)}
-                >
-                  {following ? t.following : t.follow}
-                </button>
               </div>
             </div>
             <dl className="dock__facts">
@@ -1298,6 +1340,8 @@ const App: React.FC = () => {
                     </span>
                   );
                   const point = focusedStations[index] ?? coordFromDataset(stop.name, dataset);
+                  const stationMatch = stationFromDataset(stop.name, dataset);
+                  const stopInteractive = Boolean(stationMatch || point);
                   return (
                     <li
                       key={`${stop.name}-${index}`}
@@ -1305,6 +1349,7 @@ const App: React.FC = () => {
                         isTrailStop ? 'is-trail' : 'is-ahead',
                         isUpcomingLeg ? 'is-upcoming-leg' : '',
                         isLiveSegment ? 'is-live-segment' : '',
+                        stopInteractive ? 'is-interactive' : '',
                       ]
                         .filter(Boolean)
                         .join(' ')}
@@ -1315,18 +1360,21 @@ const App: React.FC = () => {
                         } as React.CSSProperties
                       }
                     >
-                      {point || isTrailStop ? (
+                      {stopInteractive ? (
                         <button
                           type="button"
-                          className="dock__stop-name"
-                          onClick={() => centerOnDockStop(index)}
+                          className="dock__stop-row"
+                          onClick={() => handleDockStopActivate(index)}
                         >
                           <span className="dock__stop-label">{stop.name}</span>
+                          {times}
                         </button>
                       ) : (
-                        <span className="dock__stop-label is-plain">{stop.name}</span>
+                        <>
+                          <span className="dock__stop-label is-plain">{stop.name}</span>
+                          {times}
+                        </>
                       )}
-                      {times}
                     </li>
                   );
                 })}
@@ -1335,6 +1383,12 @@ const App: React.FC = () => {
           </div>
         ) : displayStation ? (
           <div className="dock__body">
+            <DockPanelControls
+              backLabel={t.back}
+              closeLabel={t.dockCloseAria}
+              onBack={handleDockBack}
+              onClose={handleClearFocus}
+            />
             <div className="dock__head">
               <p className="dock__identity">
                 <span className="dock__pill is-station">{t.station}</span>
