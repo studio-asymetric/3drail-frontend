@@ -226,9 +226,9 @@ function railLineWidthExprs(
       ['linear'],
       ['zoom'],
       6,
-      fill * 0.35,
+      Math.max(1.35, fill * 0.85),
       8,
-      fill * 0.65,
+      Math.max(1.6, fill * 1.05),
       11,
       fill,
       14,
@@ -239,9 +239,9 @@ function railLineWidthExprs(
       ['linear'],
       ['zoom'],
       6,
-      casing * 0.35,
+      Math.max(2.4, casing * 0.7),
       8,
-      casing * 0.65,
+      Math.max(2.8, casing * 0.9),
       11,
       casing,
       14,
@@ -672,6 +672,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       dasharray?: number[];
       color?: string;
       maxzoom?: number;
+      minzoom?: number;
     } = {}
   ) => {
     const { fill: fillWidth, casing: casingWidth } = railLineWidthExprs(fill, casing);
@@ -683,11 +684,12 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     const dash = options.dasharray ? { 'line-dasharray': options.dasharray } : {};
     const fillOpacity: number | ExpressionSpecification =
       typeof opacity === 'number' ? opacity * 0.98 : opacity;
+    const minzoom = options.minzoom ?? 6;
     upsertLineLayer({
       id: `${prefix}-casing`,
       type: 'line',
       source,
-      minzoom: 8.6,
+      minzoom,
       ...(options.maxzoom ? { maxzoom: options.maxzoom } : {}),
       layout,
       ...(filter ? { filter } : {}),
@@ -702,6 +704,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       id: `${prefix}-fill`,
       type: 'line',
       source,
+      minzoom,
       ...(options.maxzoom ? { maxzoom: options.maxzoom } : {}),
       layout,
       ...(filter ? { filter } : {}),
@@ -1253,7 +1256,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         return;
       }
       const clipped = clipWaysToOutline(ways, svgOutlinePolygons);
-      const stitched = closeRailGaps(clipped);
+      const stitched = closeRailGaps(clipped.length > 0 ? clipped : ways);
       const filtered = classifyDisplayRails(stitched);
       osmWaysRef.current = new Map();
       simplifiedWaysRef.current = filtered;
@@ -1273,6 +1276,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       });
       const map = mapRef.current;
       if (mapReadyRef.current && map) {
+        if (!map.getSource('rails-simplified-main')) {
+          addRailLayers(map, themeRef.current);
+        }
         publishSimplifiedRails(map, filtered);
       }
     };
