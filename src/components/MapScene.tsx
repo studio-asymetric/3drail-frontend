@@ -411,6 +411,14 @@ const FALLBACK_STYLE: StyleSpecification = {
   ],
 };
 
+/** Keep the basemap north-up: no bearing, pitch, or roll from pointer or keyboard. */
+function lockMapNorthUp(map: MapLibreMap) {
+  map.dragRotate.disable();
+  map.touchPitch.disable();
+  map.touchZoomRotate.disableRotation();
+  map.keyboard.disableRotation();
+}
+
 const STATION_HIT_LAYERS = [
   'stations-halo',
   'stations-casing',
@@ -1309,6 +1317,13 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       zoom: 7,
       minZoom: 6,
       maxZoom: 16,
+      bearing: 0,
+      pitch: 0,
+      roll: 0,
+      minPitch: 0,
+      maxPitch: 0,
+      dragRotate: false,
+      touchPitch: false,
       maxBounds: [
         [SLOVAKIA_BOUNDS.minLng - MAP_VIEW_BOUNDS_PAD.lng, SLOVAKIA_BOUNDS.minLat - MAP_VIEW_BOUNDS_PAD.lat],
         [SLOVAKIA_BOUNDS.maxLng + MAP_VIEW_BOUNDS_PAD.lng, SLOVAKIA_BOUNDS.maxLat + MAP_VIEW_BOUNDS_PAD.lat],
@@ -1319,6 +1334,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       maxTileCacheZoomLevels: 8,
     });
     mapRef.current = map;
+    lockMapNorthUp(map);
     const hydrateOverlay = () => {
       try {
         emphasizeRelief(map, themeRef.current);
