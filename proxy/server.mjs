@@ -13,8 +13,11 @@ import {
 } from './maptilerRails.mjs';
 import { closeRailHoles, repairCachedRailTiles } from './closeRailHoles.mjs';
 import { fetchMaptilerLandcover, fetchMaptilerWater, WATER_ZOOM } from './maptilerWater.mjs';
-import { fetchBasemapTile } from './maptilerBasemap.mjs';
-import { fetchGeopsAsset, fetchGeopsStyle } from './geopsStyle.mjs';
+import {
+  fetchMaptilerAsset,
+  maptilerPathFromRequest,
+  railatlasStyle,
+} from './maptilerStyle.mjs';
 import { packRails } from './packRails.mjs';
 import { fetchStationBoard } from './cpStationBoard.mjs';
 import { ensureRailwayTunnels, mergeTunnelWays } from './osmTunnels.mjs';
@@ -35,9 +38,6 @@ const config = {
   maptilerKey: process.env.MAPTILER_KEY ?? '',
   maptilerZoom: Number(process.env.MAPTILER_ZOOM ?? 13),
   maptilerDisplayZoom: Number(process.env.MAPTILER_DISPLAY_ZOOM ?? 14),
-  geopsKey:
-    process.env.GEOPS_MAPS_KEY ??
-    '5cc87b12d7c5370001c1d655352830d2fef24680ae3a1cda54418cb8',
 };
 
 const port = Number(process.env.PROXY_PORT ?? 3001);
@@ -817,85 +817,23 @@ async function handleWater(res) {
 }
 
 async function handleStyle(reqUrl, res) {
-  if (!config.geopsKey) {
-    sendJson(res, 503, { error: 'GEOPS_MAPS_KEY missing' });
-    return;
-  }
-  const theme = reqUrl.searchParams.get('theme') === 'light' ? 'light' : 'dark';
-  try {
-    const style = await fetchGeopsStyle(config.geopsKey, config.osmCacheDir, theme);
-    sendJson(res, 200, style);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logMessage(`geOps ${theme} style failed: ${message}`);
-    sendJson(res, 502, { error: message });
-  }
+  const theme = reqUrl.searchParams.get('theme') === 'dark' ? 'dark' : 'light';
+  sendJson(res, 200, railatlasStyle(theme));
 }
 
-function geopsPathFromRequest(reqUrl) {
-  const fromQuery = reqUrl.searchParams.get('u');
-  if (fromQuery) {
-    return fromQuery;
-  }
-  const pathname = reqUrl.pathname;
-  for (const prefix of ['/proxy/geops', '/geops']) {
-    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) {
-      return pathname.slice(prefix.length) || '/';
-    }
-  }
-  return null;
-}
-
-async function handleGeops(reqUrl, res) {
-  const pathname = geopsPathFromRequest(reqUrl);
-  const asset = await fetchGeopsAsset(config.osmCacheDir, config.geopsKey, pathname);
+async function handleMaptiler(reqUrl, res) {
+  const pathname = maptilerPathFromRequest(reqUrl);
+  const asset = await fetchMaptilerAsset(config.osmCacheDir, config.maptilerKey, pathname);
   if (!asset) {
-    sendJson(res, 404, { error: 'geOps asset missing' });
+    sendJson(res, 404, { error: 'MapTiler asset missing' });
     return;
   }
-  if (asset.json) {
-    sendJson(res, 200, asset.json);
-    return;
-  }
-  const type = pathname.endsWith('.pbf')
-    ? 'application/x-protobuf'
-    : pathname.endsWith('.png')
-      ? 'image/png'
-      : pathname.endsWith('.jpg') || pathname.endsWith('.jpeg')
-        ? 'image/jpeg'
-        : pathname.endsWith('.webp')
-          ? 'image/webp'
-          : pathname.endsWith('.json')
-            ? 'application/json; charset=utf-8'
-            : 'application/octet-stream';
   res.writeHead(200, {
-    'Content-Type': type,
+    'Content-Type': asset.contentType,
     'Access-Control-Allow-Origin': '*',
-    'Cache-Control': 'public, max-age=31536000, immutable',
+    'Cache-Control': 'public, max-age=86400',
   });
   res.end(asset.buffer);
-}
-
-async function handleBasemap(reqUrl, res) {
-  fs.mkdirSync(config.osmCacheDir, { recursive: true });
-  const zoom = Number(reqUrl.searchParams.get('z'));
-  const tileX = Number(reqUrl.searchParams.get('x'));
-  const tileY = Number(reqUrl.searchParams.get('y'));
-  const buffer = await fetchBasemapTile(config.osmCacheDir, config.geopsKey, zoom, tileX, tileY);
-  if (!buffer) {
-    res.writeHead(404, {
-      'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*',
-    });
-    res.end(JSON.stringify({ error: 'Basemap tile missing', zoom, tileX, tileY }));
-    return;
-  }
-  res.writeHead(200, {
-    'Content-Type': 'image/png',
-    'Access-Control-Allow-Origin': '*',
-    'Cache-Control': 'public, max-age=31536000, immutable',
-  });
-  res.end(buffer);
 }
 
 async function handleLandcover(res) {
@@ -1100,12 +1038,8 @@ const server = http.createServer(async (req, res) => {
       await handleStyle(reqUrl, res);
       return;
     }
-    if (mode === 'geops' || geopsPathFromRequest(reqUrl)) {
-      await handleGeops(reqUrl, res);
-      return;
-    }
-    if (mode === 'basemap') {
-      await handleBasemap(reqUrl, res);
+    if (maptilerPathFromRequest(reqUrl)) {
+      await handleMaptiler(reqUrl, res);
       return;
     }
     if (mode === 'detail') {
@@ -1130,20 +1064,4 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, '0.0.0.0', () => {
   fs.mkdirSync(config.osmCacheDir, { recursive: true });
   console.log(`3D Railmap proxy listening on http://0.0.0.0:${port}`);
-  fetchGeopsStyle(config.geopsKey, config.osmCacheDir, 'dark')
-    .then(() => {
-      logMessage('Cached geOps dark style');
-    })
-    .catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      logMessage(`geOps dark style prefetch failed: ${message}`);
-    });
-  fetchGeopsStyle(config.geopsKey, config.osmCacheDir, 'light')
-    .then(() => {
-      logMessage('Cached geOps light style');
-    })
-    .catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      logMessage(`geOps light style prefetch failed: ${message}`);
-    });
 });

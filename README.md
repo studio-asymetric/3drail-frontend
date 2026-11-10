@@ -2,7 +2,7 @@
 
 Live positions, delays, and station-by-station journeys for trains on the Slovak network, drawn on a 3D map.
 
-The curved rail lines are OpenStreetMap railway geometry. That is the same vector data the geographic base map on [mapa.zsr.sk](https://mapa.zsr.sk) styles (MapTiler style “ZSR”, layer `transportation`, classes `rail` and `transit`). This site requests those ways from OpenStreetMap and draws them as strokes, so it does not use the MapTiler key or the raster tiles from that site.
+The curved rail lines are OpenStreetMap railway geometry (ODbL). The muted basemap is a Railatlas MapLibre style on OpenFreeMap (OSM / OpenMapTiles) plus public Mapzen terrain tiles — not SBB/geOps Trafimage.
 
 Train positions and the journey list come from the public `gtall` and `TrainDetail` calls that mapa.zsr.sk already makes in the browser. That feed is not open data and is not relicensed here.
 
@@ -12,7 +12,7 @@ The website source is under the MIT License. See `LICENSE`.
 
 The bundled Geist typeface stays under the SIL Open Font License 1.1, with reserved font name “Geist”. The full text is in `src/fonts/OFL.txt`.
 
-Railway geometry is © OpenStreetMap contributors, available under the Open Database License.
+Railway geometry is © OpenStreetMap contributors, available under the Open Database License. The geographic basemap is © OpenFreeMap © OpenMapTiles © OpenStreetMap contributors, with terrain from AWS/Mapzen tiles.
 
 ## Develop
 
@@ -37,9 +37,9 @@ Mount a persistent volume at `/data` so the train cache and the railway-vector c
 | `OSM_CACHE_DIR` | `/data/osm-cache` |
 | `PROXY_CACHE_FILE` | `/data/cache.json` |
 | `PROXY_LOG_FILE` | `/data/proxy.log` |
-| `MAPTILER_KEY` | key for the same vector tiles as the geographic map on mapa.zsr.sk |
+| `MAPTILER_KEY` | MapTiler Cloud key for rail-vector extraction (not required for the basemap) |
 
-Set `MAPTILER_KEY` in Coolify. Without it the railway tiles fall back to Overpass. After the first visit the tiles are kept for 30 days.
+Set `MAPTILER_KEY` in Coolify so railway geometry can be built from MapTiler extracts. The basemap itself uses OpenFreeMap and does not need that key. After the first visit the tiles are kept on disk.
 
 Check:
 

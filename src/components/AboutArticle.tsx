@@ -4,23 +4,31 @@ import type { AppLocale } from '../i18n';
 const AboutArticleEn = () => (
   <article className="about__copy">
     <p>
-      Live trains on the Slovak network, drawn on a 3D MapLibre map. Positions, delays, and
-      station-by-station journeys sit on OpenStreetMap railway geometry, with a Trafimage-style base
-      map underneath.
+      <strong>railatlas</strong> shows live trains on the Slovak network on a tilted MapLibre map.
+      Positions, delays, and stop-by-stop journeys sit on OpenStreetMap railway geometry. The
+      background is a custom Railatlas style on OpenFreeMap (OpenMapTiles / OSM) with subdued
+      hillshade from public Mapzen / AWS terrain tiles — no SBB or geOps basemap.
     </p>
     <p>
-      This site was coded with AI, in Cursor, with a person directing the product, the map, and the
-      UI. Nothing here is pretending otherwise.
+      Made by{' '}
+      <a href="https://asymetric.studio" target="_blank" rel="noreferrer">
+        Studio Asymetric
+      </a>
+      . Built with AI assistance in Cursor; a person shaped the product, map, and UI.
     </p>
     <h3>What you are looking at</h3>
     <p>
-      The pills on the map are live trains. Click one for the journey list, planned vs actual times,
-      and the next stop. Click a station for a cp.sk departure or arrival board. Search finds trains
-      and stations. Light mode is the default; dark mode is available in the map tools.
+      Coloured pills are live trains. Open one for the journey list, planned vs actual times, and
+      the next stop. Stations open a cp.sk departure or arrival board. The centre search field
+      finds trains and stations. Top-right tools: zoom, this about panel (info icon), light / dark
+      theme, and SK / EN language. The railatlas mark in the header opens the same about view.
     </p>
     <p>
-      Pathfinding walks a simplified rail graph so a train can sit on the tracks. Fine geometry is
-      only drawn when you zoom in. Double track is collapsed on that graph on purpose.
+      Pathfinding uses a simplified rail graph so trains snap to tracks. Detailed track geometry
+      appears when you zoom in. Double track is merged on that graph on purpose.
+    </p>
+    <p>
+      Map attribution (OpenStreetMap, OpenFreeMap, terrain) stays in the corner of the map canvas.
     </p>
     <h3>Stack</h3>
     <ul>
@@ -36,23 +44,30 @@ const AboutArticleEn = () => (
 const AboutArticleSk = () => (
   <article className="about__copy">
     <p>
-      Živé vlaky na slovenskej sieti v 3D mape MapLibre. Polohy, meškania a priebeh trasy podľa
-      zastávok ležia na koľajniciach z OpenStreetMap, podklad je v štýle Trafimage.
+      <strong>railatlas</strong> zobrazuje živé vlaky na slovenskej sieti na naklonenej mape
+      MapLibre. Polohy, meškania a trasa po zastávkach ležia na koľajniciach z OpenStreetMap.
+      Podklad je vlastný štýl Railatlas na OpenFreeMap (OpenMapTiles / OSM) s tlmeným reliéfom z
+      verejných dlaždíc Mapzen / AWS — bez podkladu SBB ani geOps.
     </p>
     <p>
-      Stránku programoval AI v Cursori pod vedením človeka — produkt, mapa aj rozhranie. Nič to
-      neskrýva.
+      Autor:{' '}
+      <a href="https://asymetric.studio" target="_blank" rel="noreferrer">
+        Studio Asymetric
+      </a>
+      . Vývoj s pomocou AI v Cursori; produkt, mapu a UI riadil človek.
     </p>
     <h3>Čo vidíte</h3>
     <p>
-      Značky na mape sú živé vlaky. Klik otvorí zoznam zastávok, plánované a skutočné časy a ďalšiu
-      zastávku. Stanica ukáže odchody alebo príchody z cp.sk. Vyhľadávanie nájde vlaky aj stanice.
-      Svetlý režim je predvolený, tmavý je v ovládacích prvkoch mapy.
+      Farebné značky sú živé vlaky. Klik otvorí zoznam zastávok, plánované a skutočné časy a ďalšiu
+      zastávku. Stanica ukáže odchody alebo príchody z cp.sk. Stredové vyhľadávanie nájde vlaky aj
+      stanice. Vpravo hore: priblíženie, tento panel (ikona info), svetlý / tmavý režim a SK / EN.
+      Logo railatlas v hlavičke otvorí rovnaký text O aplikácii.
     </p>
     <p>
       Pathfinding ide po zjednodušenej grafe, aby vlak sedel na koľajniciach. Detailná geometria sa
       kreslí až po priblížení. Dvojkoľajný úsek je v grafe zámerne zjednotený.
     </p>
+    <p>Atribúcia mapy (OSM, OpenFreeMap, terén) zostáva v rohu mapy.</p>
     <h3>Technológie</h3>
     <ul>
       <li>Vite 7, React 19, MapLibre GL 6</li>
@@ -75,9 +90,11 @@ function AboutApiEn() {
           mapa.zsr.sk
         </a>{' '}
         already makes in the browser, after a cookie handshake. Station boards come from cp.sk.
-        Rails are OSM ways, usually via MapTiler vector tiles when <code>MAPTILER_KEY</code> is set.
-        The basemap is geOps Trafimage (SBB Netzkarte), rewritten so tiles go through this proxy.
-        Railway geometry stays © OpenStreetMap contributors (ODbL).
+        The basemap is OpenFreeMap (OpenMapTiles / OSM) plus Mapzen / AWS terrain, proxied and
+        cached here. Rails for pathfinding and some overlays still use MapTiler vector extracts when{' '}
+        <code>MAPTILER_KEY</code> is set. Railway geometry is © OpenStreetMap contributors (ODbL).
+        Do not scrape train feeds for redistribution; this app only mirrors what the operators&apos;
+        public maps already show.
       </p>
       <h3>Local proxy</h3>
       <p>
@@ -96,8 +113,9 @@ function AboutApiEn() {
       </p>
       <h3>License</h3>
       <p>
-        Site source is MIT. Geist is SIL OFL. Rails are OSM. Train and timetable feeds stay with their
-        operators; this app only mirrors what their public maps already show.
+        Site source is MIT (see repository). Geist is SIL OFL. Basemap © OpenStreetMap via
+        OpenFreeMap; terrain © Mapzen / AWS. Train and timetable data remain with ŽSR, cp.sk, and
+        other operators.
       </p>
     </>
   );
@@ -113,9 +131,10 @@ function AboutApiSk() {
         <a href="https://mapa.zsr.sk" target="_blank" rel="noreferrer">
           mapa.zsr.sk
         </a>{' '}
-        po cookie handshake. Tabule staníc sú z cp.sk. Koľajnice sú z OSM, často cez MapTiler pri{' '}
-        <code>MAPTILER_KEY</code>. Podkladová mapa je geOps Trafimage, dlaždice idú cez proxy.
-        Geometria koľajníc © OpenStreetMap (ODbL).
+        po cookie handshake. Tabule staníc sú z cp.sk. Podklad OpenFreeMap (OSM) a terén cez proxy.
+        Koľajnice pre pathfinding cez MapTiler pri <code>MAPTILER_KEY</code>. Geometria koľajníc ©
+        OpenStreetMap (ODbL). Vlakové feedy nepretŕľajte ďalej — aplikácia len zobrazuje to, čo už
+        ukazujú verejné mapy prevádzkovateľov.
       </p>
       <h3>Lokálny proxy</h3>
       <p>
@@ -133,8 +152,8 @@ function AboutApiSk() {
       </p>
       <h3>Licencia</h3>
       <p>
-        Zdroják MIT. Geist SIL OFL. Koľajnice OSM. Vlakové dáta patria prevádzkovateľom; aplikácia len
-        zobrazuje to, čo už ukazujú ich verejné mapy.
+        Zdroják MIT (repozitár). Geist SIL OFL. Podklad © OSM cez OpenFreeMap, terén © Mapzen / AWS.
+        Vlakové a cestovné údaje zostávajú u ŽSR, cp.sk a ďalších prevádzkovateľov.
       </p>
     </>
   );
@@ -180,9 +199,11 @@ function AboutMapApiDd({ locale }: { locale: AppLocale }) {
   if (locale === 'sk') {
     return (
       <dl className="about__api">
-        <ApiEntry path="GET /proxy?mode=style&theme=dark" text="MapLibre štýl geOps Trafimage." />
-        <ApiEntry path="GET /proxy/geops/{path}" text="Proxy geOps dlaždice a assety štýlu." />
-        <ApiEntry path="GET /proxy?mode=basemap" text="PNG podkladová dlaždica." />
+        <ApiEntry
+          path="GET /proxy?mode=style&theme=light|dark"
+          text="Vlastný MapLibre štýl Railatlas (OpenFreeMap, tlmený reliéf)."
+        />
+        <ApiEntry path="GET /proxy/maptiler/{path}" text="Proxy OpenFreeMap dlaždice, fonty a terén." />
         <ApiEntry path="GET /proxy?mode=osm&level=network" text="Zjednodušená sieť pre pathfinding." />
         <ApiEntry path="GET /proxy?mode=osm&level=display" text="Detailné koľajnice v bbox." />
       </dl>
@@ -190,9 +211,11 @@ function AboutMapApiDd({ locale }: { locale: AppLocale }) {
   }
   return (
     <dl className="about__api">
-      <ApiEntry path="GET /proxy?mode=style&theme=dark" text="MapLibre style JSON from geOps Trafimage." />
-      <ApiEntry path="GET /proxy/geops/{path}" text="Proxied geOps tiles and style assets." />
-      <ApiEntry path="GET /proxy?mode=basemap" text="PNG basemap tile via server geOps key." />
+      <ApiEntry
+        path="GET /proxy?mode=style&theme=light|dark"
+        text="Custom MapLibre Railatlas style (OpenFreeMap, subdued terrain)."
+      />
+      <ApiEntry path="GET /proxy/maptiler/{path}" text="Proxied OpenFreeMap tiles, fonts, and terrain." />
       <ApiEntry path="GET /proxy?mode=osm&level=network" text="Simplified rail graph for pathfinding." />
       <ApiEntry path="GET /proxy?mode=osm&level=display" text="Detailed railway ways in a bounding box." />
     </dl>

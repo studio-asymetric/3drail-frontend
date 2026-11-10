@@ -31,5 +31,7 @@ Copyright 2023 Vercel, in collaboration with basement.studio
 Map and train data
 
 Railway lines are OpenStreetMap data and stay under the Open Database License.
+The geographic basemap is OpenFreeMap / OpenMapTiles (© OpenStreetMap
+contributors) plus public Mapzen terrain tiles and is not relicensed here.
 Live train positions and journey lists are fetched from mapa.zsr.sk at
 runtime. They are not part of this license.

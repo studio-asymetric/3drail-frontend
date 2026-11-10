@@ -129,6 +129,23 @@ function indexByStationName(stops: JourneyStop[], name?: string): number {
   });
 }
 
+function coordFromDataset(name: string, dataset: GtfsDataset | null): Coordinate | null {
+  if (!dataset) {
+    return null;
+  }
+  const key = foldName(name);
+  if (!key) {
+    return null;
+  }
+  for (const stop of Object.values(dataset.stops)) {
+    const folded = foldName(stop.name);
+    if (folded === key || folded.startsWith(key) || key.startsWith(folded)) {
+      return { lat: stop.lat, lng: stop.lng };
+    }
+  }
+  return null;
+}
+
 function stopTimesView(stop: JourneyStop): {
   planned: string;
   actual: string | null;
@@ -342,6 +359,24 @@ const App: React.FC = () => {
     return routeCursor(focusedStations, journeyStops, clock, delayMinutes);
   }, [focusedTrain, focusedStations, journeyStops, clock]);
 
+  const currentStopIndex = useMemo(() => {
+    if (!focusedTrain || journeyStops.length === 0) {
+      return -1;
+    }
+    const fromReport = indexByStationName(journeyStops, focusedTrain.currentStation);
+    if (fromReport >= 0) {
+      return fromReport;
+    }
+    const fromState = journeyStops.findIndex((stop) => stop.state === 'current');
+    if (fromState >= 0) {
+      return fromState;
+    }
+    if (cursor && cursor.stopIndex >= 0) {
+      return cursor.stopIndex;
+    }
+    return -1;
+  }, [cursor, focusedTrain, journeyStops]);
+
   const selectedTrainDelayText = useMemo(() => {
     if (!focusedTrain) {
       return '';
@@ -511,20 +546,76 @@ const App: React.FC = () => {
       setDockLeaving(false);
     }
   }, []);
-  const handleTrainClick = useCallback((trainNumber: string) => {
-    setAboutOpen(false);
-    setFocusedStation(null);
-    setFocusedTrainNumber(trainNumber || null);
-    setDockLeaving(false);
+  const centerMapOn = useCallback((lng: number, lat: number, minZoom = 10) => {
+    mapViewRef.current?.centerOn(lng, lat, { minZoom });
   }, []);
-  const handleStationClick = useCallback((station: FocusedStation) => {
-    setAboutOpen(false);
-    setFocusedTrainNumber(null);
-    setFollowing(false);
-    setStationTab('departures');
-    setFocusedStation(station);
-    setDockLeaving(false);
-  }, []);
+  const centerOnDockStop = useCallback(
+    (index: number) => {
+      const stop = journeyStops[index];
+      if (!stop) {
+        return;
+      }
+      const nextIndex = journeyNextIndex(journeyStops, focusedTrain ?? null, cursor?.stopIndex ?? null);
+      const enRouteToNext =
+        index === nextIndex &&
+        cursor != null &&
+        cursor.fraction > 0.02 &&
+        cursor.fraction < 0.98;
+      const isTrainHere =
+        index === currentStopIndex ||
+        enRouteToNext ||
+        stop.state === 'current' ||
+        (focusedTrain?.currentStation &&
+          foldName(focusedTrain.currentStation) === foldName(stop.name));
+      if (isTrainHere && focusedTrain) {
+        const live = cursor?.position ?? focusedTrain.position;
+        if (live && Number.isFinite(live.lat) && Number.isFinite(live.lng)) {
+          centerMapOn(live.lng, live.lat, 11);
+          return;
+        }
+      }
+      const point = focusedStations[index] ?? coordFromDataset(stop.name, dataset);
+      if (point) {
+        centerMapOn(point.lng, point.lat, 11);
+      }
+    },
+    [centerMapOn, cursor, currentStopIndex, dataset, focusedStations, focusedTrain, journeyStops]
+  );
+  const centerOnTrainPosition = useCallback(() => {
+    if (!focusedTrain) {
+      return;
+    }
+    const live = cursor?.position ?? focusedTrain.position;
+    if (live && Number.isFinite(live.lat) && Number.isFinite(live.lng)) {
+      centerMapOn(live.lng, live.lat, 11);
+    }
+  }, [centerMapOn, cursor, focusedTrain]);
+  const handleTrainClick = useCallback(
+    (trainNumber: string) => {
+      setAboutOpen(false);
+      setFocusedStation(null);
+      setFocusedTrainNumber(trainNumber || null);
+      setDockLeaving(false);
+      const train = trains.find((item) => item.trainNumber === trainNumber);
+      const position = train?.position;
+      if (position) {
+        centerMapOn(position.lng, position.lat, 10);
+      }
+    },
+    [centerMapOn, trains]
+  );
+  const handleStationClick = useCallback(
+    (station: FocusedStation) => {
+      setAboutOpen(false);
+      setFocusedTrainNumber(null);
+      setFollowing(false);
+      setStationTab('departures');
+      setFocusedStation(station);
+      setDockLeaving(false);
+      centerMapOn(station.lng, station.lat, 11);
+    },
+    [centerMapOn]
+  );
   const handleClearFocus = useCallback(() => {
     setDockLeaving((leaving) => leaving || Boolean(focusedTrainNumber || focusedStation || aboutOpen));
     setFocusedTrainNumber(null);
@@ -541,7 +632,7 @@ const App: React.FC = () => {
     setAboutOpen(false);
     setDockLeaving((leaving) => leaving || Boolean(!focusedTrainNumber && !focusedStation));
   }, [focusedStation, focusedTrainNumber]);
-  const handleBrandClick = useCallback(() => {
+  const handleAboutToggle = useCallback(() => {
     if (aboutOpen) {
       handleAboutBack();
       return;
@@ -764,6 +855,7 @@ const App: React.FC = () => {
           onStationClick={handleStationClick}
           onBackgroundClick={handleClearFocus}
           focusedStationId={focusedStation?.id ?? null}
+          focusedStation={focusedStation}
           dataset={dataset}
           onOsmStatusChange={handleOsmStatusChange}
           onCanvasStateChange={handleCanvasStateChange}
@@ -780,7 +872,7 @@ const App: React.FC = () => {
             className="chrome__brand-mark"
             aria-pressed={aboutOpen}
             aria-label={t.aboutRailatlas}
-            onClick={handleBrandClick}
+            onClick={handleAboutToggle}
           >
             <img src={theme === 'light' ? logoMarkLight : logoMarkDark} alt="" width={17} height={20} />
             <span>railatlas</span>
@@ -905,6 +997,24 @@ const App: React.FC = () => {
           </button>
           <button
             type="button"
+            className={`chrome__tool chrome__tool--info${aboutOpen ? ' is-active' : ''}`}
+            aria-pressed={aboutOpen}
+            aria-label={t.aboutRailatlas}
+            title={t.aboutRailatlas}
+            onClick={handleAboutToggle}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.35" />
+              <path
+                d="M8 7.1v4.2M8 5.4h.01"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+          <button
+            type="button"
             className="chrome__tool chrome__theme"
             aria-label={theme === 'dark' ? t.themeToLight : t.themeToDark}
             title={theme === 'dark' ? t.themeLight : t.themeDark}
@@ -1003,7 +1113,19 @@ const App: React.FC = () => {
               {displayTrain.currentStation && (
                 <div>
                   <dt>{t.lastPosition}</dt>
-                  <dd>{displayTrain.currentStation}</dd>
+                  <dd>
+                    {focusedTrain ? (
+                      <button
+                        type="button"
+                        className="dock__fact-link"
+                        onClick={centerOnTrainPosition}
+                      >
+                        {displayTrain.currentStation}
+                      </button>
+                    ) : (
+                      displayTrain.currentStation
+                    )}
+                  </dd>
                 </div>
               )}
             </dl>
@@ -1043,12 +1165,13 @@ const App: React.FC = () => {
                       )}
                     </span>
                   );
-                  const point = focusedStations[index];
+                  const point = focusedStations[index] ?? coordFromDataset(stop.name, dataset);
+                  const isCurrentStop = index === currentStopIndex || stop.state === 'current';
                   return (
                     <li
                       key={`${stop.name}-${index}`}
                       className={[
-                        isNext ? 'is-next' : 'is-ahead',
+                        isCurrentStop ? 'is-current' : isNext ? 'is-next' : 'is-ahead',
                         isFutureStop ? 'is-future' : '',
                       ]
                         .filter(Boolean)
@@ -1062,18 +1185,11 @@ const App: React.FC = () => {
                         } as React.CSSProperties
                       }
                     >
-                      {point ? (
+                      {point || isCurrentStop ? (
                         <button
                           type="button"
                           className="dock__stop-name"
-                          onClick={() =>
-                            handleStationClick({
-                              id: `stop:${stop.name}`,
-                              name: stop.name,
-                              lat: point.lat,
-                              lng: point.lng,
-                            })
-                          }
+                          onClick={() => centerOnDockStop(index)}
                         >
                           <span className="dock__stop-label">{stop.name}</span>
                         </button>

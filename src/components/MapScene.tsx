@@ -76,10 +76,13 @@ const SLOVAKIA_BOUNDS = {
   minLng: 16.8331891,
   maxLng: 22.5657103,
 };
+/** Extra pan room beyond Slovakia (degrees). */
+const MAP_VIEW_BOUNDS_PAD = { lng: 1.5, lat: 1.1 };
 const CENTER_LAT = (SLOVAKIA_BOUNDS.minLat + SLOVAKIA_BOUNDS.maxLat) / 2;
 const CENTER_LNG = (SLOVAKIA_BOUNDS.minLng + SLOVAKIA_BOUNDS.maxLng) / 2;
 const RAIL_FILL_COLOR = '#f4f7fb';
-const RAIL_SIDE_FILL_COLOR = '#6a7179';
+const RAIL_MAIN_FILL_COLOR = '#b5bcc5';
+const RAIL_SIDE_FILL_COLOR = '#939aa3';
 const RAIL_CASING_COLOR = '#0b0d10';
 export type MapTheme = 'dark' | 'light';
 
@@ -87,13 +90,15 @@ export type MapViewControls = {
   zoomIn: () => void;
   zoomOut: () => void;
   resetToSlovakia: () => void;
+  centerOn: (lng: number, lat: number, options?: { minZoom?: number }) => void;
 };
 
 function railPalette(theme: MapTheme) {
   if (theme === 'light') {
     return {
       fill: '#1a1a1a',
-      side: '#6a6a6a',
+      main: '#0c0c0c',
+      side: '#8f8f8f',
       casing: '#f4f4f4',
       label: '#1a1a1a',
       halo: 'rgba(255, 255, 255, 0.9)',
@@ -101,6 +106,7 @@ function railPalette(theme: MapTheme) {
   }
   return {
     fill: RAIL_FILL_COLOR,
+    main: RAIL_MAIN_FILL_COLOR,
     side: RAIL_SIDE_FILL_COLOR,
     casing: RAIL_CASING_COLOR,
     label: '#f2f4f7',
@@ -141,50 +147,47 @@ const BASEMAP_RAIL_FADE: ExpressionSpecification = [
   13.3,
   1,
 ];
-const BASEMAP_RAIL_WIDTH: ExpressionSpecification = [
-  'interpolate',
-  ['linear'],
-  ['zoom'],
-  13,
-  1.05,
-  15,
-  1.7,
-  17,
-  2.5,
-];
-const BASEMAP_RAIL_CASING_WIDTH: ExpressionSpecification = [
-  'interpolate',
-  ['linear'],
-  ['zoom'],
-  13,
-  2.4,
-  15,
-  3.7,
-  17,
-  5.2,
-];
-const BASEMAP_SIDE_WIDTH: ExpressionSpecification = [
-  'interpolate',
-  ['linear'],
-  ['zoom'],
-  13,
-  0.75,
-  15,
-  1.15,
-  17,
-  1.7,
-];
-const BASEMAP_SIDE_CASING_WIDTH: ExpressionSpecification = [
-  'interpolate',
-  ['linear'],
-  ['zoom'],
-  13,
-  1.7,
-  15,
-  2.5,
-  17,
-  3.4,
-];
+
+const RAIL_MAIN_FILL = 1.9;
+const RAIL_MAIN_CASING = 4.6;
+const RAIL_BRANCH_FILL = 1.15;
+const RAIL_BRANCH_CASING = 2.9;
+const RAIL_SIDE_FILL = 0.8;
+const RAIL_SIDE_CASING = 1.85;
+
+function railLineWidthExprs(
+  fill: number,
+  casing: number
+): { fill: ExpressionSpecification; casing: ExpressionSpecification } {
+  return {
+    fill: [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      6,
+      fill * 0.35,
+      8,
+      fill * 0.65,
+      11,
+      fill,
+      14,
+      fill * 1.6,
+    ],
+    casing: [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      6,
+      casing * 0.35,
+      8,
+      casing * 0.65,
+      11,
+      casing,
+      14,
+      casing * 1.6,
+    ],
+  };
+}
 
 type TrainPillPoint = {
   id: string;
@@ -355,7 +358,7 @@ function stationLabelFont(map: MapLibreMap): string[] {
       return font as string[];
     }
   }
-  return ['Open Sans Regular'];
+  return ['Noto Sans Regular'];
 }
 
 function stationCircleRadius(base: [number, number, number, number]): ExpressionSpecification {
@@ -414,6 +417,28 @@ function emphasizeRelief(map: MapLibreMap, theme: MapTheme) {
     return;
   }
   const night = theme !== 'light';
+  const layerType = map.getStyle()?.layers?.find((layer) => layer.id === 'background_relief')?.type;
+  if (layerType === 'hillshade') {
+    map.setPaintProperty('background_relief', 'hillshade-exaggeration', [
+      'interpolate',
+      ['linear'],
+      ['zoom'],
+      5,
+      0,
+      6,
+      night ? 0.24 : 0.26,
+      12,
+      night ? 0.2 : 0.22,
+      14,
+      night ? 0.2 : 0.22,
+      16,
+      night ? 0.2 : 0.22,
+    ]);
+    map.setPaintProperty('background_relief', 'hillshade-shadow-color', night ? '#050505' : '#c8c4be');
+    map.setPaintProperty('background_relief', 'hillshade-highlight-color', night ? '#3a3a38' : '#ffffff');
+    map.setPaintProperty('background_relief', 'hillshade-accent-color', night ? '#101010' : '#ddd8d2');
+    return;
+  }
   map.setPaintProperty('background_relief', 'raster-opacity', [
     'interpolate',
     ['linear'],
@@ -424,8 +449,10 @@ function emphasizeRelief(map: MapLibreMap, theme: MapTheme) {
     night ? 0.55 : 0.5,
     12,
     night ? 0.55 : 0.5,
-    13.4,
-    0,
+    14,
+    night ? 0.55 : 0.5,
+    16,
+    night ? 0.55 : 0.5,
   ]);
   map.setPaintProperty('background_relief', 'raster-contrast', night ? 0.12 : 0.08);
   map.setPaintProperty('background_relief', 'raster-brightness-min', 0);
@@ -507,9 +534,41 @@ function applyStationSelection(
   return nextId ?? null;
 }
 
+function placeRailsHighlightAboveTracks(map: MapLibreMap) {
+  if (!map.getLayer('rails-highlight')) {
+    return;
+  }
+  const style = map.getStyle();
+  const layers = style?.layers;
+  if (!layers?.length) {
+    return;
+  }
+  let beforeId: string | undefined;
+  for (const layer of layers) {
+    if (layer.id === 'rails-highlight') {
+      continue;
+    }
+    if (layer.id === 'stations-halo' || layer.id.startsWith('stations-')) {
+      beforeId = layer.id;
+      break;
+    }
+  }
+  try {
+    map.moveLayer('rails-highlight', beforeId);
+  } catch {
+    // Style may be mid-reload.
+  }
+}
+
 function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
-  const { fill: fillColor, side: sideColor, casing: casingColor, label: labelColor, halo: haloColor } =
-    railPalette(theme);
+  const {
+    fill: fillColor,
+    main: mainFillColor,
+    side: sideColor,
+    casing: casingColor,
+    label: labelColor,
+    halo: haloColor,
+  } = railPalette(theme);
   const ensureSource = (
     id: string,
     options: { maxzoom?: number; tolerance?: number; buffer?: number; promoteId?: string } = {}
@@ -525,16 +584,12 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       });
     }
   };
-  const ensureLayer = (layer: Parameters<MapLibreMap['addLayer']>[0]) => {
-    if (!map.getLayer(layer.id)) {
-      map.addLayer(layer);
+  const upsertLineLayer = (layer: Parameters<MapLibreMap['addLayer']>[0]) => {
+    if (map.getLayer(layer.id)) {
+      map.removeLayer(layer.id);
     }
+    map.addLayer(layer);
   };
-  const lineWidth = (fill: number, casing: number): [ExpressionSpecification, ExpressionSpecification] => [
-    ['interpolate', ['linear'], ['zoom'], 6, fill * 0.35, 8, fill * 0.65, 11, fill, 14, fill * 1.6],
-    ['interpolate', ['linear'], ['zoom'], 6, casing * 0.35, 8, casing * 0.65, 11, casing, 14, casing * 1.6],
-  ];
-
   const addPair = (
     source: string,
     prefix: string,
@@ -548,7 +603,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       maxzoom?: number;
     } = {}
   ) => {
-    const [fillWidth, casingWidth] = lineWidth(fill, casing);
+    const { fill: fillWidth, casing: casingWidth } = railLineWidthExprs(fill, casing);
     const layout = {
       'line-cap': (options.dasharray ? 'butt' : 'round') as 'butt' | 'round',
       'line-join': 'round' as const,
@@ -557,7 +612,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     const dash = options.dasharray ? { 'line-dasharray': options.dasharray } : {};
     const fillOpacity: number | ExpressionSpecification =
       typeof opacity === 'number' ? opacity * 0.98 : opacity;
-    ensureLayer({
+    upsertLineLayer({
       id: `${prefix}-casing`,
       type: 'line',
       source,
@@ -572,7 +627,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
         ...dash,
       },
     });
-    ensureLayer({
+    upsertLineLayer({
       id: `${prefix}-fill`,
       type: 'line',
       source,
@@ -589,87 +644,132 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   };
 
   if (map.getSource('basemap')) {
+    for (const legacyId of [
+      'basemap-rails-main',
+      'basemap-rails-side',
+      'basemap-rails-branch',
+      'basemap-rails-tunnel',
+    ]) {
+      if (map.getLayer(legacyId)) {
+        map.removeLayer(legacyId);
+      }
+    }
+    const tramSubclassMatch: ExpressionSpecification = [
+      'match',
+      ['get', 'subclass'],
+      ['tram', 'light_rail'],
+      true,
+      false,
+    ];
+    const isBasemapTramLine: ExpressionSpecification = [
+      'any',
+      ['==', ['get', 'class'], 'tram'],
+      ['all', ['==', ['get', 'class'], 'transit'], tramSubclassMatch],
+      tramSubclassMatch,
+    ];
     const mainFilter: ExpressionSpecification = [
       'all',
-      ['match', ['get', 'kind'], ['rail', 'narrow_gauge'], true, false],
+      ['==', ['get', 'class'], 'rail'],
       ['!', ['has', 'service']],
-      ['!=', ['get', 'tunnel'], true],
+      ['!=', ['get', 'brunnel'], 'tunnel'],
+      ['!', tramSubclassMatch],
     ];
     const sideFilter: ExpressionSpecification = [
       'all',
-      ['match', ['get', 'kind'], ['rail', 'narrow_gauge', 'tram', 'light_rail'], true, false],
+      ['match', ['get', 'class'], ['rail', 'transit'], true, false],
       ['has', 'service'],
     ];
     const branchFilter: ExpressionSpecification = [
       'all',
-      ['match', ['get', 'kind'], ['tram', 'light_rail', 'subway'], true, false],
+      ['==', ['get', 'class'], 'transit'],
       ['!', ['has', 'service']],
+      ['!=', ['get', 'brunnel'], 'tunnel'],
+      ['!', tramSubclassMatch],
+    ];
+    const tramFilter: ExpressionSpecification = [
+      'all',
+      isBasemapTramLine,
+      ['!=', ['get', 'brunnel'], 'tunnel'],
+    ];
+    const tramTunnelFilter: ExpressionSpecification = [
+      'all',
+      isBasemapTramLine,
+      ['==', ['get', 'brunnel'], 'tunnel'],
     ];
     const tunnelFilter: ExpressionSpecification = [
       'all',
-      ['match', ['get', 'kind'], ['rail', 'narrow_gauge'], true, false],
+      ['==', ['get', 'class'], 'rail'],
       ['!', ['has', 'service']],
-      ['==', ['get', 'tunnel'], true],
+      ['==', ['get', 'brunnel'], 'tunnel'],
+      ['!', tramSubclassMatch],
     ];
-    const tunnelDash = { 'line-dasharray': [2.2, 1.9] };
-    const addBasemapLine = (
-      id: string,
+    const addBasemapPair = (
+      prefix: string,
       filter: ExpressionSpecification,
+      fillScale: number,
+      casingScale: number,
       color: string,
-      width: ExpressionSpecification,
-      opacity: ExpressionSpecification,
-      extra: Record<string, unknown> = {}
+      opacity: number | ExpressionSpecification,
+      options: { dasharray?: number[] } = {}
     ) => {
-      ensureLayer({
-        id,
+      const { fill: fillWidth, casing: casingWidth } = railLineWidthExprs(fillScale, casingScale);
+      const layout = {
+        'line-cap': (options.dasharray ? 'butt' : 'round') as 'butt' | 'round',
+        'line-join': 'round' as const,
+      };
+      const dash = options.dasharray ? { 'line-dasharray': options.dasharray } : {};
+      const lineOpacity =
+        typeof opacity === 'number' ? opacity : (opacity as ExpressionSpecification);
+      const fillOpacity: number | ExpressionSpecification =
+        typeof opacity === 'number' ? opacity * 0.98 : opacity;
+      upsertLineLayer({
+        id: `${prefix}-casing`,
         type: 'line',
         source: 'basemap',
-        'source-layer': 'railways',
+        'source-layer': 'transportation',
         minzoom: 12.8,
         filter,
-        layout: { 'line-cap': extra['line-dasharray'] ? 'butt' : 'round', 'line-join': 'round' },
+        layout,
+        paint: {
+          'line-color': casingColor,
+          'line-width': casingWidth,
+          'line-opacity': lineOpacity,
+          ...dash,
+        },
+      });
+      upsertLineLayer({
+        id: `${prefix}-fill`,
+        type: 'line',
+        source: 'basemap',
+        'source-layer': 'transportation',
+        minzoom: 12.8,
+        filter,
+        layout,
         paint: {
           'line-color': color,
-          'line-width': width,
-          'line-opacity': opacity,
-          ...extra,
+          'line-width': fillWidth,
+          'line-opacity': fillOpacity,
+          ...dash,
         },
       });
     };
-    addBasemapLine('basemap-rails-main-casing', mainFilter, casingColor, BASEMAP_RAIL_CASING_WIDTH, BASEMAP_RAIL_FADE);
-    addBasemapLine('basemap-rails-main', mainFilter, fillColor, BASEMAP_RAIL_WIDTH, BASEMAP_RAIL_FADE);
-    addBasemapLine('basemap-rails-side-casing', sideFilter, casingColor, BASEMAP_SIDE_CASING_WIDTH, BASEMAP_RAIL_FADE);
-    addBasemapLine('basemap-rails-side', sideFilter, sideColor, BASEMAP_SIDE_WIDTH, BASEMAP_RAIL_FADE);
-    addBasemapLine(
-      'basemap-rails-branch-casing',
-      branchFilter,
-      casingColor,
-      BASEMAP_SIDE_CASING_WIDTH,
-      ['*', BASEMAP_RAIL_FADE, RAIL_BRANCH_OPACITY]
-    );
-    addBasemapLine(
+    addBasemapPair('basemap-rails-side', sideFilter, RAIL_SIDE_FILL, RAIL_SIDE_CASING, sideColor, BASEMAP_RAIL_FADE);
+    addBasemapPair(
       'basemap-rails-branch',
       branchFilter,
+      RAIL_BRANCH_FILL,
+      RAIL_BRANCH_CASING,
       fillColor,
-      BASEMAP_SIDE_WIDTH,
       ['*', BASEMAP_RAIL_FADE, RAIL_BRANCH_OPACITY]
     );
-    addBasemapLine(
-      'basemap-rails-tunnel-casing',
-      tunnelFilter,
-      casingColor,
-      BASEMAP_RAIL_CASING_WIDTH,
-      BASEMAP_RAIL_FADE,
-      tunnelDash
-    );
-    addBasemapLine(
-      'basemap-rails-tunnel',
-      tunnelFilter,
-      fillColor,
-      BASEMAP_RAIL_WIDTH,
-      BASEMAP_RAIL_FADE,
-      tunnelDash
-    );
+    addBasemapPair('basemap-rails-tram', tramFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, fillColor, BASEMAP_RAIL_FADE);
+    addBasemapPair('basemap-rails-tram-tunnel', tramTunnelFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, fillColor, BASEMAP_RAIL_FADE, {
+      dasharray: [2.4, 2.1],
+    });
+    addBasemapPair('basemap-rails-main', mainFilter, RAIL_MAIN_FILL, RAIL_MAIN_CASING, mainFillColor, BASEMAP_RAIL_FADE);
+    addBasemapPair('basemap-rails-tunnel', tunnelFilter, RAIL_MAIN_FILL, RAIL_MAIN_CASING, mainFillColor, BASEMAP_RAIL_FADE, {
+      dasharray: [2.6, 2.2],
+    });
   }
 
   ensureSource('stations', { maxzoom: 14, tolerance: 0, buffer: 16, promoteId: 'id' });
@@ -682,41 +782,32 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   const surfaceFilter: ExpressionSpecification = ['!=', ['get', 'tunnel'], 'yes'];
   const tunnelFilter: ExpressionSpecification = ['==', ['get', 'tunnel'], 'yes'];
   const simplifiedMaxZoom = 13.5;
-  addPair('rails-simplified-side', 'rails-simplified-side', 0.8, 1.85, ['*', SIMPLIFIED_RAIL_FADE, RAIL_SIDE_OPACITY], {
+  addPair('rails-simplified-side', 'rails-simplified-side', RAIL_SIDE_FILL, RAIL_SIDE_CASING, ['*', SIMPLIFIED_RAIL_FADE, RAIL_SIDE_OPACITY], {
     filter: surfaceFilter,
     color: sideColor,
     maxzoom: simplifiedMaxZoom,
   });
-  addPair('rails-simplified-main', 'rails-simplified-main', 1.9, 4.6, SIMPLIFIED_RAIL_FADE, {
+  addPair('rails-simplified-branch', 'rails-simplified-branch', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, ['*', SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY], {
     filter: surfaceFilter,
     maxzoom: simplifiedMaxZoom,
   });
-  addPair('rails-simplified-main', 'rails-simplified-main-tunnel', 1.9, 4.6, SIMPLIFIED_RAIL_FADE, {
+  addPair('rails-simplified-main', 'rails-simplified-main', RAIL_MAIN_FILL, RAIL_MAIN_CASING, SIMPLIFIED_RAIL_FADE, {
+    filter: surfaceFilter,
+    color: mainFillColor,
+    maxzoom: simplifiedMaxZoom,
+  });
+  addPair('rails-simplified-main', 'rails-simplified-main-tunnel', RAIL_MAIN_FILL, RAIL_MAIN_CASING, SIMPLIFIED_RAIL_FADE, {
     filter: tunnelFilter,
+    color: mainFillColor,
     dasharray: [2.6, 2.2],
     maxzoom: simplifiedMaxZoom,
   });
-  addPair('rails-simplified-branch', 'rails-simplified-branch', 1.15, 2.9, ['*', SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY], {
-    filter: surfaceFilter,
-    maxzoom: simplifiedMaxZoom,
-  });
-  addPair('rails-simplified-branch', 'rails-simplified-branch-tunnel', 1.15, 2.9, ['*', SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY], {
+  addPair('rails-simplified-branch', 'rails-simplified-branch-tunnel', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, ['*', SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY], {
     filter: tunnelFilter,
     dasharray: [2.4, 2.1],
     maxzoom: simplifiedMaxZoom,
   });
 
-  ensureLayer({
-    id: 'rails-highlight',
-    type: 'line',
-    source: 'rails-highlight',
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
-    paint: {
-      'line-color': ['coalesce', ['get', 'color'], '#ffffff'],
-      'line-width': HIGHLIGHT_LINE_WIDTH,
-      'line-opacity': 0.95,
-    },
-  });
   const upsertLayer = (layer: Parameters<MapLibreMap['addLayer']>[0]) => {
     if (map.getLayer(layer.id)) {
       map.removeLayer(layer.id);
@@ -798,12 +889,13 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       'circle-pitch-alignment': 'map',
     },
   });
+  const hideWhenHovered: ExpressionSpecification = ['!', ['boolean', ['feature-state', 'hover'], false]];
   upsertLayer({
     id: 'stations-label-major',
     type: 'symbol',
     source: 'stations',
     minzoom: 13,
-    filter: ['==', ['get', 'rank'], 3],
+    filter: ['all', ['==', ['get', 'rank'], 3], hideWhenHovered],
     layout: {
       ...labelLayout,
       'text-size': ['interpolate', ['linear'], ['zoom'], 13, 11, 14, 13, 16, 14],
@@ -815,7 +907,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     type: 'symbol',
     source: 'stations',
     minzoom: 13.4,
-    filter: ['==', ['get', 'rank'], 2],
+    filter: ['all', ['==', ['get', 'rank'], 2], hideWhenHovered],
     layout: labelLayout,
     paint: labelPaint,
   });
@@ -824,7 +916,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     type: 'symbol',
     source: 'stations',
     minzoom: 14.1,
-    filter: ['==', ['get', 'rank'], 1],
+    filter: ['all', ['==', ['get', 'rank'], 1], hideWhenHovered],
     layout: {
       ...labelLayout,
       'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10.5, 15, 12],
@@ -836,7 +928,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     type: 'symbol',
     source: 'stations',
     minzoom: STATION_DOT_MIN_ZOOM,
-    filter: ['boolean', ['feature-state', 'selected'], false],
+    filter: ['all', ['boolean', ['feature-state', 'selected'], false], hideWhenHovered],
     layout: {
       ...labelLayout,
       'text-allow-overlap': true,
@@ -857,6 +949,19 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     },
     paint: labelPaint,
   });
+
+  upsertLayer({
+    id: 'rails-highlight',
+    type: 'line',
+    source: 'rails-highlight',
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': ['coalesce', ['get', 'color'], '#ffffff'],
+      'line-width': HIGHLIGHT_LINE_WIDTH,
+      'line-opacity': 0.95,
+    },
+  });
+  placeRailsHighlightAboveTracks(map);
 }
 
 interface MapSceneProps {
@@ -872,6 +977,7 @@ interface MapSceneProps {
   onStationClick?: (station: { id: string; name: string; lat: number; lng: number }) => void;
   onBackgroundClick?: () => void;
   focusedStationId?: string | null;
+  focusedStation?: { id: string; name: string; lat: number; lng: number } | null;
   dataset?: GtfsDataset | null;
   onOsmStatusChange?: (status: OsmStatus) => void;
   onCanvasStateChange?: (state: 'loading' | 'loaded') => void;
@@ -894,6 +1000,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   onStationClick,
   onBackgroundClick,
   focusedStationId,
+  focusedStation = null,
   dataset,
   onOsmStatusChange,
   onCanvasStateChange,
@@ -1125,27 +1232,13 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       minZoom: 6,
       maxZoom: 16,
       maxBounds: [
-        [SLOVAKIA_BOUNDS.minLng - 0.8, SLOVAKIA_BOUNDS.minLat - 0.6],
-        [SLOVAKIA_BOUNDS.maxLng + 0.8, SLOVAKIA_BOUNDS.maxLat + 0.6],
+        [SLOVAKIA_BOUNDS.minLng - MAP_VIEW_BOUNDS_PAD.lng, SLOVAKIA_BOUNDS.minLat - MAP_VIEW_BOUNDS_PAD.lat],
+        [SLOVAKIA_BOUNDS.maxLng + MAP_VIEW_BOUNDS_PAD.lng, SLOVAKIA_BOUNDS.maxLat + MAP_VIEW_BOUNDS_PAD.lat],
       ],
       attributionControl: false,
       fadeDuration: 0,
       maxParallelImageRequests: 12,
       maxTileCacheZoomLevels: 8,
-      transformRequest: (url: string) => {
-        let next = url;
-        try {
-          const parsed = new URL(url, window.location.origin);
-          if (parsed.hostname === 'maps.geops.io') {
-            next = `/proxy/geops${parsed.pathname}`;
-          } else if (parsed.searchParams.get('mode') === 'geops' && parsed.searchParams.get('u')) {
-            next = `/proxy/geops${parsed.searchParams.get('u')}`;
-          }
-        } catch {
-          next = url;
-        }
-        return { url: new URL(next, window.location.origin).href };
-      },
     });
     mapRef.current = map;
     const hydrateOverlay = () => {
@@ -1951,6 +2044,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       feature.properties = { ...(feature.properties ?? {}), color };
     });
     setSourceData(map, 'rails-highlight', collection);
+    placeRailsHighlightAboveTracks(map);
   }, [networkRoute, focusedTrainNumber, trains, terrainLoaded, overlayEpoch]);
 
   const lastFlownTrainRef = useRef<string | null>(null);
@@ -2002,8 +2096,19 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       return;
     }
     const map = mapRef.current;
-    const stop = dataset?.stops[focusedStationId] ?? Object.values(dataset?.stops ?? {}).find((item) => item.stopId === focusedStationId);
-    if (!map || !stop || lastFlownStationRef.current === focusedStationId) {
+    if (!mapReadyRef.current || !map) {
+      return;
+    }
+    const fromFocus = focusedStation?.id === focusedStationId ? focusedStation : null;
+    const stop =
+      fromFocus ??
+      (() => {
+        const hit =
+          dataset?.stops[focusedStationId] ??
+          Object.values(dataset?.stops ?? {}).find((item) => item.stopId === focusedStationId);
+        return hit ? { lat: hit.lat, lng: hit.lng } : null;
+      })();
+    if (!stop || lastFlownStationRef.current === focusedStationId) {
       return;
     }
     lastFlownStationRef.current = focusedStationId;
@@ -2012,7 +2117,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       zoom: Math.max(map.getZoom(), 11),
       duration: 600,
     });
-  }, [dataset, focusedStationId]);
+  }, [dataset, focusedStation, focusedStationId]);
 
   useEffect(() => {
     if (!mapViewRef) {
@@ -2035,6 +2140,17 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         map.easeTo({
           center: [CENTER_LNG, CENTER_LAT],
           zoom: 7,
+          duration: 650,
+        });
+      },
+      centerOn: (lng, lat, options) => {
+        if (!mapReadyRef.current) {
+          return;
+        }
+        map.stop();
+        map.easeTo({
+          center: [lng, lat],
+          zoom: Math.max(map.getZoom(), options?.minZoom ?? 10),
           duration: 650,
         });
       },
@@ -2097,7 +2213,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
             </div>
           </div>
           <div className="map-basemap-credit">
-            © SBB/CFF/FFS · © geOps Tiles · © OpenStreetMap · © imagico
+            © OpenStreetMap · © OpenFreeMap · © OpenMapTiles
           </div>
         </div>
       </div>
