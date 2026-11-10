@@ -9,7 +9,7 @@ import {
   type MapLayerMouseEvent,
   type StyleSpecification,
 } from 'maplibre-gl';
-import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
+import maplibreWorkerSource from 'maplibre-gl/dist/maplibre-gl-worker.mjs?raw';
 import type { FeatureCollection } from 'geojson';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Coordinate, GtfsDataset } from '../data/gtfsParser';
@@ -320,7 +320,9 @@ function packingIterationsForZoom(zoom: number): number {
 const HIGHLIGHT_LINE_WIDTH = 4;
 const SIMPLIFIED_TOLERANCE_METERS = 0;
 
-setWorkerUrl(maplibreWorkerUrl);
+setWorkerUrl(
+  URL.createObjectURL(new Blob([maplibreWorkerSource], { type: 'text/javascript' }))
+);
 try {
   setWorkerCount(Math.max(2, Math.min(4, navigator.hardwareConcurrency || 2)));
 } catch {
