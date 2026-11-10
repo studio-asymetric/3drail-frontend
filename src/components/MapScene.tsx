@@ -226,9 +226,9 @@ function railLineWidthExprs(
       ['linear'],
       ['zoom'],
       6,
-      Math.max(1.35, fill * 0.85),
+      fill * 0.35,
       8,
-      Math.max(1.6, fill * 1.05),
+      fill * 0.65,
       11,
       fill,
       14,
@@ -239,9 +239,9 @@ function railLineWidthExprs(
       ['linear'],
       ['zoom'],
       6,
-      Math.max(2.4, casing * 0.7),
+      casing * 0.35,
       8,
-      Math.max(2.8, casing * 0.9),
+      casing * 0.65,
       11,
       casing,
       14,
@@ -316,14 +316,14 @@ function placeTrainArrow(entry: TrainMarkerEntry) {
       entry.arrowEl.style.opacity = '0';
       entry.lastArrowKey = 'hidden';
     }
-    return;
-  }
+      return;
+    }
   const width = entry.width || 26;
   const height = 14;
   const key = `${heading.toFixed(2)}:${width}:${height}:${TRAIN_ARROW_INSET_PX}`;
   if (entry.lastArrowKey === key) {
-    return;
-  }
+      return;
+    }
   const { x, y } = stadiumEdgePoint(width, height, heading, TRAIN_ARROW_INSET_PX);
   entry.lastArrowKey = key;
   entry.arrowEl.style.opacity = '1';
@@ -458,7 +458,7 @@ type PathfinderWorkerResponse =
   | {
       type: 'result';
       requestId: string;
-      path: Coordinate[];
+  path: Coordinate[];
       paths?: Coordinate[][];
       durationMs: number;
       reason?: string;
@@ -607,13 +607,13 @@ function applyStationSelection(
 
 function placeRailsHighlightAboveTracks(map: MapLibreMap) {
   if (!map.getLayer('rails-highlight')) {
-    return;
-  }
+      return;
+    }
   const style = map.getStyle();
   const layers = style?.layers;
   if (!layers?.length) {
-    return;
-  }
+      return;
+    }
   let beforeId: string | undefined;
   for (const layer of layers) {
     if (layer.id === 'rails-highlight') {
@@ -672,7 +672,6 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       dasharray?: number[];
       color?: string;
       maxzoom?: number;
-      minzoom?: number;
     } = {}
   ) => {
     const { fill: fillWidth, casing: casingWidth } = railLineWidthExprs(fill, casing);
@@ -684,12 +683,11 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     const dash = options.dasharray ? { 'line-dasharray': options.dasharray } : {};
     const fillOpacity: number | ExpressionSpecification =
       typeof opacity === 'number' ? opacity * 0.98 : opacity;
-    const minzoom = options.minzoom ?? 6;
     upsertLineLayer({
       id: `${prefix}-casing`,
       type: 'line',
       source,
-      minzoom,
+      minzoom: 8.6,
       ...(options.maxzoom ? { maxzoom: options.maxzoom } : {}),
       layout,
       ...(filter ? { filter } : {}),
@@ -704,7 +702,6 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       id: `${prefix}-fill`,
       type: 'line',
       source,
-      minzoom,
       ...(options.maxzoom ? { maxzoom: options.maxzoom } : {}),
       layout,
       ...(filter ? { filter } : {}),
@@ -1194,8 +1191,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       const response = event.data;
       if (response.type === 'graphReady') {
         pathfinderGraphReadyRef.current = response.nodeCount > 0;
-        return;
-      }
+      return;
+    }
       const resolver = pathfinderResolversRef.current.get(response.requestId);
       const rejector = pathfinderRejectorsRef.current.get(response.requestId);
       pathfinderResolversRef.current.delete(response.requestId);
@@ -1237,8 +1234,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     let cancelled = false;
     const loadNetwork = async () => {
       if (svgOutlinePolygons.length === 0) {
-        return;
-      }
+          return;
+        }
       setOsmStatus((prev) => ({ ...prev, loading: true, lastStatus: 'loading' }));
       setTileLoadPlan({ total: 1, completed: 0 });
       appendLoadingMessage('Loading OSM rails');
@@ -1252,11 +1249,11 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
         }
       }
-      if (cancelled) {
-        return;
-      }
+        if (cancelled) {
+          return;
+        }
       const clipped = clipWaysToOutline(ways, svgOutlinePolygons);
-      const stitched = closeRailGaps(clipped.length > 0 ? clipped : ways);
+      const stitched = closeRailGaps(clipped);
       const filtered = classifyDisplayRails(stitched);
       osmWaysRef.current = new Map();
       simplifiedWaysRef.current = filtered;
@@ -1276,9 +1273,6 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       });
       const map = mapRef.current;
       if (mapReadyRef.current && map) {
-        if (!map.getSource('rails-simplified-main')) {
-          addRailLayers(map, themeRef.current);
-        }
         publishSimplifiedRails(map, filtered);
       }
     };
@@ -1290,8 +1284,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
 
   const scheduleTrainMarkers = useCallback(() => {
     if (trainPublishRafRef.current) {
-      return;
-    }
+        return;
+      }
     trainPublishRafRef.current = window.requestAnimationFrame(() => {
       trainPublishRafRef.current = 0;
       publishTrainMarkersRef.current();
@@ -1315,7 +1309,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     let cancelled = false;
     const map = new MapLibreMap({
       container: node,
-      style: absoluteAppUrl(`/proxy/style?theme=${themeRef.current}`),
+      style: absoluteAppUrl(`/proxy/style?mode=style&theme=${themeRef.current}`),
       transformRequest: (url) => ({ url: absoluteAppUrl(url) }),
       center: [CENTER_LNG, CENTER_LAT],
       zoom: 7,
@@ -1354,8 +1348,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         rebuildTrainPointsRef.current();
         publishTrainMarkersRef.current();
         setOverlayEpoch((epoch) => epoch + 1);
-        return;
-      }
+      return;
+    }
       mapReadyRef.current = true;
       setTerrainLoaded(true);
       appendLoadingMessage('Loaded basemap');
@@ -1467,8 +1461,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     const handleBackgroundClick = (event: MapLayerMouseEvent) => {
       const layers = STATION_HIT_LAYERS.filter((layerId) => Boolean(map.getLayer(layerId)));
       if (layers.length > 0 && map.queryRenderedFeatures(event.point, { layers }).length > 0) {
-        return;
-      }
+          return;
+        }
       onBackgroundClickRef.current?.();
     };
     map.on('click', handleBackgroundClick);
@@ -1478,8 +1472,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     };
     const handleDragStart = (event: { originalEvent?: Event }) => {
       if (!followingRef.current || !event.originalEvent) {
-        return;
-      }
+          return;
+        }
       userDraggingRef.current = true;
       const origin = map.getCenter();
       followDragStartRef.current = { lat: origin.lat, lng: origin.lng };
@@ -1487,13 +1481,13 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     };
     const handleDragEnd = () => {
       if (!userDraggingRef.current) {
-        return;
-      }
+          return;
+        }
       userDraggingRef.current = false;
       if (!followingRef.current) {
         followDragStartRef.current = null;
-        return;
-      }
+          return;
+        }
       const start = followDragStartRef.current;
       followDragStartRef.current = null;
       const end = map.project(map.getCenter());
@@ -1538,7 +1532,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     if (appliedThemeRef.current === theme) {
       return;
     }
-    map.setStyle(absoluteAppUrl(`/proxy/style?theme=${theme}`));
+    map.setStyle(absoluteAppUrl(`/proxy/style?mode=style&theme=${theme}`));
   }, [theme]);
 
   useEffect(() => {
@@ -1563,8 +1557,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       }
       const delta = movement[event.key.toLowerCase()];
       if (!delta) {
-        return;
-      }
+                return;
+              }
       event.preventDefault();
       map.panBy(delta, { duration: 180 });
     };
@@ -1618,8 +1612,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       entry.trackLat = end.lat;
       entry.trackLng = end.lng;
       scheduleTrainMarkers();
-      return;
-    }
+                return;
+              }
     entry.motion = { path, startMs: performance.now(), durationMs };
     startTrainMotionLoopRef.current();
     scheduleTrainMarkers();
@@ -1630,8 +1624,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     let animating = 0;
     trainMarkersRef.current.forEach((entry) => {
       if (!entry.motion) {
-        return;
-      }
+                  return;
+                }
       const { path, startMs, durationMs } = entry.motion;
       const progress = Math.min(1, (now - startMs) / durationMs);
       const pos = positionAlongPath(path, progress);
@@ -1641,8 +1635,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       entry.heading = headingFromPoints(pos, lookAhead);
       if (progress < 1) {
         animating += 1;
-        return;
-      }
+                return;
+              }
       entry.motion = undefined;
       entry.trackLat = entry.targetLat;
       entry.trackLng = entry.targetLng;
@@ -1661,8 +1655,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     };
     startTrainMotionLoopRef.current = () => {
       if (trainMotionRafRef.current) {
-        return;
-      }
+            return;
+          }
       trainMotionRafRef.current = window.requestAnimationFrame(tick);
     };
     return () => {
@@ -1683,8 +1677,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       lastTrainPositionsRef.current.set(id, { lat: position.lat, lng: position.lng });
       const entry = trainMarkersRef.current.get(id);
       if (!entry) {
-        return;
-      }
+      return;
+    }
       const nodeStamp = `${train.currentStation ?? ''}\0${train.nextStation ?? ''}`;
       const nodeStep = trainNodeStampRef.current.get(id) !== nodeStamp;
       trainNodeStampRef.current.set(id, nodeStamp);
@@ -1695,8 +1689,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         followingRef.current &&
         Boolean(focusedRouteCursorRef.current);
       if (useFollowSchedule) {
-        return;
-      }
+      return;
+    }
       if (entry.motionRequestId) {
         pathfinderResolversRef.current.delete(entry.motionRequestId);
         pathfinderRejectorsRef.current.delete(entry.motionRequestId);
@@ -1715,14 +1709,14 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   useEffect(() => {
     if (!following) {
       lastScheduledPositionRef.current = null;
-      return;
-    }
+        return;
+      }
     const focused = focusedTrainNumber;
     const target = focusedInterpolatedPosition;
     if (!focused || !target || !focusedRouteCursorRef.current) {
       lastScheduledPositionRef.current = null;
-      return;
-    }
+        return;
+      }
     const entry = trainMarkersRef.current.get(focused);
     if (!entry || !Number.isFinite(entry.trackLat)) {
       return;
@@ -1923,7 +1917,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         entry.marker.addTo(map);
         entry.attached = true;
       }
-      return {
+    return {
         ...point,
         lat: trackLat,
         lng: trackLng,
@@ -2041,8 +2035,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     const waypoints = (focusedStations ?? [])
       .map((point, index) => {
         if (!point) {
-          return null;
-        }
+      return null;
+    }
         const name = (journeyStops?.[index]?.name ?? '').trim().toLowerCase();
         if (
           name.startsWith('ah ') ||
@@ -2056,8 +2050,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           name.startsWith('odb ') ||
           name.endsWith(' odb.')
         ) {
-          return null;
-        }
+      return null;
+    }
         return point;
       })
       .filter((point): point is Coordinate => point != null);
@@ -2211,8 +2205,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
 
   useEffect(() => {
     if (!mapViewRef) {
-      return;
-    }
+        return;
+      }
     const map = mapRef.current;
     if (!map || !mapReadyRef.current) {
       mapViewRef.current = null;
@@ -2272,7 +2266,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   useEffect(() => {
     onCanvasStateChange?.(canvasStateClass);
   }, [canvasStateClass, onCanvasStateChange]);
-
+  
   return (
     <>
       <div className="map-scene-shell">
@@ -2300,37 +2294,37 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
               >
                 <div className="map-loading-bar__progress" style={{ width: `${progressPercentage}%` }} />
               </div>
-            </div>
-          </div>
+              </div>
+              </div>
           <div className="map-basemap-credit">
             © OpenStreetMap · © OpenFreeMap · © OpenMapTiles
           </div>
         </div>
       </div>
-      {animationWarnings.length > 0 && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 70,
-            right: 16,
-            zIndex: 3,
-            padding: '0.75rem 1rem',
-            borderRadius: 8,
-            background: 'rgba(220, 38, 38, 0.95)',
-            color: '#fff',
-            fontSize: '0.9rem',
-            border: '1px solid #f87171',
-            maxWidth: '320px',
-          }}
-        >
+    {animationWarnings.length > 0 && (
+      <div
+        style={{
+          position: 'absolute',
+          top: 70,
+          right: 16,
+          zIndex: 3,
+          padding: '0.75rem 1rem',
+          borderRadius: 8,
+          background: 'rgba(220, 38, 38, 0.95)',
+          color: '#fff',
+          fontSize: '0.9rem',
+          border: '1px solid #f87171',
+          maxWidth: '320px',
+        }}
+      >
           <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>{mapCopy.routeWarnings}</div>
-          {animationWarnings.map((warning) => (
-            <div key={warning} style={{ marginBottom: '0.25rem' }}>
-              {warning}
-            </div>
-          ))}
-        </div>
-      )}
+        {animationWarnings.map((warning) => (
+          <div key={warning} style={{ marginBottom: '0.25rem' }}>
+            {warning}
+          </div>
+        ))}
+      </div>
+    )}
     </>
   );
 });

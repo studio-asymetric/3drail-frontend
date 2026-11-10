@@ -336,7 +336,7 @@ export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainR
   const proxyUrl = options?.proxyUrl ?? '/proxy';
   const endpoint =
     isProxy
-      ? `${proxyUrl.replace(/\/$/, '')}/gtall${options?.refresh ? '?refresh=1' : ''}`
+      ? `${proxyUrl.replace(/\/$/, '')}/gtall?mode=gtall${options?.refresh ? '&refresh=1' : ''}`
       : '/api/action';
   
   try {

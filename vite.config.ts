@@ -40,7 +40,6 @@ export default defineConfig({
         secure: false,
         timeout: 0,
         proxyTimeout: 0,
-        rewrite: (path) => path.replace(/^\/proxy\/?/, '/') || '/',
       },
     },
   },

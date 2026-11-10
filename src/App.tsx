@@ -452,7 +452,7 @@ const App: React.FC = () => {
     const controller = new AbortController();
     setJourneyStops([]);
     setJourneyStatus('loading');
-    fetch(`/proxy/detail?train=${encodeURIComponent(focusedTrainNumber)}`, {
+    fetch(`/proxy/detail?mode=detail&train=${encodeURIComponent(focusedTrainNumber)}`, {
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -477,7 +477,7 @@ const App: React.FC = () => {
         }
       });
     const interval = window.setInterval(() => {
-      fetch(`/proxy/detail?train=${encodeURIComponent(focusedTrainNumber)}`, {
+      fetch(`/proxy/detail?mode=detail&train=${encodeURIComponent(focusedTrainNumber)}`, {
         signal: controller.signal,
       })
         .then(async (response) => {

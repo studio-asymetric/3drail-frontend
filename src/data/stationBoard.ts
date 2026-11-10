@@ -32,6 +32,7 @@ export async function fetchStationBoard(
   signal?: AbortSignal
 ): Promise<StationBoardResponse> {
   const query = new URLSearchParams({
+    mode: 'station',
     station,
     byarr: arrivals ? 'true' : 'false',
   });
