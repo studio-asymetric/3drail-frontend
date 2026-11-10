@@ -2,24 +2,12 @@ services:
   website:
     build:
       context: .
-      dockerfile: deploy/Dockerfile.website
-    depends_on:
-      - proxy
+      dockerfile: Dockerfile
     ports:
       - '80'
-    restart: unless-stopped
-
-  proxy:
-    build:
-      context: .
-      dockerfile: deploy/Dockerfile.proxy
-    environment:
-      OSM_CACHE_DIR: /data/osm-cache
-      PROXY_CACHE_FILE: /data/cache.json
-      PROXY_LOG_FILE: /data/proxy.log
     volumes:
-      - proxy-data:/data
+      - app-data:/data
     restart: unless-stopped
 
 volumes:
-  proxy-data:
+  app-data:

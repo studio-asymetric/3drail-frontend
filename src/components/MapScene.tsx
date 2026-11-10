@@ -148,6 +148,67 @@ const BASEMAP_RAIL_FADE: ExpressionSpecification = [
   1,
 ];
 
+function zoomInterpolateStops(expr: number | ExpressionSpecification): Array<[number, number]> | null {
+  if (typeof expr === 'number') {
+    return null;
+  }
+  if (!Array.isArray(expr) || expr[0] !== 'interpolate' || expr[2]?.[0] !== 'zoom') {
+    return null;
+  }
+  const stops: Array<[number, number]> = [];
+  for (let index = 3; index < expr.length - 1; index += 2) {
+    const zoom = expr[index];
+    const value = expr[index + 1];
+    if (typeof zoom === 'number' && typeof value === 'number') {
+      stops.push([zoom, value]);
+    }
+  }
+  return stops.length > 0 ? stops : null;
+}
+
+function sampleZoomStops(stops: Array<[number, number]>, zoom: number): number {
+  if (zoom <= stops[0][0]) {
+    return stops[0][1];
+  }
+  for (let index = 1; index < stops.length; index += 1) {
+    const [endZoom, endValue] = stops[index];
+    if (zoom <= endZoom) {
+      const [startZoom, startValue] = stops[index - 1];
+      const span = endZoom - startZoom;
+      const t = span <= 0 ? 1 : (zoom - startZoom) / span;
+      return startValue + (endValue - startValue) * t;
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+function productOpacity(
+  left: number | ExpressionSpecification,
+  right: number | ExpressionSpecification
+): number | ExpressionSpecification {
+  if (typeof left === 'number' && typeof right === 'number') {
+    return left * right;
+  }
+  const leftStops = zoomInterpolateStops(left);
+  const rightStops = zoomInterpolateStops(right);
+  const zooms = [
+    ...new Set([
+      ...(leftStops ?? []).map(([zoom]) => zoom),
+      ...(rightStops ?? []).map(([zoom]) => zoom),
+    ]),
+  ].sort((a, b) => a - b);
+  if (zooms.length === 0) {
+    return 1;
+  }
+  const interpolate: ExpressionSpecification = ['interpolate', ['linear'], ['zoom']];
+  zooms.forEach((zoom) => {
+    const leftValue = leftStops ? sampleZoomStops(leftStops, zoom) : Number(left);
+    const rightValue = rightStops ? sampleZoomStops(rightStops, zoom) : Number(right);
+    interpolate.push(zoom, leftValue * rightValue);
+  });
+  return interpolate;
+}
+
 const RAIL_MAIN_FILL = 1.9;
 const RAIL_MAIN_CASING = 4.6;
 const RAIL_BRANCH_FILL = 1.15;
@@ -762,7 +823,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       RAIL_BRANCH_FILL,
       RAIL_BRANCH_CASING,
       fillColor,
-      ['*', BASEMAP_RAIL_FADE, RAIL_BRANCH_OPACITY]
+      productOpacity(BASEMAP_RAIL_FADE, RAIL_BRANCH_OPACITY)
     );
     addBasemapPair('basemap-rails-tram', tramFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, fillColor, BASEMAP_RAIL_FADE);
     addBasemapPair('basemap-rails-tram-tunnel', tramTunnelFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, fillColor, BASEMAP_RAIL_FADE, {
@@ -784,12 +845,12 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   const surfaceFilter: ExpressionSpecification = ['!=', ['get', 'tunnel'], 'yes'];
   const tunnelFilter: ExpressionSpecification = ['==', ['get', 'tunnel'], 'yes'];
   const simplifiedMaxZoom = 13.5;
-  addPair('rails-simplified-side', 'rails-simplified-side', RAIL_SIDE_FILL, RAIL_SIDE_CASING, ['*', SIMPLIFIED_RAIL_FADE, RAIL_SIDE_OPACITY], {
+  addPair('rails-simplified-side', 'rails-simplified-side', RAIL_SIDE_FILL, RAIL_SIDE_CASING, productOpacity(SIMPLIFIED_RAIL_FADE, RAIL_SIDE_OPACITY), {
     filter: surfaceFilter,
     color: sideColor,
     maxzoom: simplifiedMaxZoom,
   });
-  addPair('rails-simplified-branch', 'rails-simplified-branch', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, ['*', SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY], {
+  addPair('rails-simplified-branch', 'rails-simplified-branch', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, productOpacity(SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY), {
     filter: surfaceFilter,
     maxzoom: simplifiedMaxZoom,
   });
@@ -804,7 +865,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     dasharray: [2.6, 2.2],
     maxzoom: simplifiedMaxZoom,
   });
-  addPair('rails-simplified-branch', 'rails-simplified-branch-tunnel', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, ['*', SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY], {
+  addPair('rails-simplified-branch', 'rails-simplified-branch-tunnel', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, productOpacity(SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY), {
     filter: tunnelFilter,
     dasharray: [2.4, 2.1],
     maxzoom: simplifiedMaxZoom,
@@ -834,6 +895,20 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     'text-halo-width': 1.15,
     'text-halo-blur': 0.3,
   };
+  const hideLabelWhenHovered: ExpressionSpecification = [
+    'case',
+    ['boolean', ['feature-state', 'hover'], false],
+    0,
+    1,
+  ];
+  const showSelectedUnlessHovered: ExpressionSpecification = [
+    'case',
+    ['boolean', ['feature-state', 'hover'], false],
+    0,
+    ['boolean', ['feature-state', 'selected'], false],
+    1,
+    0,
+  ];
 
   upsertLayer({
     id: 'stations-halo',
@@ -882,61 +957,59 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     type: 'circle',
     source: 'stations',
     minzoom: STATION_DOT_MIN_ZOOM,
-    filter: ['boolean', ['feature-state', 'selected'], false],
     paint: {
       'circle-radius': stationCircleRadius([4.2, 6.2, 8, 1.08]),
       'circle-color': '#fddf57',
-      'circle-stroke-width': 2,
+      'circle-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 1, 0],
+      'circle-stroke-width': ['case', ['boolean', ['feature-state', 'selected'], false], 2, 0],
       'circle-stroke-color': casingColor,
       'circle-pitch-alignment': 'map',
     },
   });
-  const hideWhenHovered: ExpressionSpecification = ['!', ['boolean', ['feature-state', 'hover'], false]];
   upsertLayer({
     id: 'stations-label-major',
     type: 'symbol',
     source: 'stations',
     minzoom: 13,
-    filter: ['all', ['==', ['get', 'rank'], 3], hideWhenHovered],
+    filter: ['==', ['get', 'rank'], 3],
     layout: {
       ...labelLayout,
       'text-size': ['interpolate', ['linear'], ['zoom'], 13, 11, 14, 13, 16, 14],
     },
-    paint: labelPaint,
+    paint: { ...labelPaint, 'text-opacity': hideLabelWhenHovered },
   });
   upsertLayer({
     id: 'stations-label-mid',
     type: 'symbol',
     source: 'stations',
     minzoom: 13.4,
-    filter: ['all', ['==', ['get', 'rank'], 2], hideWhenHovered],
+    filter: ['==', ['get', 'rank'], 2],
     layout: labelLayout,
-    paint: labelPaint,
+    paint: { ...labelPaint, 'text-opacity': hideLabelWhenHovered },
   });
   upsertLayer({
     id: 'stations-label-minor',
     type: 'symbol',
     source: 'stations',
     minzoom: 14.1,
-    filter: ['all', ['==', ['get', 'rank'], 1], hideWhenHovered],
+    filter: ['==', ['get', 'rank'], 1],
     layout: {
       ...labelLayout,
       'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10.5, 15, 12],
     },
-    paint: labelPaint,
+    paint: { ...labelPaint, 'text-opacity': hideLabelWhenHovered },
   });
   upsertLayer({
     id: 'stations-label-selected',
     type: 'symbol',
     source: 'stations',
     minzoom: STATION_DOT_MIN_ZOOM,
-    filter: ['all', ['boolean', ['feature-state', 'selected'], false], hideWhenHovered],
     layout: {
       ...labelLayout,
       'text-allow-overlap': true,
       'text-ignore-placement': true,
     },
-    paint: labelPaint,
+    paint: { ...labelPaint, 'text-opacity': showSelectedUnlessHovered },
   });
   upsertLayer({
     id: 'stations-label-hover',
