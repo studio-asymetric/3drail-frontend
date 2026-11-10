@@ -1146,13 +1146,19 @@ const App: React.FC = () => {
                   const { planned, actual, delayMinutes } = stopTimesView(stop);
                   const delayColor = delayMinutes > 0 ? getDelayColor(delayMinutes) : null;
                   const carriedColor = delayColor ?? inheritedDelayColor(displayStops, index);
+                  const onTimeRail = 'var(--dock-rail-on-time)';
                   const segmentColor = isFutureStop
                     ? null
                     : isPassedStop
-                      ? delayColor ?? 'var(--dock-rail-on-time)'
+                      ? delayColor ?? onTimeRail
                       : isNext
                         ? delayColor ?? carriedColor ?? accent
                         : null;
+                  const tickColor = isFutureStop
+                    ? null
+                    : isPassedStop
+                      ? delayColor ?? onTimeRail
+                      : delayColor ?? carriedColor ?? accent;
                   const times = (
                     <span className="dock__stop-times">
                       <time className={`dock__stop-planned${actual ? ' is-late' : ''}`}>
@@ -1178,9 +1184,7 @@ const App: React.FC = () => {
                         .join(' ')}
                       style={
                         {
-                          ...(carriedColor && !isFutureStop
-                            ? { '--stop-delay': carriedColor }
-                            : {}),
+                          ...(tickColor ? { '--stop-delay': tickColor } : {}),
                           ...(segmentColor ? { '--segment': segmentColor } : {}),
                         } as React.CSSProperties
                       }
