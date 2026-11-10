@@ -595,14 +595,18 @@ async function handleOsm(reqUrl, res) {
     try {
       const packPath = await ensureNetworkPack();
       const gzipped = fs.readFileSync(packPath);
+      let body = gzipped;
+      try {
+        body = zlib.gunzipSync(gzipped);
+      } catch {
+        // Serve the file as stored if it is already raw.
+      }
       res.writeHead(200, {
         'Content-Type': 'application/octet-stream',
-        'Content-Encoding': 'gzip',
-        'Vary': 'Accept-Encoding',
         'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'public, max-age=86400',
       });
-      res.end(gzipped);
+      res.end(body);
       logMessage(`Serving packed simplified network ${gzipped.length} bytes`);
       return;
     } catch (error) {

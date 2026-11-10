@@ -1,4 +1,4 @@
-import { unpackRails } from './packRails';
+import { decodeRailPack } from './packRails';
 
 // Service to fetch railway data from OpenStreetMap using Overpass API
 
@@ -129,12 +129,14 @@ export interface OsmFetchResult {
 
 export async function fetchSimplifiedNetwork(): Promise<OsmFetchResult> {
   try {
-    const response = await fetch('/proxy?mode=osm&level=network&v=10');
+    const response = await fetch('/proxy?mode=osm&level=network&v=10', {
+      headers: { Accept: 'application/octet-stream' },
+    });
     if (!response.ok) {
       throw new Error(`Proxy network fetch failed: ${response.status}`);
     }
     const buffer = await response.arrayBuffer();
-    const ways = (unpackRails(new Uint8Array(buffer)) as OSMWay[]).filter(
+    const ways = (await decodeRailPack(new Uint8Array(buffer)) as OSMWay[]).filter(
       (way) => isMainlineWay(way) || isSideRailwayTrack(way)
     );
     return {
