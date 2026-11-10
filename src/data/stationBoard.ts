@@ -32,11 +32,10 @@ export async function fetchStationBoard(
   signal?: AbortSignal
 ): Promise<StationBoardResponse> {
   const query = new URLSearchParams({
-    mode: 'station',
     station,
     byarr: arrivals ? 'true' : 'false',
   });
-  const response = await fetch(`/proxy?${query.toString()}`, { signal });
+  const response = await fetch(`/proxy/station?${query.toString()}`, { signal });
   if (!response.ok) {
     throw new Error(`Station board HTTP ${response.status}`);
   }

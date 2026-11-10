@@ -129,7 +129,7 @@ export interface OsmFetchResult {
 
 export async function fetchSimplifiedNetwork(): Promise<OsmFetchResult> {
   try {
-    const response = await fetch('/proxy?mode=osm&level=network&v=10', {
+    const response = await fetch('/proxy/osm/network?v=10', {
       headers: { Accept: 'application/octet-stream' },
     });
     if (!response.ok) {
@@ -158,7 +158,7 @@ export interface DisplayRailTile {
 
 export async function fetchDisplayRailIndex(): Promise<DisplayRailTile[]> {
   try {
-    const response = await fetch('/proxy?mode=osm&level=display-index');
+    const response = await fetch('/proxy/osm/display-index');
     if (!response.ok) {
       throw new Error(`Proxy display index failed: ${response.status}`);
     }
@@ -188,7 +188,7 @@ export async function fetchDisplayRailsInBounds(
     query.set('cacheOnly', '1');
   }
   try {
-    const response = await fetch(`/proxy?mode=osm&${query.toString()}`);
+    const response = await fetch(`/proxy/osm/display?${query.toString()}`);
     if (!response.ok) {
       throw new Error(`Proxy display rail fetch failed: ${response.status}`);
     }
@@ -222,7 +222,7 @@ export async function fetchRailwayLinesInBounds(
   });
 
   try {
-    const response = await fetch(`/proxy?mode=osm&${query.toString()}`);
+    const response = await fetch(`/proxy/osm/${encodeURIComponent(level)}?${query.toString()}`);
     if (!response.ok) {
       throw new Error(`Proxy osm fetch failed: ${response.status} ${response.statusText}`);
     }

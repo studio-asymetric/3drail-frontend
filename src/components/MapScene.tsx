@@ -1309,7 +1309,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     let cancelled = false;
     const map = new MapLibreMap({
       container: node,
-      style: absoluteAppUrl(`/proxy?mode=style&theme=${themeRef.current}`),
+      style: absoluteAppUrl(`/proxy/style?theme=${themeRef.current}`),
       transformRequest: (url) => ({ url: absoluteAppUrl(url) }),
       center: [CENTER_LNG, CENTER_LAT],
       zoom: 7,
@@ -1532,7 +1532,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     if (appliedThemeRef.current === theme) {
       return;
     }
-    map.setStyle(absoluteAppUrl(`/proxy?mode=style&theme=${theme}`));
+    map.setStyle(absoluteAppUrl(`/proxy/style?theme=${theme}`));
   }, [theme]);
 
   useEffect(() => {

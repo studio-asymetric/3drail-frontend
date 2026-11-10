@@ -998,11 +998,40 @@ function isProxyRequest(reqUrl) {
   if (!staticRoot) {
     return true;
   }
+  if (reqUrl.searchParams.has('mode')) {
+    return true;
+  }
   return reqUrl.pathname === '/proxy' || reqUrl.pathname.startsWith('/proxy/');
+}
+
+function proxyModeFromRequest(reqUrl) {
+  const queryMode = reqUrl.searchParams.get('mode');
+  if (queryMode) {
+    return queryMode;
+  }
+  const parts = reqUrl.pathname.replace(/^\/proxy\/?/, '').split('/').filter(Boolean);
+  if (parts[0] && parts[0] !== 'maptiler') {
+    return parts[0];
+  }
+  return 'gtall';
+}
+
+function applyProxyPathParams(reqUrl) {
+  const parts = reqUrl.pathname.replace(/^\/proxy\/?/, '').split('/').filter(Boolean);
+  if (parts[0] === 'osm' && parts[1] && !reqUrl.searchParams.get('level')) {
+    reqUrl.searchParams.set('level', parts[1]);
+  }
+  if (parts[0] === 'detail' && parts[1] && !reqUrl.searchParams.get('train')) {
+    reqUrl.searchParams.set('train', parts[1]);
+  }
 }
 
 function serveStatic(reqUrl, res) {
   const requested = reqUrl.pathname === '/' ? '/index.html' : decodeURIComponent(reqUrl.pathname);
+  if (requested === '/proxy' || requested.startsWith('/proxy/')) {
+    sendJson(res, 404, { error: 'Not found' });
+    return;
+  }
   const filePath = path.normalize(path.join(staticRoot, requested));
   if (!filePath.startsWith(staticRoot)) {
     sendJson(res, 400, { error: 'Invalid path' });
@@ -1039,7 +1068,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    const mode = reqUrl.searchParams.get('mode') ?? 'gtall';
+    applyProxyPathParams(reqUrl);
+    const mode = proxyModeFromRequest(reqUrl);
     if (mode === 'osm') {
       await handleOsm(reqUrl, res);
       return;
