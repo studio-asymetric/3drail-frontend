@@ -97,11 +97,9 @@ function minutesOfDay(value: string): number | null {
   return Number(match[1]) * 60 + Number(match[2]);
 }
 
-function stopDelayMinutes(stop: JourneyStop): number {
-  const plannedRaw = stop.scheduledDeparture || stop.scheduledArrival;
-  const actualRaw = stop.departure || stop.arrival;
-  const planned = plannedRaw ? minutesOfDay(plannedRaw) : null;
-  const actual = actualRaw ? minutesOfDay(actualRaw) : null;
+function delayDeltaMinutes(plannedRaw: string, actualRaw: string): number {
+  const planned = minutesOfDay(plannedRaw);
+  const actual = minutesOfDay(actualRaw);
   if (planned == null || actual == null) {
     return 0;
   }
@@ -113,6 +111,16 @@ function stopDelayMinutes(stop: JourneyStop): number {
     delta += 24 * 60;
   }
   return delta;
+}
+
+function stopDelayMinutes(stop: JourneyStop): number {
+  if (stop.scheduledDeparture && stop.departure) {
+    return delayDeltaMinutes(stop.scheduledDeparture, stop.departure);
+  }
+  if (stop.scheduledArrival && stop.arrival) {
+    return delayDeltaMinutes(stop.scheduledArrival, stop.arrival);
+  }
+  return 0;
 }
 
 function indexByStationName(stops: JourneyStop[], name?: string): number {
@@ -151,23 +159,27 @@ function stopTimesView(stop: JourneyStop): {
   actual: string | null;
   delayMinutes: number;
 } {
-  const plannedRaw = stop.scheduledDeparture || stop.scheduledArrival;
-  const actualRaw = stop.departure || stop.arrival;
-  const planned = clockFace(plannedRaw || actualRaw || '') || '—';
-  const actual = actualRaw ? clockFace(actualRaw) : '';
+  const paired =
+    stop.scheduledDeparture && stop.departure
+      ? { plannedRaw: stop.scheduledDeparture, actualRaw: stop.departure }
+      : stop.scheduledArrival && stop.arrival
+        ? { plannedRaw: stop.scheduledArrival, actualRaw: stop.arrival }
+        : {
+            plannedRaw: stop.scheduledDeparture || stop.scheduledArrival,
+            actualRaw: stop.departure || stop.arrival,
+          };
+  const planned = clockFace(paired.plannedRaw || paired.actualRaw || '') || '—';
+  const actual = paired.actualRaw ? clockFace(paired.actualRaw) : '';
   const delayMinutes = stopDelayMinutes(stop);
-  const late = Boolean(plannedRaw && actual && delayMinutes > 0);
+  const late = Boolean(paired.plannedRaw && paired.actualRaw && delayMinutes > 0);
   return { planned, actual: late ? actual : null, delayMinutes: late ? delayMinutes : 0 };
 }
 
-function inheritedDelayColor(stops: JourneyStop[], index: number): string | null {
-  for (let j = index - 1; j >= 0; j -= 1) {
-    const { delayMinutes } = stopTimesView(stops[j]);
-    if (delayMinutes > 0) {
-      return getDelayColor(delayMinutes);
-    }
-  }
-  return null;
+function dockStopRailColor(
+  delayColor: string | null,
+  onTimeRail: string
+): string {
+  return delayColor ?? onTimeRail;
 }
 
 function isProperTrainName(name?: string): boolean {
@@ -290,7 +302,33 @@ const App: React.FC = () => {
   const [following, setFollowing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchMobileOpen, setSearchMobileOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchMobileOpen(false);
+  }, []);
+
+  const openMobileSearch = useCallback(() => {
+    setSearchMobileOpen(true);
+    setSearchOpen(true);
+    window.requestAnimationFrame(() => searchInputRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    if (!searchMobileOpen) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeSearch();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [closeSearch, searchMobileOpen]);
+
   const mapViewRef = useRef<MapViewControls | null>(null);
   const [dockLeaving, setDockLeaving] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(bootRoute.about);
@@ -769,6 +807,32 @@ const App: React.FC = () => {
     displayTrain,
     cursor?.stopIndex ?? null
   );
+  const trailheadIndex = useMemo(() => {
+    if (displayStops.length === 0) {
+      return -1;
+    }
+    if (currentStopIndex >= 0) {
+      return currentStopIndex;
+    }
+    if (cursor && cursor.stopIndex >= 0) {
+      return cursor.stopIndex;
+    }
+    const liveState = displayStops.findIndex((stop) => stop.state === 'current');
+    if (liveState >= 0) {
+      return liveState;
+    }
+    return nextStopIndex;
+  }, [currentStopIndex, cursor, displayStops, nextStopIndex]);
+  const liveSegmentRowIndex = useMemo(() => {
+    if (!displayTrain || !cursor || displayStops.length < 2) {
+      return -1;
+    }
+    const from = cursor.stopIndex;
+    if (from < 0 || from >= displayStops.length - 1) {
+      return -1;
+    }
+    return from + 1;
+  }, [cursor, displayStops.length, displayTrain]);
   const stopsHaveDelay = displayStops.some((stop) => stopTimesView(stop).actual != null);
   const properTrainName = isProperTrainName(displayTrain?.trainName)
     ? displayTrain?.trainName?.trim() ?? ''
@@ -892,8 +956,18 @@ const App: React.FC = () => {
             </a>
           </small>
         </div>
+        {searchMobileOpen && (
+          <button
+            type="button"
+            className="chrome__search-backdrop"
+            aria-label={t.searchPlaceholder}
+            onClick={closeSearch}
+          />
+        )}
         <div
-          className={`chrome__search ${searchOpen && searchHits.length > 0 ? 'is-open' : ''}`}
+          className={`chrome__search${searchOpen && searchHits.length > 0 ? ' is-open' : ''}${
+            searchMobileOpen ? ' is-mobile-open' : ''
+          }`}
           onMouseDown={(event) => {
             if (event.target === searchInputRef.current) {
               return;
@@ -916,7 +990,13 @@ const App: React.FC = () => {
               setSearchOpen(true);
             }}
             onFocus={() => setSearchOpen(true)}
-            onBlur={() => window.setTimeout(() => setSearchOpen(false), 160)}
+            onBlur={() => {
+              window.setTimeout(() => {
+                if (!searchMobileOpen) {
+                  setSearchOpen(false);
+                }
+              }, 160);
+            }}
           />
           {searchOpen && searchHits.length > 0 && (
             <ul className="chrome__hits">
@@ -941,7 +1021,7 @@ const App: React.FC = () => {
                         handleStationClick(hit.station);
                       }
                       setSearchQuery('');
-                      setSearchOpen(false);
+                      closeSearch();
                     }}
                   >
                     {hit.kind === 'train' ? (
@@ -977,6 +1057,16 @@ const App: React.FC = () => {
           )}
         </div>
         <div className="chrome__tools">
+          <button
+            type="button"
+            className={`chrome__tool chrome__tool--search${searchMobileOpen ? ' is-active' : ''}`}
+            aria-label={t.searchPlaceholder}
+            aria-pressed={searchMobileOpen}
+            title={t.searchPlaceholder}
+            onClick={() => (searchMobileOpen ? closeSearch() : openMobileSearch())}
+          >
+            <img src={searchIcon} alt="" width={16} height={16} />
+          </button>
           <button
             type="button"
             className="chrome__tool"
@@ -1138,27 +1228,19 @@ const App: React.FC = () => {
             >
               <ol className={`dock__stops${stopsHaveDelay ? ' has-delay' : ''}`}>
                 {displayStops.map((stop, index) => {
-                  const isNext = index === nextStopIndex;
-                  const isFutureStop =
-                    nextStopIndex >= 0 && index > nextStopIndex;
-                  const isPassedStop =
-                    nextStopIndex >= 0 && index < nextStopIndex;
+                  const isTrailStop = trailheadIndex >= 0 && index >= trailheadIndex;
+                  const isPassedStop = trailheadIndex >= 0 && index < trailheadIndex;
+                  const isUpcomingLeg =
+                    liveSegmentRowIndex >= 0 && index > liveSegmentRowIndex;
+                  const isLiveSegment = index === liveSegmentRowIndex;
                   const { planned, actual, delayMinutes } = stopTimesView(stop);
                   const delayColor = delayMinutes > 0 ? getDelayColor(delayMinutes) : null;
-                  const carriedColor = delayColor ?? inheritedDelayColor(displayStops, index);
                   const onTimeRail = 'var(--dock-rail-on-time)';
-                  const segmentColor = isFutureStop
+                  const trackColor = isUpcomingLeg
                     ? null
-                    : isPassedStop
-                      ? delayColor ?? onTimeRail
-                      : isNext
-                        ? delayColor ?? carriedColor ?? accent
-                        : null;
-                  const tickColor = isFutureStop
-                    ? null
-                    : isPassedStop
-                      ? delayColor ?? onTimeRail
-                      : delayColor ?? carriedColor ?? accent;
+                    : dockStopRailColor(delayColor, onTimeRail);
+                  const segmentColor = isUpcomingLeg ? null : trackColor;
+                  const tickColor = isTrailStop ? trackColor : isPassedStop ? trackColor : null;
                   const times = (
                     <span className="dock__stop-times">
                       <time className={`dock__stop-planned${actual ? ' is-late' : ''}`}>
@@ -1172,13 +1254,13 @@ const App: React.FC = () => {
                     </span>
                   );
                   const point = focusedStations[index] ?? coordFromDataset(stop.name, dataset);
-                  const isCurrentStop = index === currentStopIndex || stop.state === 'current';
                   return (
                     <li
                       key={`${stop.name}-${index}`}
                       className={[
-                        isCurrentStop ? 'is-current' : isNext ? 'is-next' : 'is-ahead',
-                        isFutureStop ? 'is-future' : '',
+                        isTrailStop ? 'is-trail' : 'is-ahead',
+                        isUpcomingLeg ? 'is-upcoming-leg' : '',
+                        isLiveSegment ? 'is-live-segment' : '',
                       ]
                         .filter(Boolean)
                         .join(' ')}
@@ -1189,7 +1271,7 @@ const App: React.FC = () => {
                         } as React.CSSProperties
                       }
                     >
-                      {point || isCurrentStop ? (
+                      {point || isTrailStop ? (
                         <button
                           type="button"
                           className="dock__stop-name"

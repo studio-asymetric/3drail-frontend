@@ -1263,6 +1263,26 @@ body,
   transform: none;
 }
 
+.chrome__tool--search {
+  display: none;
+}
+
+.chrome__tool--search img {
+  display: block;
+  width: 16px;
+  height: 16px;
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+.chrome__tool--search.is-active img {
+  opacity: 1;
+}
+
+.chrome__search-backdrop {
+  display: none;
+}
+
 .chrome__search {
   position: absolute;
   left: 50%;
@@ -1825,18 +1845,20 @@ body,
   display: none;
 }
 
-.dock__stops.has-delay li:not(:first-child):not(.is-future)::after {
+.dock__stops.has-delay li:not(:first-child):not(.is-upcoming-leg)::after {
   width: 2px;
   left: calc(var(--dock-rail-offset) - 1px);
   opacity: 1;
   background: var(--segment, #5f5f5f);
 }
 
-.dock__stops li.is-future:not(:first-child)::after {
+.dock__stops li.is-upcoming-leg:not(:first-child)::after {
   width: 2px;
   left: calc(var(--dock-rail-offset) - 1px);
   opacity: 1;
   background: var(--dock-rail-future);
+  animation: none;
+  box-shadow: none;
 }
 
 .dock__stops li {
@@ -1896,8 +1918,7 @@ body,
 }
 
 .dock__stops .dock__stop-actual,
-.dock__stops .is-ahead .dock__stop-actual,
-.dock__stops .is-next .dock__stop-actual {
+.dock__stops .is-ahead .dock__stop-actual {
   color: var(--stop-delay, var(--accent));
 }
 
@@ -1917,8 +1938,7 @@ body,
 }
 
 .dock__stops time.dock__stop-planned.is-late,
-.dock__stops .is-ahead .dock__stop-planned.is-late,
-.dock__stops .is-next .dock__stop-planned.is-late {
+.dock__stops .is-ahead .dock__stop-planned.is-late {
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--ui-passed) 50%, transparent);
   color: var(--ui-passed);
@@ -1944,22 +1964,27 @@ body,
   color: var(--ui-passed);
 }
 
-.dock__stops .is-current {
+.dock__stops .is-trail {
   color: #fff;
-  font-weight: 560;
+  font-weight: 540;
 }
 
-.dock__stops .is-next {
-  color: #fff;
-  font-weight: 560;
+.dock__stops .is-trail:not(.is-upcoming-leg):not(:first-child)::after {
+  width: 2px;
+  opacity: 1;
 }
 
-.dock__stops .is-next:not(:first-child)::after {
+.dock__stops .is-live-segment:not(:first-child)::after {
   width: 2px;
   opacity: 1;
   background: var(--segment, var(--accent));
   box-shadow: 0 0 7px color-mix(in srgb, var(--segment, var(--accent)) 70%, transparent);
   animation: dock-live 2.4s ease-in-out infinite;
+}
+
+.dock__stops .is-live-segment::before {
+  background: var(--segment, var(--accent));
+  opacity: 1;
 }
 
 @keyframes dock-live {
@@ -2287,8 +2312,8 @@ body,
 
   .chrome {
     inset: var(--chrome-inset) var(--chrome-inset) auto;
-    flex-direction: column;
-    align-items: stretch;
+    flex-direction: row;
+    align-items: flex-start;
     gap: 8px;
   }
 
@@ -2312,13 +2337,59 @@ body,
     align-items: flex-end;
   }
 
+  .chrome__tool--search {
+    display: flex;
+  }
+
   .chrome__search {
-    position: relative;
+    display: none;
+    position: absolute;
     left: auto;
     transform: none;
     width: 100%;
     margin-left: 0;
     padding: 0 14px;
+  }
+
+  .chrome__search.is-mobile-open {
+    display: flex;
+    position: fixed;
+    left: var(--chrome-inset);
+    right: var(--chrome-inset);
+    top: calc(var(--chrome-inset) + var(--chrome-control-height) + 8px);
+    width: auto;
+    height: auto;
+    min-height: var(--chrome-control-height);
+    z-index: 45;
+    max-height: min(52svh, calc(100svh - var(--chrome-inset) * 2 - var(--chrome-control-height) - 16px));
+    flex-wrap: wrap;
+    align-content: flex-start;
+    padding-bottom: 8px;
+  }
+
+  .chrome__search.is-mobile-open .chrome__hits {
+    position: relative;
+    top: auto;
+    left: auto;
+    right: auto;
+    flex: 1 1 100%;
+    max-height: min(40svh, 320px);
+    overflow-y: auto;
+    margin-top: 4px;
+    padding-top: 2px;
+  }
+
+  .chrome__search-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: rgba(0, 0, 0, 0.42);
+    cursor: default;
+    animation: settle var(--dur) var(--ease) both;
   }
 
   .dock {
@@ -2417,9 +2488,23 @@ body,
   color: #111111;
 }
 
-.shell[data-theme='light'] .dock__stops .is-next {
+.shell[data-theme='light'] .dock__stops .is-trail {
   color: #111111;
   font-weight: 600;
+}
+
+.shell[data-theme='light'] .dock__stops .is-trail .dock__stop-actual,
+.shell[data-theme='light'] .dock__stops .is-trail time {
+  color: inherit;
+}
+
+.shell[data-theme='light'] .dock__stops.has-delay li:not(.is-upcoming-leg)::after,
+.shell[data-theme='light'] .dock__stops.has-delay li::before {
+  opacity: 1;
+}
+
+.shell[data-theme='light'] .dock__stops::before {
+  background: var(--dock-rail-future);
 }
 
 .shell[data-theme='light'] .dock__follow {
@@ -2498,7 +2583,7 @@ body,
     transition-duration: 0.01ms !important;
   }
 
-  .dock__stops .is-next:not(:first-child)::after {
+  .dock__stops .is-live-segment:not(:first-child)::after {
     animation: none !important;
     opacity: 1;
   }

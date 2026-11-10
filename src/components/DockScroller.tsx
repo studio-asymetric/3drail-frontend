@@ -54,12 +54,14 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
     };
 
     const scrollToNext = () => {
-      const nextStop = content.querySelector('.is-next') as HTMLElement | null;
-      if (!nextStop) {
+      const liveStop =
+        (content.querySelector('.is-live-segment') as HTMLElement | null) ??
+        (content.querySelector('.is-trail') as HTMLElement | null);
+      if (!liveStop) {
         return;
       }
       const target =
-        nextStop.getBoundingClientRect().top -
+        liveStop.getBoundingClientRect().top -
         wrapper.getBoundingClientRect().top +
         wrapper.scrollTop -
         wrapper.clientHeight * 0.38;
