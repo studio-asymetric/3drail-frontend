@@ -4,14 +4,12 @@ WORKDIR /app
 
 COPY proxy/*.mjs ./
 RUN npm install --omit=dev pbf @mapbox/vector-tile
-COPY proxy/osm-cache ./osm-cache
-
-RUN mkdir -p /app/osm-cache
+RUN mkdir -p /data/osm-cache
 
 ENV PROXY_PORT=3001
-ENV OSM_CACHE_DIR=/app/osm-cache
-ENV PROXY_CACHE_FILE=/app/cache.json
-ENV PROXY_LOG_FILE=/app/proxy.log
+ENV OSM_CACHE_DIR=/data/osm-cache
+ENV PROXY_CACHE_FILE=/data/cache.json
+ENV PROXY_LOG_FILE=/data/proxy.log
 
 EXPOSE 3001
 

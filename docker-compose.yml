@@ -14,8 +14,12 @@ services:
     build:
       context: .
       dockerfile: deploy/Dockerfile.proxy
+    environment:
+      OSM_CACHE_DIR: /data/osm-cache
+      PROXY_CACHE_FILE: /data/cache.json
+      PROXY_LOG_FILE: /data/proxy.log
     volumes:
-      - proxy-data:/app
+      - proxy-data:/data
     restart: unless-stopped
 
 volumes:
