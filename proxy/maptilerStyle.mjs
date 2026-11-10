@@ -583,6 +583,10 @@ function cacheFileForPath(cacheDir, pathname) {
   return path.join(cacheDir, 'maptiler', safe);
 }
 
+function fallbackPlanetTileUrl(z, x, y) {
+  return `${OPENFREEMAP_PLANET}/${z}/${x}/${y}`;
+}
+
 async function planetTileUrl(cacheDir, z, x, y) {
   const file = path.join(cacheDir, 'maptiler', 'planet.json');
   let json = null;
@@ -594,16 +598,23 @@ async function planetTileUrl(cacheDir, z, x, y) {
     }
   }
   if (!json?.tiles?.[0]) {
-    const response = await fetch(OPENFREEMAP_PLANET, {
-      headers: { 'User-Agent': 'railatlas/1.0 (openfreemap proxy)' },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!response.ok) {
-      throw new Error(`OpenFreeMap planet JSON HTTP ${response.status}`);
+    try {
+      const response = await fetch(OPENFREEMAP_PLANET, {
+        headers: { 'User-Agent': 'railatlas/1.0 (openfreemap proxy)' },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) {
+        throw new Error(`OpenFreeMap planet JSON HTTP ${response.status}`);
+      }
+      json = await response.json();
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(json));
+    } catch {
+      return fallbackPlanetTileUrl(z, x, y);
     }
-    json = await response.json();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(json));
+  }
+  if (!json?.tiles?.[0]) {
+    return fallbackPlanetTileUrl(z, x, y);
   }
   return String(json.tiles[0])
     .replace('{z}', String(z))

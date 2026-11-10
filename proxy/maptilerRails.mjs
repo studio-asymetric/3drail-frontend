@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { PbfReader } from 'pbf';
 import { VectorTile } from '@mapbox/vector-tile';
 import { closeRailHoles, HOLE_CLOSE_VERSION } from './closeRailHoles.mjs';
-
-const TILE_URL = 'https://api.maptiler.com/tiles/v3';
+import { fetchMaptilerAsset } from './maptilerStyle.mjs';
 
 function tileRange(bounds, zoom) {
   const n = 2 ** zoom;
@@ -72,7 +72,11 @@ function railTags(properties) {
 }
 
 function waysFromTile(buffer, zoom, tileX, tileY) {
-  const tile = new VectorTile(new PbfReader(buffer));
+  let data = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  if (data.length >= 2 && data[0] === 0x1f && data[1] === 0x8b) {
+    data = zlib.gunzipSync(data);
+  }
+  const tile = new VectorTile(new PbfReader(data));
   const layer = tile.layers.transportation;
   if (!layer) {
     return [];
@@ -99,23 +103,8 @@ function waysFromTile(buffer, zoom, tileX, tileY) {
   return ways;
 }
 
-let nextRequestAt = 0;
-
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function takeRequestSlot() {
-  const now = Date.now();
-  const delay = Math.max(0, nextRequestAt - now);
-  nextRequestAt = Math.max(now, nextRequestAt) + 280;
-  if (delay > 0) {
-    await wait(delay);
-  }
-}
-
-async function loadVectorTile(cacheDir, zoom, tileX, tileY, apiKey) {
-  const file = path.join(cacheDir, `mvt_${zoom}_${tileX}_${tileY}.json`);
+async function loadVectorTile(cacheDir, zoom, tileX, tileY, _apiKey) {
+  const file = path.join(cacheDir, `ofmrail_${zoom}_${tileX}_${tileY}.json`);
   if (fs.existsSync(file)) {
     try {
       return { ways: JSON.parse(fs.readFileSync(file, 'utf8')), ok: true };
@@ -123,47 +112,21 @@ async function loadVectorTile(cacheDir, zoom, tileX, tileY, apiKey) {
       fs.unlinkSync(file);
     }
   }
-  if (!apiKey) {
+  const asset = await fetchMaptilerAsset(cacheDir, '', `/tiles/v3/${zoom}/${tileX}/${tileY}.pbf`);
+  if (!asset?.buffer || asset.buffer.length === 0) {
     return { ways: [], ok: false };
   }
-  let lastError = null;
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    try {
-      await takeRequestSlot();
-      const response = await fetch(`${TILE_URL}/${zoom}/${tileX}/${tileY}.pbf?key=${apiKey}`, {
-        headers: { 'User-Agent': '3Drail-frontend/1.0 (railmap proxy)' },
-        signal: AbortSignal.timeout(20000),
-      });
-      if (response.status === 204 || response.status === 404) {
-        fs.writeFileSync(file, '[]');
-        return { ways: [], ok: true };
-      }
-      if (response.status === 429 || response.status >= 500) {
-        const retryAfter = Number(response.headers.get('retry-after'));
-        const pause = Number.isFinite(retryAfter) && retryAfter > 0
-          ? Math.min(retryAfter * 1000, 20000)
-          : Math.min(16000, 800 * 2 ** attempt);
-        lastError = new Error(`MapTiler tile ${zoom}/${tileX}/${tileY} HTTP ${response.status}`);
-        await wait(pause);
-        continue;
-      }
-      if (!response.ok) {
-        throw new Error(`MapTiler tile ${zoom}/${tileX}/${tileY} HTTP ${response.status}`);
-      }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      const ways = buffer.length === 0 ? [] : waysFromTile(buffer, zoom, tileX, tileY);
-      fs.writeFileSync(file, JSON.stringify(ways));
-      return { ways, ok: true };
-    } catch (error) {
-      lastError = error;
-      await wait(Math.min(16000, 800 * 2 ** attempt));
-    }
+  try {
+    const ways = waysFromTile(asset.buffer, zoom, tileX, tileY);
+    fs.writeFileSync(file, JSON.stringify(ways));
+    return { ways, ok: true };
+  } catch (error) {
+    console.error(
+      `OpenFreeMap rail parse ${zoom}/${tileX}/${tileY}:`,
+      error instanceof Error ? error.message : error
+    );
+    return { ways: [], ok: false };
   }
-  console.error(
-    `MapTiler tile ${zoom}/${tileX}/${tileY} still missing:`,
-    lastError instanceof Error ? lastError.message : lastError
-  );
-  return { ways: [], ok: false };
 }
 
 const PAIR_MIN_METERS = 1.5;
@@ -919,7 +882,7 @@ function countWayPoints(ways) {
 }
 
 /** The black lines from mapa.zsr.sk: MapTiler planet tiles, transportation class rail or transit. */
-export async function fetchMaptilerRails(bounds, cacheDir, apiKey, zoom = 13, options = {}) {
+export async function fetchMaptilerRails(bounds, cacheDir, apiKey, zoom = 11, options = {}) {
   fs.mkdirSync(cacheDir, { recursive: true });
   const range = tileRange(bounds, zoom);
   const tiles = [];
@@ -929,7 +892,7 @@ export async function fetchMaptilerRails(bounds, cacheDir, apiKey, zoom = 13, op
     }
   }
   console.log(`MapTiler rails: reading ${tiles.length} tiles at z${zoom}`);
-  const groups = await mapLimit(tiles, 4, ([x, y]) => loadVectorTile(cacheDir, zoom, x, y, apiKey));
+  const groups = await mapLimit(tiles, 8, ([x, y]) => loadVectorTile(cacheDir, zoom, x, y, apiKey));
   const missingTiles = groups.filter((group) => !group.ok).length;
   console.log(`MapTiler rails: loaded ${groups.filter((group) => group.ok).length}/${tiles.length} tiles, collapsing tracks`);
   const collapsed = collapseDoubleTracks(groups.flatMap((group) => group.ways));
@@ -986,7 +949,7 @@ export async function fetchMaptilerRailsDisplay(bounds, cacheDir, apiKey, zoom =
       tiles.push([x, y]);
     }
   }
-  const groups = await mapLimit(tiles, 4, ([x, y]) => loadVectorTile(cacheDir, zoom, x, y, apiKey));
+  const groups = await mapLimit(tiles, 8, ([x, y]) => loadVectorTile(cacheDir, zoom, x, y, apiKey));
   const missingTiles = groups.filter((group) => !group.ok).length;
   const elements = groups
     .flatMap((group) => group.ways)

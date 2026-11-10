@@ -129,20 +129,33 @@ export interface OsmFetchResult {
 
 export async function fetchSimplifiedNetwork(): Promise<OsmFetchResult> {
   try {
-    const response = await fetch('/proxy/osm/network?mode=osm&level=network&v=10', {
-      headers: { Accept: 'application/octet-stream' },
-    });
-    if (!response.ok) {
-      throw new Error(`Proxy network fetch failed: ${response.status}`);
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      const response = await fetch('/proxy/osm/network?mode=osm&level=network&v=11', {
+        cache: 'no-store',
+        headers: { Accept: 'application/octet-stream' },
+      });
+      if (response.status === 202) {
+        const payload = await response.json().catch(() => ({}));
+        const waitMs = Number(payload?.retryMs) > 0 ? Number(payload.retryMs) : 4000;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`Proxy network fetch failed: ${response.status}`);
+      }
+      const buffer = await response.arrayBuffer();
+      const ways = (await decodeRailPack(new Uint8Array(buffer)) as OSMWay[]).filter(
+        (way) => isMainlineWay(way) || isSideRailwayTrack(way)
+      );
+      if (ways.length === 0) {
+        throw new Error('Proxy network pack was empty');
+      }
+      return {
+        ways,
+        meta: { status: 'network', cacheAge: 0 },
+      };
     }
-    const buffer = await response.arrayBuffer();
-    const ways = (await decodeRailPack(new Uint8Array(buffer)) as OSMWay[]).filter(
-      (way) => isMainlineWay(way) || isSideRailwayTrack(way)
-    );
-    return {
-      ways,
-      meta: { status: 'network', cacheAge: 0 },
-    };
+    throw new Error('Proxy network pack is still building');
   } catch (error) {
     console.error('Failed to fetch simplified railway network:', error);
     return { ways: [] };

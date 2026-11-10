@@ -37,7 +37,7 @@ const config = {
   osmCacheDir: process.env.OSM_CACHE_DIR ?? path.join(__dirname, 'osm-cache'),
   osmCacheDuration: Number(process.env.OSM_CACHE_DURATION ?? 30 * 24 * 60 * 60),
   maptilerKey: process.env.MAPTILER_KEY ?? '',
-  maptilerZoom: Number(process.env.MAPTILER_ZOOM ?? 13),
+  maptilerZoom: Number(process.env.MAPTILER_ZOOM ?? 11),
   maptilerDisplayZoom: Number(process.env.MAPTILER_DISPLAY_ZOOM ?? 14),
 };
 
@@ -152,7 +152,8 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value));
 }
 
-const NETWORK_PACK_NAME = 'network_v10.rnet.gz';
+const NETWORK_PACK_NAME = 'network_v11.rnet.gz';
+const MIN_NETWORK_WAYS = 500;
 const SLOVAKIA_NETWORK_BOUNDS = {
   minLat: 47.7311798,
   maxLat: 49.6138162,
@@ -230,24 +231,34 @@ function sealNetwork(ways) {
 
 async function buildNetworkPack() {
   fs.mkdirSync(config.osmCacheDir, { recursive: true });
-  logMessage('Building simplified network pack');
-  let ways = collectCoarseWays();
-  if (ways.length === 0) {
-    const maptiler = await fetchMaptilerRails(
-      SLOVAKIA_NETWORK_BOUNDS,
-      config.osmCacheDir,
-      config.maptilerKey,
-      config.maptilerZoom,
-      { skipSimplify: true }
+  logMessage('Building simplified network pack from OpenFreeMap tiles');
+  const maptiler = await fetchMaptilerRails(
+    SLOVAKIA_NETWORK_BOUNDS,
+    config.osmCacheDir,
+    config.maptilerKey,
+    config.maptilerZoom,
+    { skipSimplify: true }
+  );
+  const ways = maptiler.elements ?? [];
+  logMessage(
+    `Loaded ${ways.length} OpenFreeMap ways for network pack (${maptiler.maptilerTiles ?? 0} tiles, ${maptiler.missingTiles ?? 0} missing)`
+  );
+  if (ways.length < MIN_NETWORK_WAYS) {
+    throw new Error(
+      `OpenFreeMap rail pack too small (${ways.length} ways from ${maptiler.maptilerTiles ?? 0} tiles)`
     );
-    ways = maptiler.elements ?? [];
-    logMessage(
-      `Loaded ${ways.length} MapTiler ways for network pack (${maptiler.maptilerTiles ?? 0} tiles, ${maptiler.missingTiles ?? 0} missing)`
-    );
-  } else {
-    logMessage(`Loaded ${ways.length} cached coarse ways for network pack`);
   }
-  const tunnels = await loadRailwayTunnels();
+  let tunnels = [];
+  try {
+    tunnels = await Promise.race([
+      loadRailwayTunnels(),
+      new Promise((resolve) => setTimeout(() => resolve([]), 8000)),
+    ]);
+  } catch (error) {
+    logMessage(
+      `Tunnel overlay skipped: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
   const sealed = sealNetwork(mergeTunnelWays(ways, tunnels, SLOVAKIA_NETWORK_BOUNDS));
   const packed = packRails(sealed.elements);
   const gzipped = zlib.gzipSync(Buffer.from(packed.buffer, packed.byteOffset, packed.byteLength), {
@@ -269,18 +280,59 @@ function networkPackPath() {
   return path.join(config.osmCacheDir, NETWORK_PACK_NAME);
 }
 
+function unpackNetworkWayCount(filePath) {
+  if (!fs.existsSync(filePath) || fs.statSync(filePath).size < 16) {
+    return 0;
+  }
+  let raw = fs.readFileSync(filePath);
+  try {
+    raw = zlib.gunzipSync(raw);
+  } catch {
+    // already uncompressed
+  }
+  if (raw.length < 12 || raw.subarray(0, 4).toString('ascii') !== 'RNET') {
+    return 0;
+  }
+  return raw.readUInt32LE(8);
+}
+
+function isHealthyNetworkPack(filePath) {
+  return unpackNetworkWayCount(filePath) >= MIN_NETWORK_WAYS;
+}
+
 async function ensureNetworkPack() {
   const packPath = networkPackPath();
-  if (fs.existsSync(packPath) && fs.statSync(packPath).size > 16) {
+  if (isHealthyNetworkPack(packPath)) {
     return packPath;
   }
   if (!networkPackBuild) {
-    networkPackBuild = buildNetworkPack().finally(() => {
-      networkPackBuild = null;
-    });
+    networkPackBuild = buildNetworkPack()
+      .then((built) => built.packPath)
+      .finally(() => {
+        networkPackBuild = null;
+      });
   }
-  const built = await networkPackBuild;
-  return built.packPath;
+  const built = await Promise.race([
+    networkPackBuild,
+    new Promise((resolve) => setTimeout(() => resolve(null), 2500)),
+  ]);
+  if (built && isHealthyNetworkPack(built)) {
+    return built;
+  }
+  const error = new Error('Network pack is building');
+  error.code = 'BUILDING';
+  throw error;
+}
+
+function warmupNetworkPack() {
+  ensureNetworkPack().catch((error) => {
+    if (error?.code === 'BUILDING') {
+      return;
+    }
+    logMessage(
+      `Network pack warmup failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  });
 }
 
 function parseCookies(headers) {
@@ -611,6 +663,10 @@ async function handleOsm(reqUrl, res) {
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (error?.code === 'BUILDING' || message.includes('building')) {
+        sendJson(res, 202, { status: 'building', retryMs: 4000, elements: [] });
+        return;
+      }
       logMessage(`Network pack failed: ${message}`);
       sendJson(res, 502, { error: message, elements: [] });
       return;
@@ -1112,4 +1168,5 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, '0.0.0.0', () => {
   fs.mkdirSync(config.osmCacheDir, { recursive: true });
   console.log(`3D Railmap proxy listening on http://0.0.0.0:${port}`);
+  warmupNetworkPack();
 });
