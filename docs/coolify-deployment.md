@@ -37,11 +37,11 @@ nginx:alpine  ── /proxy ──►  node proxy (port 3001)
 
 2. **Create a Compose Service** in Coolify (not a Nixpacks static app).
 
-3. **Point Coolify at this repo** (or upload `docker-compose.yml` + `dist/`).
+3. **Point Coolify at this repo**. Do not bind-mount `deploy/nginx.conf` or `dist/` from the host — Coolify often creates those paths as directories and nginx then fails to start.
 
 4. **Use the included compose file** (`docker-compose.yml`):
-   - `website` — nginx serving `dist/`
-   - `proxy` — Node.js API proxy with persistent cache volume
+   - `website` — nginx image built from `deploy/Dockerfile.website` (Vite `dist/` + `deploy/nginx.conf` copied in)
+   - `proxy` — Node.js API proxy with persistent cache volume `/data`
 
 5. **Assign your domain** in Coolify (e.g. `railmap.example.com`) to the `website` service port 80.
 

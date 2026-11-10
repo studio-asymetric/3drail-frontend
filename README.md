@@ -28,6 +28,8 @@ The dev server forwards `/proxy` to the Node proxy on port 3001. That proxy repl
 
 Build pack: **Dockerfile** at the repository root. Port **80**.
 
+If the Coolify resource is a **Docker Compose** app instead, use the repo `docker-compose.yml`. The website image is built from `deploy/Dockerfile.website` (frontend + nginx config copied in). Do not bind-mount `deploy/nginx.conf` from the host. If a previous deploy created `/data/coolify/applications/<uuid>/deploy/nginx.conf` as a **directory**, delete that path on the server before redeploying.
+
 Mount a persistent volume at `/data` so the train cache and the railway-vector cache survive a rebuild.
 
 | Variable | Value in the image |
