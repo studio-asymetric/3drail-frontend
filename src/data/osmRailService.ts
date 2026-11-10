@@ -130,7 +130,7 @@ export interface OsmFetchResult {
 export async function fetchSimplifiedNetwork(): Promise<OsmFetchResult> {
   try {
     for (let attempt = 0; attempt < 24; attempt += 1) {
-      const response = await fetch('/proxy/osm/network?mode=osm&level=network&v=11', {
+      const response = await fetch('/proxy/osm/network?mode=osm&level=network&v=12', {
         cache: 'no-store',
         headers: { Accept: 'application/octet-stream' },
       });
@@ -144,9 +144,12 @@ export async function fetchSimplifiedNetwork(): Promise<OsmFetchResult> {
         throw new Error(`Proxy network fetch failed: ${response.status}`);
       }
       const buffer = await response.arrayBuffer();
-      const ways = (await decodeRailPack(new Uint8Array(buffer)) as OSMWay[]).filter(
-        (way) => isMainlineWay(way) || isSideRailwayTrack(way)
-      );
+      const ways = (await decodeRailPack(new Uint8Array(buffer)) as OSMWay[])
+        .map((way) => ({
+          ...way,
+          tags: { railway: way.tags?.railway ?? 'rail' },
+        }))
+        .filter((way) => isMainlineWay(way) || isSideRailwayTrack(way));
       if (ways.length === 0) {
         throw new Error('Proxy network pack was empty');
       }

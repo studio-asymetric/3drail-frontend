@@ -850,32 +850,26 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   ensureSource('rails-simplified-branch', { maxzoom: 14, tolerance: 0 });
   ensureSource('rails-simplified-side', { maxzoom: 14, tolerance: 0 });
 
-  const surfaceFilter: ExpressionSpecification = ['!=', ['get', 'tunnel'], 'yes'];
-  const tunnelFilter: ExpressionSpecification = ['==', ['get', 'tunnel'], 'yes'];
   const simplifiedMaxZoom = 13.5;
+  for (const leftover of [
+    'rails-simplified-main-tunnel-casing',
+    'rails-simplified-main-tunnel-fill',
+    'rails-simplified-branch-tunnel-casing',
+    'rails-simplified-branch-tunnel-fill',
+  ]) {
+    if (map.getLayer(leftover)) {
+      map.removeLayer(leftover);
+    }
+  }
   addPair('rails-simplified-side', 'rails-simplified-side', RAIL_SIDE_FILL, RAIL_SIDE_CASING, productOpacity(SIMPLIFIED_RAIL_FADE, RAIL_SIDE_OPACITY), {
-    filter: surfaceFilter,
     color: sideColor,
     maxzoom: simplifiedMaxZoom,
   });
   addPair('rails-simplified-branch', 'rails-simplified-branch', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, productOpacity(SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY), {
-    filter: surfaceFilter,
     maxzoom: simplifiedMaxZoom,
   });
   addPair('rails-simplified-main', 'rails-simplified-main', RAIL_MAIN_FILL, RAIL_MAIN_CASING, SIMPLIFIED_RAIL_FADE, {
-    filter: surfaceFilter,
     color: mainFillColor,
-    maxzoom: simplifiedMaxZoom,
-  });
-  addPair('rails-simplified-main', 'rails-simplified-main-tunnel', RAIL_MAIN_FILL, RAIL_MAIN_CASING, SIMPLIFIED_RAIL_FADE, {
-    filter: tunnelFilter,
-    color: mainFillColor,
-    dasharray: [2.6, 2.2],
-    maxzoom: simplifiedMaxZoom,
-  });
-  addPair('rails-simplified-branch', 'rails-simplified-branch-tunnel', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, productOpacity(SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY), {
-    filter: tunnelFilter,
-    dasharray: [2.4, 2.1],
     maxzoom: simplifiedMaxZoom,
   });
 

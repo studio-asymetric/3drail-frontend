@@ -863,6 +863,111 @@ export function stitchRailNetwork(ways, endSnapMeters = END_SNAP_METERS, segment
   return stitched;
 }
 
+export function flattenSimplifiedRail(way) {
+  return {
+    ...way,
+    tags: { railway: way.tags?.railway ?? 'rail' },
+  };
+}
+
+function mergeConnectedLineGeometries(lines) {
+  const unused = new Set(lines.map((_, index) => index).filter((index) => lines[index].length >= 2));
+  const byEnd = new Map();
+
+  const addEnd = (line, end) => {
+    const point = end === 0 ? lines[line][0] : lines[line][lines[line].length - 1];
+    const key = pointKey(point);
+    const bucket = byEnd.get(key) ?? [];
+    bucket.push({ line, end });
+    byEnd.set(key, bucket);
+  };
+
+  unused.forEach((line) => {
+    addEnd(line, 0);
+    addEnd(line, 1);
+  });
+
+  const takeOther = (line, end) => {
+    const point = end === 0 ? lines[line][0] : lines[line][lines[line].length - 1];
+    const bucket = (byEnd.get(pointKey(point)) ?? []).filter(
+      (entry) => unused.has(entry.line) && entry.line !== line
+    );
+    if (bucket.length !== 1) {
+      return null;
+    }
+    return bucket[0];
+  };
+
+  const merged = [];
+  unused.forEach((startLine) => {
+    if (!unused.has(startLine)) {
+      return;
+    }
+    let chain = [...lines[startLine]];
+    unused.delete(startLine);
+
+    const grow = (fromEnd) => {
+      let currentLine = startLine;
+      let currentEnd = fromEnd;
+      for (let steps = 0; steps < 8000; steps += 1) {
+        const next = takeOther(currentLine, currentEnd);
+        if (!next || !unused.has(next.line)) {
+          return;
+        }
+        unused.delete(next.line);
+        const nextLine = lines[next.line];
+        const nextPoints = next.end === 0 ? nextLine.slice(1) : [...nextLine].reverse().slice(1);
+        if (fromEnd === 0) {
+          chain = [...nextPoints].reverse().concat(chain);
+          currentLine = next.line;
+          currentEnd = next.end === 0 ? 1 : 0;
+        } else {
+          chain = chain.concat(nextPoints);
+          currentLine = next.line;
+          currentEnd = next.end === 0 ? 1 : 0;
+        }
+      }
+    };
+
+    grow(0);
+    grow(1);
+    const cleaned = cleanLine(chain);
+    if (cleaned.length >= 2) {
+      merged.push({ points: cleaned, source: startLine });
+    }
+  });
+  return merged;
+}
+
+/** Weld degree-2 chains so tunnel/bridge cuts become one continuous rail. */
+export function mergeConnectedWays(ways) {
+  const groups = new Map();
+  ways.forEach((way, index) => {
+    if (!Array.isArray(way?.geometry) || way.geometry.length < 2) {
+      return;
+    }
+    const kind = way.tags?.railway ?? 'rail';
+    const list = groups.get(kind) ?? [];
+    list.push(index);
+    groups.set(kind, list);
+  });
+  const out = [];
+  groups.forEach((indexes, kind) => {
+    const lines = indexes.map((index) =>
+      ways[index].geometry.map((point) => ({ lat: point.lat, lon: point.lon ?? point.lng }))
+    );
+    mergeConnectedLineGeometries(lines).forEach((item, offset) => {
+      out.push({
+        type: 'way',
+        id: ways[indexes[item.source]]?.id ?? offset,
+        tags: { railway: kind },
+        geometry: item.points.map((point) => ({ lat: point.lat, lon: point.lon })),
+      });
+    });
+  });
+  return out;
+}
+
 async function mapLimit(items, limit, worker) {
   const results = new Array(items.length);
   let next = 0;

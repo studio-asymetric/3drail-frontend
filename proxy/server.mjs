@@ -8,7 +8,10 @@ import { simplifyOsmPayload } from './simplifyRail.mjs';
 import {
   fetchMaptilerRails,
   fetchMaptilerRailsDisplay,
+  flattenSimplifiedRail,
+  mergeConnectedWays,
   RAIL_SHAPE_VERSION,
+  simplifyStraights,
   stitchRailNetwork,
 } from './maptilerRails.mjs';
 import { closeRailHoles, repairCachedRailTiles } from './closeRailHoles.mjs';
@@ -152,7 +155,7 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value));
 }
 
-const NETWORK_PACK_NAME = 'network_v11.rnet.gz';
+const NETWORK_PACK_NAME = 'network_v12.rnet.gz';
 const MIN_NETWORK_WAYS = 500;
 const SLOVAKIA_NETWORK_BOUNDS = {
   minLat: 47.7311798,
@@ -236,10 +239,9 @@ async function buildNetworkPack() {
     SLOVAKIA_NETWORK_BOUNDS,
     config.osmCacheDir,
     config.maptilerKey,
-    config.maptilerZoom,
-    { skipSimplify: true }
+    config.maptilerZoom
   );
-  const ways = maptiler.elements ?? [];
+  const ways = (maptiler.elements ?? []).map(flattenSimplifiedRail);
   logMessage(
     `Loaded ${ways.length} OpenFreeMap ways for network pack (${maptiler.maptilerTiles ?? 0} tiles, ${maptiler.missingTiles ?? 0} missing)`
   );
@@ -248,32 +250,22 @@ async function buildNetworkPack() {
       `OpenFreeMap rail pack too small (${ways.length} ways from ${maptiler.maptilerTiles ?? 0} tiles)`
     );
   }
-  let tunnels = [];
-  try {
-    tunnels = await Promise.race([
-      loadRailwayTunnels(),
-      new Promise((resolve) => setTimeout(() => resolve([]), 8000)),
-    ]);
-  } catch (error) {
-    logMessage(
-      `Tunnel overlay skipped: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-  const sealed = sealNetwork(mergeTunnelWays(ways, tunnels, SLOVAKIA_NETWORK_BOUNDS));
-  const packed = packRails(sealed.elements);
+  const sealed = sealNetwork(ways);
+  const consecutive = mergeConnectedWays(sealed.elements);
+  const reshaped = simplifyStraights(consecutive);
+  const restitched = stitchRailNetwork(reshaped.elements);
+  const elements = mergeConnectedWays(restitched).map(flattenSimplifiedRail);
+  const packed = packRails(elements);
   const gzipped = zlib.gzipSync(Buffer.from(packed.buffer, packed.byteOffset, packed.byteLength), {
     level: 9,
   });
   const packPath = path.join(config.osmCacheDir, NETWORK_PACK_NAME);
   fs.writeFileSync(packPath, gzipped);
-  const pointCount = sealed.elements.reduce(
-    (sum, way) => sum + (way.geometry?.length ?? 0),
-    0
-  );
+  const pointCount = elements.reduce((sum, way) => sum + (way.geometry?.length ?? 0), 0);
   logMessage(
-    `Packed simplified network: ${sealed.elements.length} ways, ${pointCount} points, holes ${sealed.found} found / ${sealed.closed} closed / ${sealed.remaining} left, ${gzipped.length} gzip bytes`
+    `Packed simplified network: ${elements.length} ways, ${pointCount} points, holes ${sealed.found} found / ${sealed.closed} closed / ${sealed.remaining} left, ${gzipped.length} gzip bytes`
   );
-  return { packPath, gzipped, wayCount: sealed.elements.length, pointsAfter: pointCount };
+  return { packPath, gzipped, wayCount: elements.length, pointsAfter: pointCount };
 }
 
 function networkPackPath() {

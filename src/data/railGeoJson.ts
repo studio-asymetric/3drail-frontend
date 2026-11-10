@@ -232,7 +232,7 @@ export function waysToLineCollection(
         id: way.id,
         kind: nextKind,
         railway: way.tags?.railway ?? 'rail',
-        tunnel: way.tags?.tunnel === 'yes' || way.tags?.tunnel === 'true' ? 'yes' : 'no',
+        tunnel: 'no',
       },
       geometry: {
         type: 'LineString',
