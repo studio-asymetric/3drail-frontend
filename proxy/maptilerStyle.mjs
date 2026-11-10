@@ -516,6 +516,36 @@ export function railatlasStyle(theme = 'light') {
   };
 }
 
+export function withAbsoluteAssetUrls(style, origin) {
+  const root = String(origin ?? '').replace(/\/$/, '');
+  if (!root) {
+    return style;
+  }
+  const abs = (value) =>
+    typeof value === 'string' && value.startsWith('/') ? `${root}${value}` : value;
+  const sources = Object.fromEntries(
+    Object.entries(style.sources ?? {}).map(([id, source]) => {
+      if (!source || typeof source !== 'object') {
+        return [id, source];
+      }
+      const next = { ...source };
+      if (Array.isArray(next.tiles)) {
+        next.tiles = next.tiles.map(abs);
+      }
+      if (typeof next.url === 'string') {
+        next.url = abs(next.url);
+      }
+      return [id, next];
+    })
+  );
+  return {
+    ...style,
+    glyphs: abs(style.glyphs),
+    sprite: abs(style.sprite),
+    sources,
+  };
+}
+
 export function maptilerPathFromRequest(reqUrl) {
   const pathname = reqUrl.pathname;
   for (const prefix of ['/proxy/maptiler', '/maptiler']) {

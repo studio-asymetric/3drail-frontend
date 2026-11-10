@@ -17,6 +17,7 @@ import {
   fetchMaptilerAsset,
   maptilerPathFromRequest,
   railatlasStyle,
+  withAbsoluteAssetUrls,
 } from './maptilerStyle.mjs';
 import { packRails } from './packRails.mjs';
 import { fetchStationBoard } from './cpStationBoard.mjs';
@@ -816,9 +817,22 @@ async function handleWater(res) {
   }
 }
 
-async function handleStyle(reqUrl, res) {
+function requestOrigin(req) {
+  const host = hostnameOf(req.headers.host);
+  if (CANONICAL_ORIGINS[host]) {
+    return CANONICAL_ORIGINS[host];
+  }
+  const proto =
+    String(req.headers['x-forwarded-proto'] ?? '')
+      .split(',')[0]
+      .trim()
+      .toLowerCase() || 'http';
+  return `${proto}://${req.headers.host ?? 'localhost'}`;
+}
+
+async function handleStyle(req, reqUrl, res) {
   const theme = reqUrl.searchParams.get('theme') === 'dark' ? 'dark' : 'light';
-  sendJson(res, 200, railatlasStyle(theme));
+  sendJson(res, 200, withAbsoluteAssetUrls(railatlasStyle(theme), requestOrigin(req)));
 }
 
 async function handleMaptiler(reqUrl, res) {
@@ -1035,7 +1049,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (mode === 'style') {
-      await handleStyle(reqUrl, res);
+      await handleStyle(req, reqUrl, res);
       return;
     }
     if (maptilerPathFromRequest(reqUrl)) {

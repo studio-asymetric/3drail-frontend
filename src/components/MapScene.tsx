@@ -369,6 +369,14 @@ function createTrainPill(onPick: (trainId: string) => void): TrainMarkerEntry {
   };
 }
 
+function absoluteAppUrl(url: string): string {
+  try {
+    return new URL(url, window.location.origin).href;
+  } catch {
+    return url;
+  }
+}
+
 function packingIterationsForZoom(zoom: number): number {
   if (zoom < 9) {
     return 0;
@@ -1301,7 +1309,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     let cancelled = false;
     const map = new MapLibreMap({
       container: node,
-      style: `/proxy?mode=style&theme=${themeRef.current}`,
+      style: absoluteAppUrl(`/proxy?mode=style&theme=${themeRef.current}`),
+      transformRequest: (url) => ({ url: absoluteAppUrl(url) }),
       center: [CENTER_LNG, CENTER_LAT],
       zoom: 7,
       minZoom: 6,
@@ -1523,7 +1532,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     if (appliedThemeRef.current === theme) {
       return;
     }
-    map.setStyle(`/proxy?mode=style&theme=${theme}`);
+    map.setStyle(absoluteAppUrl(`/proxy?mode=style&theme=${theme}`));
   }, [theme]);
 
   useEffect(() => {

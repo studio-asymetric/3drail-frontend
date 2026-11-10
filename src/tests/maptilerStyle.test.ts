@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { maptilerPathFromRequest, railatlasStyle } from '../../proxy/maptilerStyle.mjs';
+import {
+  maptilerPathFromRequest,
+  railatlasStyle,
+  withAbsoluteAssetUrls,
+} from '../../proxy/maptilerStyle.mjs';
 
 describe('railatlasStyle', () => {
   it('keeps overlay hook layer ids and MapTiler sources', () => {
@@ -18,6 +22,16 @@ describe('railatlasStyle', () => {
     const dark = railatlasStyle('dark');
     expect(light.layers[0].paint['background-color']).toBe('#ebebeb');
     expect(dark.layers[0].paint['background-color']).toBe('#292929');
+  });
+});
+
+describe('withAbsoluteAssetUrls', () => {
+  it('prefixes relative tile and glyph urls', () => {
+    const style = withAbsoluteAssetUrls(railatlasStyle('light'), 'https://railatlas.eu');
+    expect(style.sources.basemap.tiles[0]).toBe(
+      'https://railatlas.eu/proxy/maptiler/tiles/v3/{z}/{x}/{y}.pbf'
+    );
+    expect(style.glyphs).toBe('https://railatlas.eu/proxy/maptiler/fonts/{fontstack}/{range}.pbf');
   });
 });
 
