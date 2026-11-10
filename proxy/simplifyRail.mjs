@@ -1,5 +1,5 @@
-const RAIL_POINT_STEP = 4;
 const RAIL_JOIN_METERS = 80;
+const RAIL_SIMPLIFY_METERS = 4;
 
 function distanceMeters(a, b) {
   const latMeters = (b.lat - a.lat) * 111320;
@@ -8,20 +8,59 @@ function distanceMeters(a, b) {
   return Math.hypot(latMeters, lngMeters);
 }
 
-function decimatePoints(points, step = RAIL_POINT_STEP) {
+function perpendicularMeters(point, start, end) {
+  const latScale = 111320;
+  const lngScale = 111320 * Math.cos(((start.lat + end.lat) / 2) * (Math.PI / 180));
+  const ax = start.lng * lngScale;
+  const ay = start.lat * latScale;
+  const bx = end.lng * lngScale;
+  const by = end.lat * latScale;
+  const px = point.lng * lngScale;
+  const py = point.lat * latScale;
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq === 0) {
+    return Math.hypot(px - ax, py - ay);
+  }
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
+  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+}
+
+function douglasPeucker(points, epsilon) {
+  if (points.length <= 2 || epsilon <= 0) {
+    return points.map((point) => ({ lat: point.lat, lng: point.lng }));
+  }
+  let index = -1;
+  let maxDistance = 0;
+  const first = points[0];
+  const last = points[points.length - 1];
+  for (let cursor = 1; cursor < points.length - 1; cursor += 1) {
+    const distance = perpendicularMeters(points[cursor], first, last);
+    if (distance > maxDistance) {
+      maxDistance = distance;
+      index = cursor;
+    }
+  }
+  if (maxDistance > epsilon && index > 0) {
+    const left = douglasPeucker(points.slice(0, index + 1), epsilon);
+    const right = douglasPeucker(points.slice(index), epsilon);
+    return left.slice(0, -1).concat(right);
+  }
+  return [
+    { lat: first.lat, lng: first.lng },
+    { lat: last.lat, lng: last.lng },
+  ];
+}
+
+function decimatePoints(points, toleranceMeters = RAIL_SIMPLIFY_METERS) {
   if (points.length <= 2) {
     return points.map((point) => ({ lat: point.lat, lng: point.lng }));
   }
-  const kept = [];
-  for (let index = 0; index < points.length; index += step) {
-    kept.push({ lat: points[index].lat, lng: points[index].lng });
-  }
-  const last = points[points.length - 1];
-  const tail = kept[kept.length - 1];
-  if (tail.lat !== last.lat || tail.lng !== last.lng) {
-    kept.push({ lat: last.lat, lng: last.lng });
-  }
-  return kept;
+  return douglasPeucker(
+    points.map((point) => ({ lat: point.lat, lng: point.lng })),
+    toleranceMeters
+  );
 }
 
 function closestOnSegment(point, start, end) {
@@ -234,6 +273,6 @@ export function simplifyOsmPayload(payload) {
   });
   const after = ways.reduce((sum, way) => sum + way.geometry.length, 0);
   payload.simplified = true;
-  payload.simplifiedPoints = { before, after, step: RAIL_POINT_STEP };
+  payload.simplifiedPoints = { before, after, toleranceMeters: RAIL_SIMPLIFY_METERS };
   return payload;
 }

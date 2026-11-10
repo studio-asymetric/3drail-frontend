@@ -47,4 +47,6 @@ Check:
 - `/proxy` returns JSON with `"source": "proxy"`
 - `/proxy?mode=detail&train=241` returns a `stops` array
 
-Point the Coolify domain at this application. On Wedos, a specific A record has to override the old wildcard, the same way the other studio sites do.
+Point the Coolify domain at this application as **`railatlas.eu`** (no www). Also attach **`www.railatlas.eu`** to the same service so the app can 301 it to the apex host. Force HTTPS in Coolify. On Wedos, a specific A record has to override the old wildcard, the same way the other studio sites do.
+
+After deploy, submit `https://railatlas.eu/sitemap.xml` in Search Console. The file is a real XML document; `/index.html`, `http://`, and `www` 301 to `https://railatlas.eu/`.

@@ -1,7 +1,7 @@
 import {
   findOsmPath,
   rebuildNodeGrid,
-  traceWaypoints,
+  traceWaypointSegments,
   type LatLngBounds,
   type OsmGraph,
   type OsmGraphNode,
@@ -29,6 +29,7 @@ type PathfinderWorkerRequest =
       type: 'trace';
       requestId: string;
       waypoints: Coordinate[];
+      fallbackLine?: Coordinate[];
     };
 
 type PathfinderWorkerResponse =
@@ -36,6 +37,7 @@ type PathfinderWorkerResponse =
       type: 'result';
       requestId: string;
       path: Coordinate[];
+      paths?: Coordinate[][];
       durationMs: number;
       reason?: string;
     }
@@ -119,11 +121,12 @@ self.addEventListener('message', (event: MessageEvent<PathfinderWorkerRequest>) 
     }
     const startTime = performance.now();
     try {
-      const path = traceWaypoints(osmGraph, message.waypoints);
+      const paths = traceWaypointSegments(osmGraph, message.waypoints, message.fallbackLine);
       self.postMessage({
         type: 'result',
         requestId: message.requestId,
-        path,
+        path: paths[0] ?? [],
+        paths,
         durationMs: performance.now() - startTime,
       } satisfies PathfinderWorkerResponse);
     } catch (error) {

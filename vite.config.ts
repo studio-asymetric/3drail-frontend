@@ -19,10 +19,6 @@ export default defineConfig({
             if (forwardedCookie) {
               proxyReq.setHeader('Cookie', forwardedCookie as string);
             }
-            console.log(`🔄 Proxying: ${req.method} ${req.url} -> https://mapa.zsr.sk${proxyReq.path}`);
-          });
-          proxy.on('proxyRes', (proxyRes, req, _res) => {
-            console.log(`✓ Proxy response: ${proxyRes.statusCode} for ${req.url}`);
           });
         },
       },

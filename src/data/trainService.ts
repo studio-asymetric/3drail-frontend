@@ -8,6 +8,12 @@ import type {
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
 export const DEFAULT_API_KEY = import.meta.env.VITE_API_KEY ?? '';
 
+function trainLog(...args: unknown[]) {
+  if (import.meta.env.DEV && import.meta.env.VITE_TRAIN_LOGS === '1') {
+    console.log(...args);
+  }
+}
+
 // Interface matching mapa.zsr.sk response format
 interface MapaZsrTrain {
   CisloVlaku: string;
@@ -232,17 +238,74 @@ function resolveTripForTrain(
   );
 }
 
+/** Turn roster names like OSTRAVAN into Ostravan; leave already mixed names alone. */
+export function formatTrainDisplayName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    return '';
+  }
+  const letters = [...trimmed].filter((ch) => /\p{L}/u.test(ch));
+  if (letters.length === 0) {
+    return trimmed;
+  }
+  const upperCount = letters.filter(
+    (ch) => ch === ch.toUpperCase() && ch !== ch.toLowerCase()
+  ).length;
+  if (upperCount / letters.length < 0.85) {
+    return trimmed;
+  }
+  return trimmed
+    .toLocaleLowerCase('sk-SK')
+    .replace(
+      /(^|[\s\-–—(])(\p{L})/gu,
+      (_, separator: string, letter: string) =>
+        `${separator}${letter.toLocaleUpperCase('sk-SK')}`
+    );
+}
+
 export function getDelayColor(delayMinutes: number): string {
   if (delayMinutes >= 30) {
-    return '#d33b3b';
+    return '#D12F2F';
   }
   if (delayMinutes >= 10) {
-    return '#f8a82a';
+    return '#FF6E12';
   }
   if (delayMinutes > 0) {
-    return '#fddf57';
+    return '#F0B400';
   }
-  return '#4fc08d';
+  return '#1B9E6A';
+}
+
+/** Type color that stays readable on a delay fill. */
+export function contrastInk(fill: string): string {
+  const hex = fill.replace('#', '');
+  if (hex.length < 6) {
+    return '#ffffff';
+  }
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+  const linear = (channel: number) =>
+    channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  const luminance = 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+  return luminance > 0.32 ? '#1a1a1a' : '#ffffff';
+}
+
+/** Short callout on the map pill: Ex, Os, rj. */
+export function trainTypeCallout(type?: string): string {
+  const raw = (type ?? '').trim();
+  if (!raw) {
+    return '';
+  }
+  const compact = raw.replace(/\s+/g, '');
+  const key = compact.toLowerCase();
+  if (key === 'railjet') {
+    return 'rj';
+  }
+  if (key === 'regiojet') {
+    return 'RJ';
+  }
+  return compact;
 }
 
 function normalizeRoster(
@@ -277,7 +340,7 @@ export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainR
       : '/api/action';
   
   try {
-    console.log(`🚂 Fetching ${isProxy ? 'proxy' : 'live'} train data from ${endpoint}...`);
+    trainLog(`🚂 Fetching ${isProxy ? 'proxy' : 'live'} train data from ${endpoint}...`);
     
     // Use URLSearchParams to send as application/x-www-form-urlencoded (like jQuery does)
     // jQuery serializes objects, so args should be JSON stringified
@@ -296,15 +359,15 @@ export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainR
       headers,
     });
     
-    console.log(`Response status: ${res.status} ${res.statusText}`);
+    trainLog(`Response status: ${res.status} ${res.statusText}`);
     
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     }
     
     let content = await res.text();
-    console.log(`Response length: ${content.length} characters`);
-    console.log(`Response content:`, content.substring(0, 500));
+    trainLog(`Response length: ${content.length} characters`);
+    trainLog(`Response content:`, content.substring(0, 500));
     
     // Check if it's HTML (error page) instead of JSON
     if (content.trim().startsWith('<')) {
@@ -344,8 +407,8 @@ export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainR
       return [];
     }
     
-    console.log(`✓ Successfully loaded ${trains.length} trains from live mapa.zsr.sk`);
-    console.log(`Sample trains:`, trains.slice(0, 5).map(t => `${t.CisloVlaku} ${t.NazovVlaku}`));
+    trainLog(`✓ Successfully loaded ${trains.length} trains from live mapa.zsr.sk`);
+    trainLog(`Sample trains:`, trains.slice(0, 5).map(t => `${t.CisloVlaku} ${t.NazovVlaku}`));
     
     return convertTrainsToRosterItems(trains);
     
@@ -360,20 +423,20 @@ export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainR
     // Fallback: Try static file (mirror data from mapa.zsr.sk)
     // Note: Live API requires authentication token. The static file contains snapshot data.
     try {
-      console.log('🔄 API requires authentication. Trying static fallback from /gtfs/train-data.json...');
+      trainLog('🔄 API requires authentication. Trying static fallback from /gtfs/train-data.json...');
       const staticRes = await fetch('/gtfs/train-data.json', {
         cache: 'no-cache',
       });
       
-      console.log(`Static file response: ${staticRes.status} ${staticRes.statusText}`);
+      trainLog(`Static file response: ${staticRes.status} ${staticRes.statusText}`);
       
       if (!staticRes.ok) {
         throw new Error(`Static file returned ${staticRes.status}: ${staticRes.statusText}`);
       }
       
       let content = await staticRes.text();
-      console.log(`Static file content length: ${content.length} characters`);
-      console.log(`First 100 chars:`, content.substring(0, 100));
+      trainLog(`Static file content length: ${content.length} characters`);
+      trainLog(`First 100 chars:`, content.substring(0, 100));
       
       // Check if it's HTML (404 page or error)
       const trimmed = content.trim();
@@ -446,7 +509,7 @@ export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainR
       let staticData;
       try {
         staticData = JSON.parse(fixedContent);
-        console.log('✓ Successfully parsed JSON after fixing control characters');
+        trainLog('✓ Successfully parsed JSON after fixing control characters');
       } catch (parseError) {
         console.error('Failed to parse JSON even after fixing:', parseError);
         console.error('Error position:', parseError instanceof SyntaxError ? (parseError as any).message : 'unknown');
@@ -455,8 +518,8 @@ export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainR
       }
       
       if (Array.isArray(staticData) && staticData.length > 0) {
-        console.log(`✓ Using static fallback data: ${staticData.length} trains`);
-        console.log(`ℹ Note: This is snapshot data from the mirror. For live data, authentication is required.`);
+        trainLog(`✓ Using static fallback data: ${staticData.length} trains`);
+        trainLog(`ℹ Note: This is snapshot data from the mirror. For live data, authentication is required.`);
         const trains = staticData as MapaZsrTrain[];
         return convertTrainsToRosterItems(trains);
       } else {
@@ -476,24 +539,6 @@ export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainR
 function convertTrainsToRosterItems(trains: MapaZsrTrain[]): TrainRosterItem[] {
   // Convert mapa.zsr.sk format to our TrainRosterItem format
   const rosterItems: TrainRosterItem[] = trains.map((train) => {
-    // Flatten Trasa segments into a single coordinate array (keep for fallback)
-    const liveRoute: Coordinate[] = [];
-    const routeSegments: RouteSegment[] = [];
-    (train.Trasa ?? []).forEach((segment) => {
-      const points: Coordinate[] = [];
-      (segment.Value ?? []).forEach((coord) => {
-        const point = {
-          lat: coord[0],
-          lng: coord[1],
-          sequence: liveRoute.length + 1,
-        };
-        liveRoute.push(point);
-        points.push(point);
-      });
-      if (points.length > 1) {
-        routeSegments.push({ key: segment.Key, points });
-      }
-    });
     const parsedOrder =
       train.OrderCurrentStation !== undefined && train.OrderCurrentStation !== null
         ? Number(train.OrderCurrentStation)
@@ -513,8 +558,6 @@ function convertTrainsToRosterItems(trains: MapaZsrTrain[]): TrainRosterItem[] {
         timestamp: Date.now(),
       },
       timestamp: Date.now(),
-      route: liveRoute.length > 0 ? liveRoute : undefined,
-      routeSegments: routeSegments.length > 0 ? routeSegments : undefined,
       position: train.Position
         ? {
             lat: train.Position[0],
@@ -574,6 +617,8 @@ export async function fetchDelayBatch(
   return map;
 }
 
+const EMPTY_SHAPE_PATH: Coordinate[] = [];
+
 export function buildTrainRenderState(
   roster: TrainRosterItem,
   dataset: GtfsDataset,
@@ -590,137 +635,73 @@ export function buildTrainRenderState(
     return null;
   }
 
-  // The live Trasa is the path mapa.zsr.sk draws for this train.
-  // GTFS shapes stay as a fallback when that path is missing.
-  let shapePath: Coordinate[] | undefined;
-  let position: Coordinate | undefined;
-  let progress = 0.5;
-
-  if (roster.route && roster.route.length > 1) {
-    shapePath = roster.route;
-    position = roster.position;
-    if (position) {
-      let minDist = Infinity;
-      let closestIdx = 0;
-      for (let i = 0; i < shapePath.length; i++) {
-        const dist = Math.hypot(
-          shapePath[i].lat - position.lat,
-          shapePath[i].lng - position.lng
-        );
-        if (dist < minDist) {
-          minDist = dist;
-          closestIdx = i;
-        }
-      }
-      progress = closestIdx / Math.max(shapePath.length - 1, 1);
-    }
+  // Live GPS trains don't need the Trasa/GTFS polyline on the map roster.
+  if (roster.position) {
+    reportedAt = delayInfo?.timestamp ?? roster.timestamp;
+    const delayMinutes =
+      delayInfo?.delayMinutes ?? roster.trainDelay?.delayMinutes ?? 0;
+    const currentStation = delayInfo?.currentName
+      ? delayInfo.currentName
+      : findStopNameByUic(dataset, delayInfo?.currentUic);
+    return {
+      trainNumber,
+      trainName: roster.train?.name
+        ? formatTrainDisplayName(roster.train.name)
+        : undefined,
+      trainType: roster.train?.type,
+      shapePath: EMPTY_SHAPE_PATH,
+      position: roster.position,
+      progress: 0.5,
+      delayMinutes,
+      color: getDelayColor(delayMinutes),
+      nextStation: delayInfo?.nextStationName,
+      currentStation,
+      reportedAt,
+      rosterPreviousStation: roster.rosterPreviousStation,
+      rosterNextStation: roster.rosterNextStation,
+      rosterOrderCurrentStation: roster.orderCurrentStation,
+      summary: roster.summary,
+      operator: roster.operator,
+      delayText: roster.delayText,
+      actualTime: roster.actualTime,
+      plannedTime: roster.plannedTime,
+      heading: roster.heading,
+      disrupted: roster.disrupted,
+      replacementFrom: roster.replacementFrom,
+      replacementTo: roster.replacementTo,
+      note: roster.note,
+    };
   }
 
   const trip = resolveTripForTrain(dataset, trainNumber);
-  if (!shapePath && trip && trip.shapeId) {
-    const shape = dataset.shapes[trip.shapeId];
-    if (shape && shape.points.length > 0) {
-      // Use GTFS route for tracks
-      shapePath = shape.points;
-      
-      // Use live position if available, otherwise estimate from schedule + delay
-      if (roster.position) {
-        position = roster.position;
-        // Estimate progress based on live position along GTFS route
-        let minDist = Infinity;
-        let closestIdx = 0;
-        for (let i = 0; i < shapePath.length - 1; i++) {
-          const dist = Math.sqrt(
-            Math.pow(shapePath[i].lat - position.lat, 2) +
-            Math.pow(shapePath[i].lng - position.lng, 2)
-          );
-          if (dist < minDist) {
-            minDist = dist;
-            closestIdx = i;
-          }
-        }
-        progress = closestIdx / (shapePath.length - 1);
-      } else {
-        // Estimate from schedule + delay
-        reportedAt = delayInfo?.timestamp ?? roster.timestamp;
-        const delayMinutes =
-          delayInfo?.delayMinutes ?? roster.trainDelay?.delayMinutes ?? 0;
-        progress = estimateProgress(
-          trainNumber,
-          trip,
-          dataset,
-          Math.max(reportedAt, delayInfo?.timestamp ?? reportedAt),
-          delayMinutes,
-          delayInfo ?? roster.trainDelay
-        );
-        position = interpolateShape(shape.points, progress);
-      }
-    } else {
-      // GTFS shape not found, fall back to live route
-      if (roster.route && roster.route.length > 0) {
-        shapePath = roster.route;
-        position = roster.position;
-        if (position && shapePath.length > 1) {
-          let minDist = Infinity;
-          let closestIdx = 0;
-          for (let i = 0; i < shapePath.length - 1; i++) {
-            const dist = Math.sqrt(
-              Math.pow(shapePath[i].lat - position.lat, 2) +
-              Math.pow(shapePath[i].lng - position.lng, 2)
-            );
-            if (dist < minDist) {
-              minDist = dist;
-              closestIdx = i;
-            }
-          }
-          progress = closestIdx / (shapePath.length - 1);
-        }
-      } else {
-        return null; // No route data available
-      }
-    }
-  } else {
-    // No GTFS trip found, use live route
-    if (roster.route && roster.route.length > 0) {
-      shapePath = roster.route;
-      position = roster.position;
-      if (position && shapePath.length > 1) {
-        let minDist = Infinity;
-        let closestIdx = 0;
-        for (let i = 0; i < shapePath.length - 1; i++) {
-          const dist = Math.sqrt(
-            Math.pow(shapePath[i].lat - position.lat, 2) +
-            Math.pow(shapePath[i].lng - position.lng, 2)
-          );
-          if (dist < minDist) {
-            minDist = dist;
-            closestIdx = i;
-          }
-        }
-        progress = closestIdx / (shapePath.length - 1);
-      }
-    } else {
-      return null; // No route data available
-    }
-  }
-
-  if (!shapePath) {
+  const shape = trip?.shapeId ? dataset.shapes[trip.shapeId] : undefined;
+  if (!trip || !shape || shape.points.length === 0) {
     return null;
   }
 
   reportedAt = delayInfo?.timestamp ?? roster.timestamp;
   const delayMinutes =
     delayInfo?.delayMinutes ?? roster.trainDelay?.delayMinutes ?? 0;
+  const progress = estimateProgress(
+    trainNumber,
+    trip,
+    dataset,
+    Math.max(reportedAt, delayInfo?.timestamp ?? reportedAt),
+    delayMinutes,
+    delayInfo ?? roster.trainDelay
+  );
   const currentStation = delayInfo?.currentName
     ? delayInfo.currentName
     : findStopNameByUic(dataset, delayInfo?.currentUic);
 
-    return {
+  return {
     trainNumber,
-    trainName: roster.train?.name,
+    trainName: roster.train?.name
+      ? formatTrainDisplayName(roster.train.name)
+      : undefined,
     trainType: roster.train?.type,
-    shapePath,
-    position,
+    shapePath: shape.points,
+    position: interpolateShape(shape.points, progress),
     progress,
     delayMinutes,
     color: getDelayColor(delayMinutes),
@@ -730,8 +711,6 @@ export function buildTrainRenderState(
     rosterPreviousStation: roster.rosterPreviousStation,
     rosterNextStation: roster.rosterNextStation,
     rosterOrderCurrentStation: roster.orderCurrentStation,
-    liveRoute: roster.route,
-    routeSegments: roster.routeSegments,
     summary: roster.summary,
     operator: roster.operator,
     delayText: roster.delayText,
@@ -743,6 +722,50 @@ export function buildTrainRenderState(
     replacementTo: roster.replacementTo,
     note: roster.note,
   };
+}
+
+export function mergeTrainList(
+  previous: TrainRenderState[],
+  next: TrainRenderState[]
+): TrainRenderState[] {
+  if (previous.length === next.length && previous.every((train, index) => train === next[index])) {
+    return previous;
+  }
+  const prevById = new Map(previous.map((train) => [train.trainNumber, train]));
+  let changed = previous.length !== next.length;
+  const merged = next.map((train, index) => {
+    const prior = prevById.get(train.trainNumber);
+    if (prior && trainsLookEqual(prior, train)) {
+      if (previous[index] !== prior) {
+        changed = true;
+      }
+      return prior;
+    }
+    changed = true;
+    return train;
+  });
+  if (!changed && previous.length === merged.length && previous.every((train, index) => train === merged[index])) {
+    return previous;
+  }
+  return merged;
+}
+
+function trainsLookEqual(left: TrainRenderState, right: TrainRenderState): boolean {
+  return (
+    left.trainNumber === right.trainNumber &&
+    left.position?.lat === right.position?.lat &&
+    left.position?.lng === right.position?.lng &&
+    left.heading === right.heading &&
+    left.delayMinutes === right.delayMinutes &&
+    left.color === right.color &&
+    left.trainType === right.trainType &&
+    left.trainName === right.trainName &&
+    left.currentStation === right.currentStation &&
+    left.nextStation === right.nextStation &&
+    left.delayText === right.delayText &&
+    left.summary === right.summary &&
+    left.disrupted === right.disrupted
+  );
 }
 
 function dedupeTrains(roster: TrainRosterItem[]): TrainRosterItem[] {
@@ -787,10 +810,10 @@ export class TrainService {
   ): Promise<TrainRenderState[]> {
     // Fetch ALL trains from mapa.zsr.sk (not station-specific)
     const rosters = await fetchAllTrains(this.fetchConfig).catch(() => []);
-    console.log(`📦 Fetched ${rosters.length} roster items`);
+    trainLog(`📦 Fetched ${rosters.length} roster items`);
 
     const unique = dedupeTrains(rosters);
-    console.log(`🔍 After deduplication: ${unique.length} unique trains`);
+    trainLog(`🔍 After deduplication: ${unique.length} unique trains`);
 
     // Note: Delay information is already included in the train data from mapa.zsr.sk
     // No need to fetch delays separately - the roster items already contain trainDelay info
@@ -818,10 +841,10 @@ export class TrainService {
       })
       .filter((state): state is TrainRenderState => Boolean(state));
 
-    console.log(`✓ Built ${renderStates.length} render states`);
+    trainLog(`✓ Built ${renderStates.length} render states`);
     if (renderStates.length > 0) {
       const sample = renderStates[0];
-      console.log(`Sample train state:`, {
+      trainLog(`Sample train state:`, {
         trainNumber: sample.trainNumber,
         shapePathLength: sample.shapePath.length,
         hasPosition: !!sample.position,
@@ -848,6 +871,17 @@ function stopClock(stop: JourneyStop): number | null {
     clockToMs(stop.scheduledDeparture) ??
     clockToMs(stop.scheduledArrival)
   );
+}
+
+/** Passenger / timetable row — excludes výhybne and other points with no published times. */
+export function isTimedJourneyStop(stop: JourneyStop): boolean {
+  return [stop.scheduledDeparture, stop.scheduledArrival, stop.departure, stop.arrival].some(
+    (value) => /\d{1,2}:\d{2}/.test(String(value ?? ''))
+  );
+}
+
+export function filterTimedJourneyStops(stops: JourneyStop[]): JourneyStop[] {
+  return stops.filter(isTimedJourneyStop);
 }
 
 function segmentMeters(a: Coordinate, b: Coordinate): number {
@@ -904,8 +938,15 @@ function foldStationName(value: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+    .replace(/\bhl\.?\s*st\.?\b/g, 'hlavna stanica')
     .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\bn\s+/g, 'nad ')
+    .replace(/\s+/g, ' ')
     .trim();
+}
+
+function stripStationSuffix(value: string): string {
+  return value.replace(/\b(zastavka|predmestie|nakladna stanica|osobna stanica)$/g, '').trim();
 }
 
 /** One coordinate per timetable stop, matched to the GTFS station list. */
@@ -914,15 +955,25 @@ export function stationPoints(
   stations: Array<{ name: string; lat: number; lng: number }>
 ): Array<Coordinate | null> {
   const byName = new Map<string, Coordinate>();
+  const byStripped = new Map<string, Coordinate>();
   stations.forEach((station) => {
     const key = foldStationName(station.name);
-    if (key && !byName.has(key)) {
-      byName.set(key, { lat: station.lat, lng: station.lng });
+    if (!key) {
+      return;
+    }
+    const coord = { lat: station.lat, lng: station.lng };
+    if (!byName.has(key)) {
+      byName.set(key, coord);
+    }
+    const stripped = stripStationSuffix(key);
+    if (stripped && !byStripped.has(stripped)) {
+      byStripped.set(stripped, coord);
     }
   });
   return stops.map((stop, index) => {
     const key = foldStationName(stop.name);
-    const hit = byName.get(key);
+    const stripped = stripStationSuffix(key);
+    const hit = byName.get(key) ?? byName.get(stripped) ?? byStripped.get(stripped);
     return hit ? { ...hit, sequence: index } : null;
   });
 }
@@ -931,7 +982,8 @@ export function stationPoints(
 export function routeCursor(
   points: Array<Coordinate | null>,
   stops: JourneyStop[],
-  now = new Date()
+  now = new Date(),
+  delayMinutes = 0
 ): RouteCursor {
   const timed = stops
     .map((stop, index) => ({ index, time: stopClock(stop), point: points[index] ?? null }))
@@ -962,8 +1014,13 @@ export function routeCursor(
     times.push(time);
     previous = time;
   });
-  let clock = (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 1000;
+  let clock =
+    (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) * 1000 -
+    delayMinutes * 60 * 1000;
   if (clock < times[0] - 6 * 60 * 60 * 1000) {
+    clock += DAY_MS;
+  }
+  if (clock < 0) {
     clock += DAY_MS;
   }
   if (clock <= times[0]) {
@@ -1016,6 +1073,89 @@ function nearestPathIndex(path: Coordinate[], point: Coordinate): number {
     }
   }
   return best;
+}
+
+function closestOnSegment(from: Coordinate, to: Coordinate, point: Coordinate): Coordinate {
+  const abLat = to.lat - from.lat;
+  const abLng = to.lng - from.lng;
+  const span = abLat * abLat + abLng * abLng;
+  if (span <= 0) {
+    return from;
+  }
+  const t = Math.max(
+    0,
+    Math.min(1, ((point.lat - from.lat) * abLat + (point.lng - from.lng) * abLng) / span)
+  );
+  return { lat: from.lat + abLat * t, lng: from.lng + abLng * t };
+}
+
+/** Snap a live GPS point onto a traced rail polyline. */
+export function snapToPath(path: Coordinate[], point: Coordinate): Coordinate {
+  if (path.length === 0) {
+    return point;
+  }
+  if (path.length === 1) {
+    return path[0];
+  }
+  let best = path[0];
+  let bestDistance = Infinity;
+  for (let index = 1; index < path.length; index += 1) {
+    const snapped = closestOnSegment(path[index - 1], path[index], point);
+    const lat = snapped.lat - point.lat;
+    const lng = snapped.lng - point.lng;
+    const distance = lat * lat + lng * lng;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = snapped;
+    }
+  }
+  return best;
+}
+
+/** Station-to-station slice of a traced route polyline. */
+export function routeLegPath(
+  path: Coordinate[],
+  from: Coordinate,
+  to: Coordinate
+): Coordinate[] {
+  if (path.length < 2) {
+    return [from, to];
+  }
+  let startIndex = nearestPathIndex(path, from);
+  let endIndex = nearestPathIndex(path, to);
+  if (startIndex === endIndex) {
+    return [from, to];
+  }
+  if (startIndex > endIndex) {
+    const slice = path.slice(endIndex, startIndex + 1).reverse();
+    slice[0] = from;
+    slice[slice.length - 1] = to;
+    return slice;
+  }
+  const slice = path.slice(startIndex, endIndex + 1);
+  slice[0] = from;
+  slice[slice.length - 1] = to;
+  return slice;
+}
+
+/** Shortest forward slice along a leg toward the next scheduled point. */
+export function motionPathToward(
+  leg: Coordinate[],
+  from: Coordinate,
+  to: Coordinate
+): Coordinate[] {
+  if (leg.length < 2) {
+    return [from, to];
+  }
+  const startIndex = nearestPathIndex(leg, from);
+  const endIndex = nearestPathIndex(leg, to);
+  if (startIndex >= endIndex) {
+    return [from, to];
+  }
+  const slice = leg.slice(startIndex, endIndex + 1);
+  slice[0] = from;
+  slice[slice.length - 1] = to;
+  return slice.length >= 2 ? slice : [from, to];
 }
 
 /** Move along a traced rail polyline between the current pair of stations. */

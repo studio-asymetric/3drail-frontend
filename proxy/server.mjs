@@ -9,13 +9,15 @@ import {
   fetchMaptilerRails,
   fetchMaptilerRailsDisplay,
   RAIL_SHAPE_VERSION,
-  simplifyStraights,
   stitchRailNetwork,
 } from './maptilerRails.mjs';
 import { closeRailHoles, repairCachedRailTiles } from './closeRailHoles.mjs';
 import { fetchMaptilerLandcover, fetchMaptilerWater, WATER_ZOOM } from './maptilerWater.mjs';
-import { fetchBasemapTile, prefetchBasemap } from './maptilerBasemap.mjs';
+import { fetchBasemapTile } from './maptilerBasemap.mjs';
+import { fetchGeopsAsset, fetchGeopsStyle } from './geopsStyle.mjs';
 import { packRails } from './packRails.mjs';
+import { fetchStationBoard } from './cpStationBoard.mjs';
+import { ensureRailwayTunnels, mergeTunnelWays } from './osmTunnels.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -33,7 +35,9 @@ const config = {
   maptilerKey: process.env.MAPTILER_KEY ?? '',
   maptilerZoom: Number(process.env.MAPTILER_ZOOM ?? 13),
   maptilerDisplayZoom: Number(process.env.MAPTILER_DISPLAY_ZOOM ?? 14),
-  geopsKey: process.env.GEOPS_MAPS_KEY ?? '',
+  geopsKey:
+    process.env.GEOPS_MAPS_KEY ??
+    '5cc87b12d7c5370001c1d655352830d2fef24680ae3a1cda54418cb8',
 };
 
 const port = Number(process.env.PROXY_PORT ?? 3001);
@@ -43,6 +47,8 @@ const staticRoot = process.env.STATIC_ROOT
 
 const detailCache = new Map();
 const DETAIL_CACHE_MS = 60_000;
+const stationBoardCache = new Map();
+const STATION_BOARD_CACHE_MS = 45_000;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -58,9 +64,69 @@ const MIME_TYPES = {
   '.glb': 'model/gltf-binary',
   '.ico': 'image/x-icon',
   '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
+  '.pbf': 'application/x-protobuf',
   '.woff2': 'font/woff2',
   '.wasm': 'application/wasm',
 };
+
+const CANONICAL_ORIGINS = {
+  'railatlas.eu': 'https://railatlas.eu',
+  'www.railatlas.eu': 'https://railatlas.eu',
+};
+
+function hostnameOf(hostHeader) {
+  return String(hostHeader ?? '')
+    .split(':')[0]
+    .trim()
+    .toLowerCase();
+}
+
+function isLocalHostname(host) {
+  return !host || host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local');
+}
+
+function sendRedirect(res, location) {
+  res.writeHead(301, {
+    Location: location,
+    'Cache-Control': 'public, max-age=86400',
+  });
+  res.end();
+}
+
+function redirectIfNotCanonical(req, res, reqUrl) {
+  const host = hostnameOf(req.headers.host);
+  const proto = String(req.headers['x-forwarded-proto'] ?? '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  const isIndexFile = reqUrl.pathname === '/index.html' || reqUrl.pathname === '/index.htm';
+  const pathname = isIndexFile ? '/' : reqUrl.pathname;
+  const origin = CANONICAL_ORIGINS[host];
+
+  if (isLocalHostname(host)) {
+    if (isIndexFile) {
+      sendRedirect(res, `${pathname}${reqUrl.search}`);
+      return true;
+    }
+    return false;
+  }
+
+  if (!origin) {
+    if (isIndexFile) {
+      sendRedirect(res, `${pathname}${reqUrl.search}`);
+      return true;
+    }
+    return false;
+  }
+
+  const needsRedirect = host.startsWith('www.') || proto === 'http' || isIndexFile;
+  if (!needsRedirect) {
+    return false;
+  }
+  sendRedirect(res, `${origin}${pathname}${reqUrl.search}`);
+  return true;
+}
 
 function logMessage(message) {
   const line = `[${new Date().toISOString()}] ${message}\n`;
@@ -85,9 +151,7 @@ function writeJson(filePath, value) {
   fs.writeFileSync(filePath, JSON.stringify(value));
 }
 
-const NETWORK_PACK_NAME = 'network_v2.rnet.gz';
-const NETWORK_STRAIGHT_METERS = 25;
-const NETWORK_CURVE_METERS = 8;
+const NETWORK_PACK_NAME = 'network_v10.rnet.gz';
 const SLOVAKIA_NETWORK_BOUNDS = {
   minLat: 47.7311798,
   maxLat: 49.6138162,
@@ -121,17 +185,20 @@ function sendJson(res, statusCode, payload, meta) {
   sendCompressed(res, statusCode, body, 'application/json; charset=utf-8');
 }
 
-function collectCoarseWays() {
+function collectCachedWays(prefix) {
   const byId = new Map();
   if (!fs.existsSync(config.osmCacheDir)) {
     return [];
   }
   const files = fs.readdirSync(config.osmCacheDir).filter(
-    (file) => file.startsWith('coarse_') && file.endsWith('.json')
+    (file) => file.startsWith(prefix) && file.endsWith('.json')
   );
   files.forEach((file) => {
-    const payload = storedTile(path.join(config.osmCacheDir, file));
-    if (!payload) {
+    const payload = readJson(path.join(config.osmCacheDir, file), null);
+    if (!payload || !Array.isArray(payload.elements)) {
+      return;
+    }
+    if (payload.shapeVersion !== RAIL_SHAPE_VERSION) {
       return;
     }
     payload.elements.forEach((way) => {
@@ -148,6 +215,13 @@ function collectCoarseWays() {
   return Array.from(byId.values());
 }
 
+function collectCoarseWays() {
+  return collectCachedWays('coarse_').filter((way) => {
+    const railway = way.tags?.railway ?? 'rail';
+    return railway === 'rail' || railway === 'narrow_gauge';
+  });
+}
+
 function sealNetwork(ways) {
   const stitched = stitchRailNetwork(ways);
   return closeRailHoles(stitched, { skipEdges: false });
@@ -155,32 +229,39 @@ function sealNetwork(ways) {
 
 async function buildNetworkPack() {
   fs.mkdirSync(config.osmCacheDir, { recursive: true });
+  logMessage('Building simplified network pack');
   let ways = collectCoarseWays();
-  if (ways.length === 0 && config.maptilerKey) {
+  if (ways.length === 0) {
     const maptiler = await fetchMaptilerRails(
       SLOVAKIA_NETWORK_BOUNDS,
       config.osmCacheDir,
       config.maptilerKey,
-      config.maptilerZoom
+      config.maptilerZoom,
+      { skipSimplify: true }
     );
     ways = maptiler.elements ?? [];
+    logMessage(
+      `Loaded ${ways.length} MapTiler ways for network pack (${maptiler.maptilerTiles ?? 0} tiles, ${maptiler.missingTiles ?? 0} missing)`
+    );
+  } else {
+    logMessage(`Loaded ${ways.length} cached coarse ways for network pack`);
   }
-  const sealed = sealNetwork(ways);
-  const shaped = simplifyStraights(sealed.elements, {
-    straightMeters: NETWORK_STRAIGHT_METERS,
-    curveMeters: NETWORK_CURVE_METERS,
-  });
-  const resealed = sealNetwork(shaped.elements);
-  const packed = packRails(resealed.elements);
+  const tunnels = await loadRailwayTunnels();
+  const sealed = sealNetwork(mergeTunnelWays(ways, tunnels, SLOVAKIA_NETWORK_BOUNDS));
+  const packed = packRails(sealed.elements);
   const gzipped = zlib.gzipSync(Buffer.from(packed.buffer, packed.byteOffset, packed.byteLength), {
     level: 9,
   });
   const packPath = path.join(config.osmCacheDir, NETWORK_PACK_NAME);
   fs.writeFileSync(packPath, gzipped);
-  logMessage(
-    `Packed simplified network: ${resealed.elements.length} ways, ${shaped.before} points to ${shaped.after}, holes ${resealed.found} found / ${resealed.closed} closed / ${resealed.remaining} left, ${gzipped.length} gzip bytes`
+  const pointCount = sealed.elements.reduce(
+    (sum, way) => sum + (way.geometry?.length ?? 0),
+    0
   );
-  return { packPath, gzipped, wayCount: resealed.elements.length, pointsAfter: shaped.after };
+  logMessage(
+    `Packed simplified network: ${sealed.elements.length} ways, ${pointCount} points, holes ${sealed.found} found / ${sealed.closed} closed / ${sealed.remaining} left, ${gzipped.length} gzip bytes`
+  );
+  return { packPath, gzipped, wayCount: sealed.elements.length, pointsAfter: pointCount };
 }
 
 function networkPackPath() {
@@ -359,9 +440,31 @@ function blockOverpass(status) {
   logMessage(`Overpass paused for ${Math.round(waitMs / 60000)} min after HTTP ${status}`);
 }
 
+function loadRailwayTunnels() {
+  return ensureRailwayTunnels({
+    cacheDir: config.osmCacheDir,
+    endpoint: config.osmEndpoint,
+    timeout: Math.max(config.osmTimeout, 90),
+    allowed: overpassAllowed,
+    block: blockOverpass,
+    log: logMessage,
+  });
+}
+
+async function withRailwayTunnels(payload, bounds) {
+  const tunnels = await loadRailwayTunnels();
+  return {
+    ...payload,
+    elements: mergeTunnelWays(payload.elements ?? [], tunnels, bounds),
+  };
+}
+
 function isUsableDisplayCache(cached) {
   if (!cached || !Array.isArray(cached.elements)) {
     return false;
+  }
+  if (cached.elements.length === 0) {
+    return !config.maptilerKey;
   }
   if (cached.source === 'overpass-display') {
     return true;
@@ -372,7 +475,53 @@ function isUsableDisplayCache(cached) {
   );
 }
 
+let displayIndexCache = null;
+
+function parseDisplayCacheBounds(file) {
+  const match = /^display_([^_]+)_([^_]+)_([^_]+)_([^_]+)\.json$/.exec(file);
+  if (!match) {
+    return null;
+  }
+  const num = (value) => Number(String(value).replace(/^m/, '-'));
+  const minLat = num(match[1]);
+  const minLng = num(match[2]);
+  const maxLat = num(match[3]);
+  const maxLng = num(match[4]);
+  if (![minLat, minLng, maxLat, maxLng].every(Number.isFinite)) {
+    return null;
+  }
+  return { minLat, minLng, maxLat, maxLng };
+}
+
+function listDisplayIndex() {
+  if (displayIndexCache) {
+    return displayIndexCache;
+  }
+  if (!fs.existsSync(config.osmCacheDir)) {
+    displayIndexCache = [];
+    return displayIndexCache;
+  }
+  const tiles = [];
+  for (const file of fs.readdirSync(config.osmCacheDir)) {
+    if (!file.startsWith('display_') || !file.endsWith('.json')) {
+      continue;
+    }
+    const bounds = parseDisplayCacheBounds(file);
+    if (!bounds) {
+      continue;
+    }
+    const cached = readJson(path.join(config.osmCacheDir, file), null);
+    if (!isUsableDisplayCache(cached) || (cached.elements?.length ?? 0) === 0) {
+      continue;
+    }
+    tiles.push(bounds);
+  }
+  displayIndexCache = tiles;
+  return tiles;
+}
+
 function writeDisplayCache(cacheFile, payload) {
+  displayIndexCache = null;
   fs.writeFileSync(cacheFile, JSON.stringify(payload));
 }
 
@@ -463,6 +612,12 @@ async function handleOsm(reqUrl, res) {
     }
   }
 
+  if (level === 'display-index') {
+    const tiles = listDisplayIndex();
+    sendJson(res, 200, { tiles }, { status: 'index', count: tiles.length });
+    return;
+  }
+
   const minLat = Number(reqUrl.searchParams.get('minLat'));
   const maxLat = Number(reqUrl.searchParams.get('maxLat'));
   const minLng = Number(reqUrl.searchParams.get('minLng'));
@@ -479,9 +634,17 @@ async function handleOsm(reqUrl, res) {
     const tileKey = buildOsmTileKey('display', bounds);
     const cacheFile = path.join(config.osmCacheDir, `${tileKey}.json`);
     const cached = readJson(cacheFile, null);
+    const cacheOnly = reqUrl.searchParams.get('cacheOnly') === '1';
     if (isUsableDisplayCache(cached)) {
-      logMessage(`Serving cached display rails ${tileKey} (${cached.source})`);
-      sendJson(res, 200, cached, { tileKey, status: 'cached' });
+      const withTunnels = await withRailwayTunnels(cached, bounds);
+      logMessage(
+        `Serving cached display rails ${tileKey} (${cached.source}), ${withTunnels.elements.length} ways`
+      );
+      sendJson(res, 200, withTunnels, { tileKey, status: 'cached' });
+      return;
+    }
+    if (cacheOnly) {
+      sendJson(res, 200, { elements: [] }, { tileKey, status: 'miss' });
       return;
     }
     try {
@@ -491,17 +654,21 @@ async function handleOsm(reqUrl, res) {
           return latest;
         }
         if (!config.maptilerKey) {
-          const empty = {
+          return {
             elements: [],
             source: 'maptiler-display',
             maptilerZoom: config.maptilerDisplayZoom,
             collapsed: false,
           };
-          writeDisplayCache(cacheFile, empty);
-          return empty;
         }
+        const padded = {
+          minLat: bounds.minLat - 0.012,
+          maxLat: bounds.maxLat + 0.012,
+          minLng: bounds.minLng - 0.012,
+          maxLng: bounds.maxLng + 0.012,
+        };
         const maptiler = await fetchMaptilerRailsDisplay(
-          bounds,
+          padded,
           config.osmCacheDir,
           config.maptilerKey,
           config.maptilerDisplayZoom
@@ -512,13 +679,16 @@ async function handleOsm(reqUrl, res) {
           collapsed: false,
           simplified: false,
         };
-        writeDisplayCache(cacheFile, payload);
+        if ((payload.elements?.length ?? 0) > 0) {
+          writeDisplayCache(cacheFile, payload);
+        }
         return payload;
       });
+      const withTunnels = await withRailwayTunnels(display, bounds);
       logMessage(
-        `Fetched display rails ${tileKey}: ${display.elements?.length ?? 0} ways (${display.source})`
+        `Fetched display rails ${tileKey}: ${withTunnels.elements?.length ?? 0} ways (${display.source})`
       );
-      sendJson(res, 200, display, { tileKey, status: 'display' });
+      sendJson(res, 200, withTunnels, { tileKey, status: 'display' });
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -644,6 +814,66 @@ async function handleWater(res) {
     logMessage(`Water fetch failed: ${message}`);
     sendJson(res, 502, { error: message, polygons: [] });
   }
+}
+
+async function handleStyle(reqUrl, res) {
+  if (!config.geopsKey) {
+    sendJson(res, 503, { error: 'GEOPS_MAPS_KEY missing' });
+    return;
+  }
+  const theme = reqUrl.searchParams.get('theme') === 'light' ? 'light' : 'dark';
+  try {
+    const style = await fetchGeopsStyle(config.geopsKey, config.osmCacheDir, theme);
+    sendJson(res, 200, style);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logMessage(`geOps ${theme} style failed: ${message}`);
+    sendJson(res, 502, { error: message });
+  }
+}
+
+function geopsPathFromRequest(reqUrl) {
+  const fromQuery = reqUrl.searchParams.get('u');
+  if (fromQuery) {
+    return fromQuery;
+  }
+  const pathname = reqUrl.pathname;
+  for (const prefix of ['/proxy/geops', '/geops']) {
+    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) {
+      return pathname.slice(prefix.length) || '/';
+    }
+  }
+  return null;
+}
+
+async function handleGeops(reqUrl, res) {
+  const pathname = geopsPathFromRequest(reqUrl);
+  const asset = await fetchGeopsAsset(config.osmCacheDir, config.geopsKey, pathname);
+  if (!asset) {
+    sendJson(res, 404, { error: 'geOps asset missing' });
+    return;
+  }
+  if (asset.json) {
+    sendJson(res, 200, asset.json);
+    return;
+  }
+  const type = pathname.endsWith('.pbf')
+    ? 'application/x-protobuf'
+    : pathname.endsWith('.png')
+      ? 'image/png'
+      : pathname.endsWith('.jpg') || pathname.endsWith('.jpeg')
+        ? 'image/jpeg'
+        : pathname.endsWith('.webp')
+          ? 'image/webp'
+          : pathname.endsWith('.json')
+            ? 'application/json; charset=utf-8'
+            : 'application/octet-stream';
+  res.writeHead(200, {
+    'Content-Type': type,
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'public, max-age=31536000, immutable',
+  });
+  res.end(asset.buffer);
 }
 
 async function handleBasemap(reqUrl, res) {
@@ -783,6 +1013,31 @@ async function handleDetail(reqUrl, res) {
   }
 }
 
+async function handleStationBoard(reqUrl, res) {
+  const station = (reqUrl.searchParams.get('station') ?? reqUrl.searchParams.get('f') ?? '').trim();
+  const arrivals = reqUrl.searchParams.get('byarr') === 'true' || reqUrl.searchParams.get('arrivals') === '1';
+  if (!station || station.length > 120) {
+    sendJson(res, 400, { error: 'Missing station', rows: [] });
+    return;
+  }
+  const cacheKey = `${arrivals ? 'arr' : 'dep'}:${station.toLowerCase()}`;
+  const cached = stationBoardCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < STATION_BOARD_CACHE_MS) {
+    sendJson(res, 200, { ...cached.payload, status: 'cached' });
+    return;
+  }
+  try {
+    const payload = await fetchStationBoard(station, arrivals);
+    stationBoardCache.set(cacheKey, { at: Date.now(), payload });
+    logMessage(`Station board ${arrivals ? 'arrivals' : 'departures'} for ${station}: ${payload.rows.length} rows`);
+    sendJson(res, 200, payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logMessage(`Station board failed for ${station}: ${message}`);
+    sendJson(res, 502, { error: message, station, arrivals, rows: [] });
+  }
+}
+
 function isProxyRequest(reqUrl) {
   if (!staticRoot) {
     return true;
@@ -798,11 +1053,15 @@ function serveStatic(reqUrl, res) {
     return;
   }
 
-  const candidate = fs.existsSync(filePath) && fs.statSync(filePath).isFile()
+  const hasFile = fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+  const hasExtension = path.extname(requested) !== '';
+  const candidate = hasFile
     ? filePath
-    : path.join(staticRoot, 'index.html');
+    : hasExtension
+      ? null
+      : path.join(staticRoot, 'index.html');
 
-  if (!fs.existsSync(candidate)) {
+  if (!candidate || !fs.existsSync(candidate)) {
     sendJson(res, 404, { error: 'Not found' });
     return;
   }
@@ -815,6 +1074,9 @@ function serveStatic(reqUrl, res) {
 const server = http.createServer(async (req, res) => {
   try {
     const reqUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    if (redirectIfNotCanonical(req, res, reqUrl)) {
+      return;
+    }
 
     if (!isProxyRequest(reqUrl)) {
       serveStatic(reqUrl, res);
@@ -834,12 +1096,24 @@ const server = http.createServer(async (req, res) => {
       await handleLandcover(res);
       return;
     }
+    if (mode === 'style') {
+      await handleStyle(reqUrl, res);
+      return;
+    }
+    if (mode === 'geops' || geopsPathFromRequest(reqUrl)) {
+      await handleGeops(reqUrl, res);
+      return;
+    }
     if (mode === 'basemap') {
       await handleBasemap(reqUrl, res);
       return;
     }
     if (mode === 'detail') {
       await handleDetail(reqUrl, res);
+      return;
+    }
+    if (mode === 'station') {
+      await handleStationBoard(reqUrl, res);
       return;
     }
 
@@ -856,12 +1130,20 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, '0.0.0.0', () => {
   fs.mkdirSync(config.osmCacheDir, { recursive: true });
   console.log(`3D Railmap proxy listening on http://0.0.0.0:${port}`);
-  prefetchBasemap(config.osmCacheDir, config.geopsKey)
-    .then((result) => {
-      logMessage(`Prefetched ${result.tiles} basemap tiles`);
+  fetchGeopsStyle(config.geopsKey, config.osmCacheDir, 'dark')
+    .then(() => {
+      logMessage('Cached geOps dark style');
     })
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error);
-      logMessage(`Basemap prefetch failed: ${message}`);
+      logMessage(`geOps dark style prefetch failed: ${message}`);
+    });
+  fetchGeopsStyle(config.geopsKey, config.osmCacheDir, 'light')
+    .then(() => {
+      logMessage('Cached geOps light style');
+    })
+    .catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      logMessage(`geOps light style prefetch failed: ${message}`);
     });
 });

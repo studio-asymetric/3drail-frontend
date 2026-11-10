@@ -73,7 +73,10 @@ const MAINLINE_RAILWAY = new Set([
   'funicular',
 ]);
 
+const TRANSIT_RAILWAY = new Set(['tram', 'light_rail', 'subway', 'funicular', 'monorail']);
+const PATHFINDING_RAILWAY = new Set(['rail', 'narrow_gauge']);
 const YARD_SERVICE = new Set(['spur', 'siding', 'yard', 'crossover', 'driveway']);
+const PATH_EXCLUDED_SERVICE = new Set(['spur', 'siding', 'yard', 'driveway']);
 const NON_MAINLINE_USAGE = new Set(['industrial', 'military', 'test', 'tourism']);
 
 /** Same cut as the geographic base map: through lines only, not sidings or yards. */
@@ -88,9 +91,35 @@ export function isMainlineWay(way: OSMWay): boolean {
   return true;
 }
 
+export function isTransitRailway(way: OSMWay): boolean {
+  return TRANSIT_RAILWAY.has(way.tags?.railway ?? '');
+}
+
+/** Through rail and Tatra metre-gauge lines. No trams, yards, or industrial spurs. Crossovers stay so parallel tracks can meet. */
+export function isPathfindingWay(way: OSMWay): boolean {
+  if (!PATHFINDING_RAILWAY.has(way.tags?.railway ?? 'rail')) {
+    return false;
+  }
+  if (PATH_EXCLUDED_SERVICE.has(way.tags?.service ?? '')) {
+    return false;
+  }
+  if (NON_MAINLINE_USAGE.has(way.tags?.usage ?? '')) {
+    return false;
+  }
+  return true;
+}
+
 /** Station yards, sidings, spurs, and industrial tracks. */
 export function isSideRailwayTrack(way: OSMWay): boolean {
   return YARD_SERVICE.has(way.tags?.service ?? '') || NON_MAINLINE_USAGE.has(way.tags?.usage ?? '');
+}
+
+/** mapa.zsr.sk-style close-up: through rail only, no yards, tram, or industrial spurs. */
+export function isDetailDisplayWay(way: OSMWay): boolean {
+  if (!PATHFINDING_RAILWAY.has(way.tags?.railway ?? 'rail')) {
+    return false;
+  }
+  return !isSideRailwayTrack(way);
 }
 
 export interface OsmFetchResult {
@@ -100,13 +129,13 @@ export interface OsmFetchResult {
 
 export async function fetchSimplifiedNetwork(): Promise<OsmFetchResult> {
   try {
-    const response = await fetch('/proxy?mode=osm&level=network');
+    const response = await fetch('/proxy?mode=osm&level=network&v=10');
     if (!response.ok) {
       throw new Error(`Proxy network fetch failed: ${response.status}`);
     }
     const buffer = await response.arrayBuffer();
-    const ways = (unpackRails(new Uint8Array(buffer)) as OSMWay[]).filter((way) =>
-      isMainlineWay(way)
+    const ways = (unpackRails(new Uint8Array(buffer)) as OSMWay[]).filter(
+      (way) => isMainlineWay(way) || isSideRailwayTrack(way)
     );
     return {
       ways,
@@ -118,11 +147,33 @@ export async function fetchSimplifiedNetwork(): Promise<OsmFetchResult> {
   }
 }
 
+export interface DisplayRailTile {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+}
+
+export async function fetchDisplayRailIndex(): Promise<DisplayRailTile[]> {
+  try {
+    const response = await fetch('/proxy?mode=osm&level=display-index');
+    if (!response.ok) {
+      throw new Error(`Proxy display index failed: ${response.status}`);
+    }
+    const data = (await response.json()) as { tiles?: DisplayRailTile[] };
+    return Array.isArray(data.tiles) ? data.tiles : [];
+  } catch (error) {
+    console.error('Failed to fetch display rail index:', error);
+    return [];
+  }
+}
+
 export async function fetchDisplayRailsInBounds(
   minLat: number,
   maxLat: number,
   minLng: number,
-  maxLng: number
+  maxLng: number,
+  cacheOnly = false
 ): Promise<OsmFetchResult> {
   const query = new URLSearchParams({
     minLat: minLat.toString(),
@@ -131,15 +182,20 @@ export async function fetchDisplayRailsInBounds(
     maxLng: maxLng.toString(),
     level: 'display',
   });
+  if (cacheOnly) {
+    query.set('cacheOnly', '1');
+  }
   try {
     const response = await fetch(`/proxy?mode=osm&${query.toString()}`);
     if (!response.ok) {
       throw new Error(`Proxy display rail fetch failed: ${response.status}`);
     }
-    const data: OSMResponse = await response.json();
-    const ways = data.elements.filter(
-      (el): el is OSMWay =>
-        el.type === 'way' && MAINLINE_RAILWAY.has(el.tags?.railway ?? '')
+    const data = (await response.json()) as OSMResponse & { __proxy_meta?: OsmProxyMeta };
+    if (data.__proxy_meta?.status === 'miss') {
+      return { ways: [], meta: data.__proxy_meta };
+    }
+    const ways = (data.elements ?? []).filter(
+      (el): el is OSMWay => el.type === 'way' && isDetailDisplayWay(el)
     );
     return { ways, meta: data.__proxy_meta };
   } catch (error) {

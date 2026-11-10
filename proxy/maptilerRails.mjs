@@ -44,6 +44,33 @@ function railwayTag(properties) {
   return 'rail';
 }
 
+function isRailFeature(properties) {
+  const kind = properties.class;
+  const subclass = String(properties.subclass ?? '');
+  return (
+    kind === 'rail' ||
+    kind === 'transit' ||
+    subclass === 'rail' ||
+    subclass === 'narrow_gauge' ||
+    subclass === 'subway' ||
+    subclass === 'light_rail' ||
+    subclass === 'tram' ||
+    subclass === 'funicular' ||
+    subclass === 'monorail'
+  );
+}
+
+function railTags(properties) {
+  const tags = { railway: railwayTag(properties) };
+  if (properties.brunnel === 'tunnel' || properties.tunnel === true || properties.tunnel === 'yes') {
+    tags.tunnel = 'yes';
+  }
+  if (properties.brunnel === 'bridge' || properties.bridge === true || properties.bridge === 'yes') {
+    tags.bridge = 'yes';
+  }
+  return tags;
+}
+
 function waysFromTile(buffer, zoom, tileX, tileY) {
   const tile = new VectorTile(new PbfReader(buffer));
   const layer = tile.layers.transportation;
@@ -53,8 +80,7 @@ function waysFromTile(buffer, zoom, tileX, tileY) {
   const ways = [];
   for (let index = 0; index < layer.length; index += 1) {
     const feature = layer.feature(index);
-    const kind = feature.properties.class;
-    if (kind !== 'rail' && kind !== 'transit') {
+    if (!isRailFeature(feature.properties)) {
       continue;
     }
     const rings = feature.loadGeometry();
@@ -65,7 +91,7 @@ function waysFromTile(buffer, zoom, tileX, tileY) {
       ways.push({
         type: 'way',
         id: (tileX * 100000 + tileY) * 1000 + index * 10 + ringIndex,
-        tags: { railway: railwayTag(feature.properties) },
+        tags: railTags(feature.properties),
         geometry: ring.map((point) => pointToLatLng(zoom, tileX, tileY, layer.extent, point)),
       });
     });
@@ -141,9 +167,12 @@ async function loadVectorTile(cacheDir, zoom, tileX, tileY, apiKey) {
 }
 
 const PAIR_MIN_METERS = 1.5;
-const PAIR_MAX_METERS = 28;
-const PAIR_ANGLE_DEGREES = 28;
-export const RAIL_SHAPE_VERSION = 6;
+const PAIR_MAX_METERS = 24;
+const PAIR_ANGLE_DEGREES = 20;
+const PAIR_MIN_MATCH_METERS = 300;
+const PAIR_MIN_BOTH_COVERAGE = 0.45;
+const PAIR_LOOP_MATCH_METERS = 520;
+export const RAIL_SHAPE_VERSION = 8;
 
 function metersBetween(a, b) {
   const lat = (b.lat - a.lat) * 111320;
@@ -315,14 +344,21 @@ export function collapseDoubleTracks(ways) {
       const rightHits = parallelHits(lines[other], line);
       const leftCoverage = leftHits.length / line.length;
       const rightCoverage = rightHits.length / lines[other].length;
-      const coverage = Math.max(leftCoverage, rightCoverage);
       const distances = (leftCoverage >= rightCoverage ? leftHits : rightHits).map((hit) => hit.distance);
-      if (coverage < 0.52 || distances.length < 2) {
+      if (distances.length < 2) {
         return;
       }
       const matchedLine = leftCoverage >= rightCoverage ? line : lines[other];
       const matchedMeters = (distances.length / matchedLine.length) * lineLength(matchedLine);
-      if (matchedMeters < 40) {
+      const minCoverage = Math.min(leftCoverage, rightCoverage);
+      const maxCoverage = Math.max(leftCoverage, rightCoverage);
+      const shorterMeters = Math.min(lineLength(line), lineLength(lines[other]));
+      const longDoubleTrack = minCoverage >= PAIR_MIN_BOTH_COVERAGE && matchedMeters >= PAIR_MIN_MATCH_METERS;
+      const longPassingLoop =
+        maxCoverage >= 0.85 &&
+        matchedMeters >= PAIR_LOOP_MATCH_METERS &&
+        matchedMeters >= shorterMeters * 0.7;
+      if (!longDoubleTrack && !longPassingLoop) {
         return;
       }
       unite(index, other);
@@ -423,8 +459,8 @@ export function collapseDoubleTracks(ways) {
   return { elements, before: ways.length, after: elements.length };
 }
 
-const STRAIGHT_TOLERANCE_METERS = 5;
-const CURVE_TOLERANCE_METERS = 1.5;
+const STRAIGHT_TOLERANCE_METERS = 1.4;
+const CURVE_TOLERANCE_METERS = 0.45;
 const STRAIGHT_HEADING_DEGREES = 4;
 const END_SNAP_METERS = 30;
 const SEGMENT_JOIN_METERS = 45;
@@ -878,8 +914,12 @@ async function mapLimit(items, limit, worker) {
   return results;
 }
 
+function countWayPoints(ways) {
+  return ways.reduce((sum, way) => sum + (way.geometry?.length ?? 0), 0);
+}
+
 /** The black lines from mapa.zsr.sk: MapTiler planet tiles, transportation class rail or transit. */
-export async function fetchMaptilerRails(bounds, cacheDir, apiKey, zoom = 13) {
+export async function fetchMaptilerRails(bounds, cacheDir, apiKey, zoom = 13, options = {}) {
   fs.mkdirSync(cacheDir, { recursive: true });
   const range = tileRange(bounds, zoom);
   const tiles = [];
@@ -888,16 +928,20 @@ export async function fetchMaptilerRails(bounds, cacheDir, apiKey, zoom = 13) {
       tiles.push([x, y]);
     }
   }
+  console.log(`MapTiler rails: reading ${tiles.length} tiles at z${zoom}`);
   const groups = await mapLimit(tiles, 4, ([x, y]) => loadVectorTile(cacheDir, zoom, x, y, apiKey));
   const missingTiles = groups.filter((group) => !group.ok).length;
+  console.log(`MapTiler rails: loaded ${groups.filter((group) => group.ok).length}/${tiles.length} tiles, collapsing tracks`);
   const collapsed = collapseDoubleTracks(groups.flatMap((group) => group.ways));
   const joined = stitchRailNetwork(collapsed.elements);
-  const shaped = simplifyStraights(joined);
+  const shaped = options.skipSimplify
+    ? { elements: joined, before: countWayPoints(joined), after: countWayPoints(joined) }
+    : simplifyStraights(joined, options);
   const stitched = stitchRailNetwork(shaped.elements);
   const holes = closeRailHoles(stitched, { bounds, skipEdges: true });
   return {
     elements: holes.elements,
-    simplified: true,
+    simplified: options.skipSimplify ? false : true,
     collapsed: true,
     collapsedFrom: collapsed.before,
     collapsedTo: collapsed.after,

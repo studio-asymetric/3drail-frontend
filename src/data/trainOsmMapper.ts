@@ -1,7 +1,7 @@
 // Service to match trains from mapa.zsr.sk to OpenStreetMap railway routes
 
 import type { TrainRenderState } from './trainService';
-import type { OSMWay } from './osmRailService';
+import { isPathfindingWay, type OSMWay } from './osmRailService';
 import type { Coordinate } from './gtfsParser';
 
 export interface MatchedRoute {
@@ -58,99 +58,128 @@ function pointToLineDistance(
   return haversineDistance(point, { lat: projLat, lng: projLng });
 }
 
-const NODE_KEY_PRECISION = 6;
-const NODE_SNAP_TOLERANCE_METERS = 20;
-const RELAXED_SEARCH_METERS = 100;
-const ENDPOINT_BRIDGE_TOLERANCE_METERS = 60;
-const NODE_GRID_LAT_DEG = NODE_SNAP_TOLERANCE_METERS / 111000;
-const NODE_GRID_LNG_DEG = NODE_GRID_LAT_DEG;
-const BRIDGE_TOLERANCE_METERS = 25;
+const NODE_KEY_PRECISION = 5;
+const NODE_GRID_METERS = 50;
+const EDGE_GRID_METERS = 140;
+const RELAXED_SEARCH_METERS = 250;
+const ENDPOINT_BRIDGE_TOLERANCE_METERS = 420;
+const TINY_BRIDGE_METERS = 8;
+const MAX_DETOUR_RATIO = 10;
+const MIN_PATH_LIMIT_METERS = 400;
 const nodeGrid = new Map<string, Set<string>>();
+const edgeGrid = new Map<string, Set<string>>();
+
+export interface OsmGraphNode {
+  key: string;
+  lat: number;
+  lng: number;
+  neighbors: Map<string, number>;
+}
+
+export type OsmGraph = Map<string, OsmGraphNode>;
+
+type RailAnchor = {
+  lat: number;
+  lng: number;
+  nodes: string[];
+  distance: number;
+};
+
+function metersToLat(meters: number): number {
+  return meters / 111320;
+}
+
+function metersToLng(meters: number, lat: number): number {
+  return meters / (111320 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)));
+}
 
 function formatNodeKey(lat: number, lng: number): string {
   return `${lat.toFixed(NODE_KEY_PRECISION)}:${lng.toFixed(NODE_KEY_PRECISION)}`;
 }
 
 function snapLatLng(lat: number, lng: number): { lat: number; lng: number } {
-  const latDelta = NODE_SNAP_TOLERANCE_METERS / 111000;
-  const snappedLat = Math.round(lat / latDelta) * latDelta;
-  const averageLatRad = snappedLat * Math.PI / 180;
-  const lngScale = Math.abs(
-    111412.84 * Math.cos(averageLatRad) -
-      93.5 * Math.cos(3 * averageLatRad)
-  );
-  const lngDelta =
-    lngScale === 0 ? NODE_SNAP_TOLERANCE_METERS / 111000 : NODE_SNAP_TOLERANCE_METERS / lngScale;
-  const snappedLng = Math.round(lng / lngDelta) * lngDelta;
-  return { lat: snappedLat, lng: snappedLng };
+  return {
+    lat: Number(lat.toFixed(NODE_KEY_PRECISION)),
+    lng: Number(lng.toFixed(NODE_KEY_PRECISION)),
+  };
 }
 
-function cellKey(lat: number, lng: number): string {
-  const row = Math.floor(lat / NODE_GRID_LAT_DEG);
-  const col = Math.floor(lng / NODE_GRID_LNG_DEG);
+function cellKey(lat: number, lng: number, meters: number): string {
+  const row = Math.floor(lat / metersToLat(meters));
+  const col = Math.floor(lng / metersToLng(meters, lat));
   return `${row}:${col}`;
 }
 
-function registerNodeToGrid(node: OsmGraphNode): void {
-  const key = cellKey(node.lat, node.lng);
-  if (!nodeGrid.has(key)) {
-    nodeGrid.set(key, new Set());
-  }
-  nodeGrid.get(key)!.add(node.key);
+function edgeId(left: string, right: string): string {
+  return left < right ? `${left}|${right}` : `${right}|${left}`;
 }
 
-function getNearbyNodeKeys(lat: number, lng: number): Set<string> {
-  const centerRow = Math.floor(lat / NODE_GRID_LAT_DEG);
-  const centerCol = Math.floor(lng / NODE_GRID_LNG_DEG);
+function registerNodeToGrid(node: OsmGraphNode): void {
+  const key = cellKey(node.lat, node.lng, NODE_GRID_METERS);
+  const bucket = nodeGrid.get(key) ?? new Set<string>();
+  bucket.add(node.key);
+  nodeGrid.set(key, bucket);
+}
+
+function registerEdgeToGrid(left: OsmGraphNode, right: OsmGraphNode): void {
+  const id = edgeId(left.key, right.key);
+  const length = haversineDistance(left, right);
+  const steps = Math.max(1, Math.ceil(length / EDGE_GRID_METERS));
+  for (let index = 0; index <= steps; index += 1) {
+    const t = index / steps;
+    const lat = left.lat + (right.lat - left.lat) * t;
+    const lng = left.lng + (right.lng - left.lng) * t;
+    const key = cellKey(lat, lng, EDGE_GRID_METERS);
+    const bucket = edgeGrid.get(key) ?? new Set<string>();
+    bucket.add(id);
+    edgeGrid.set(key, bucket);
+  }
+}
+
+function getNearbyKeys(
+  grid: Map<string, Set<string>>,
+  lat: number,
+  lng: number,
+  meters: number,
+  radius: number
+): Set<string> {
+  const center = cellKey(lat, lng, meters);
+  const [centerRow, centerCol] = center.split(':').map(Number);
   const result = new Set<string>();
-  for (let dr = -1; dr <= 1; dr++) {
-    for (let dc = -1; dc <= 1; dc++) {
-      const key = `${centerRow + dr}:${centerCol + dc}`;
-      const set = nodeGrid.get(key);
-      if (set) {
-        set.forEach((nodeKey) => result.add(nodeKey));
-      }
+  for (let rowOffset = -radius; rowOffset <= radius; rowOffset += 1) {
+    for (let colOffset = -radius; colOffset <= radius; colOffset += 1) {
+      const bucket = grid.get(`${centerRow + rowOffset}:${centerCol + colOffset}`);
+      bucket?.forEach((value) => result.add(value));
     }
   }
   return result;
 }
 
-function connectNearbyNodes(graph: OsmGraph, node: OsmGraphNode): void {
-  const neighbors = getNearbyNodeKeys(node.lat, node.lng);
-  neighbors.forEach((neighborKey) => {
-    if (neighborKey === node.key) {
-      return;
-    }
-    const neighbor = graph.get(neighborKey);
-    if (!neighbor) return;
-    const distance = haversineDistance(
-      { lat: node.lat, lng: node.lng },
-      { lat: neighbor.lat, lng: neighbor.lng }
-    );
-    if (distance <= BRIDGE_TOLERANCE_METERS) {
-      node.neighbors.set(neighbor.key, distance);
-      neighbor.neighbors.set(node.key, distance);
-    }
-  });
-}
-
-function ensureEndpointBridge(graph: OsmGraph, node: OsmGraphNode): void {
-  const neighbors = getNearbyNodeKeys(node.lat, node.lng);
-  neighbors.forEach((neighborKey) => {
-    if (neighborKey === node.key) {
-      return;
-    }
-    const neighbor = graph.get(neighborKey);
-    if (!neighbor) return;
-    const distance = haversineDistance(
-      { lat: node.lat, lng: node.lng },
-      { lat: neighbor.lat, lng: neighbor.lng }
-    );
-    if (distance <= ENDPOINT_BRIDGE_TOLERANCE_METERS) {
-      node.neighbors.set(neighbor.key, distance);
-      neighbor.neighbors.set(node.key, distance);
-    }
-  });
+function projectToSegment(
+  point: { lat: number; lng: number },
+  start: { lat: number; lng: number },
+  end: { lat: number; lng: number }
+): { lat: number; lng: number; t: number; distance: number } {
+  const latScale = 111320;
+  const lngScale = 111320 * Math.cos((point.lat * Math.PI) / 180);
+  const ax = start.lng * lngScale;
+  const ay = start.lat * latScale;
+  const bx = end.lng * lngScale;
+  const by = end.lat * latScale;
+  const px = point.lng * lngScale;
+  const py = point.lat * latScale;
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSq = dx * dx + dy * dy;
+  const t = lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
+  const lat = start.lat + (end.lat - start.lat) * t;
+  const lng = start.lng + (end.lng - start.lng) * t;
+  return {
+    lat,
+    lng,
+    t,
+    distance: Math.hypot(px - (ax + dx * t), py - (ay + dy * t)),
+  };
 }
 
 const DEFAULT_SIMPLIFY_TOLERANCE_METERS = 10;
@@ -271,22 +300,42 @@ export function simplifyGeometryNodes<
   });
 }
 
-export interface OsmGraphNode {
-  key: string;
-  lat: number;
-  lng: number;
-  neighbors: Map<string, number>;
-}
-
-export type OsmGraph = Map<string, OsmGraphNode>;
-
 export function resetSpatialIndex() {
   nodeGrid.clear();
+  edgeGrid.clear();
 }
 
 export function rebuildNodeGrid(graph: OsmGraph): void {
   resetSpatialIndex();
-  graph.forEach((node) => registerNodeToGrid(node));
+  const seen = new Set<string>();
+  graph.forEach((node) => {
+    registerNodeToGrid(node);
+    node.neighbors.forEach((_distance, neighborKey) => {
+      const neighbor = graph.get(neighborKey);
+      if (!neighbor) {
+        return;
+      }
+      const id = edgeId(node.key, neighbor.key);
+      if (seen.has(id)) {
+        return;
+      }
+      seen.add(id);
+      registerEdgeToGrid(node, neighbor);
+    });
+  });
+}
+
+function linkNodes(left: OsmGraphNode, right: OsmGraphNode, distance: number): void {
+  if (left.key === right.key) {
+    return;
+  }
+  const existing = left.neighbors.get(right.key);
+  if (existing !== undefined && existing <= distance) {
+    return;
+  }
+  left.neighbors.set(right.key, distance);
+  right.neighbors.set(left.key, distance);
+  registerEdgeToGrid(left, right);
 }
 
 function ensureGraphNode(graph: OsmGraph, lat: number, lng: number): OsmGraphNode {
@@ -302,13 +351,107 @@ function ensureGraphNode(graph: OsmGraph, lat: number, lng: number): OsmGraphNod
     };
     graph.set(key, node);
     registerNodeToGrid(node);
-    connectNearbyNodes(graph, node);
   }
   return node;
 }
 
+function headingDegrees(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number }
+): number {
+  const lat = (to.lat - from.lat) * 111320;
+  const lng = (to.lng - from.lng) * 111320 * Math.cos(((from.lat + to.lat) / 2) * (Math.PI / 180));
+  return (Math.atan2(lng, lat) * 180) / Math.PI;
+}
+
+function headingDelta(left: number, right: number): number {
+  let delta = Math.abs(left - right) % 360;
+  if (delta > 180) {
+    delta = 360 - delta;
+  }
+  return delta;
+}
+
+function firstNeighbor(graph: OsmGraph, node: OsmGraphNode): OsmGraphNode | null {
+  for (const key of node.neighbors.keys()) {
+    const neighbor = graph.get(key);
+    if (neighbor) {
+      return neighbor;
+    }
+  }
+  return null;
+}
+
+function shouldBridgeDangling(
+  graph: OsmGraph,
+  node: OsmGraphNode,
+  other: OsmGraphNode,
+  distance: number
+): boolean {
+  if (distance <= TINY_BRIDGE_METERS) {
+    return true;
+  }
+  const from = firstNeighbor(graph, node);
+  const toward = firstNeighbor(graph, other);
+  if (!from || !toward) {
+    return distance <= 80;
+  }
+  const outward = headingDegrees(from, node);
+  const otherOut = headingDegrees(toward, other);
+  const across = headingDegrees(node, other);
+  const sideways = headingDelta(outward, across) > 48 && headingDelta(outward, across) < 132;
+  const parallel =
+    headingDelta(outward, otherOut) <= 32 || headingDelta(outward, otherOut) >= 148;
+  if (sideways && parallel) {
+    return false;
+  }
+  const continuation = headingDelta(outward, otherOut) >= 120;
+  const along = headingDelta(outward, across) <= 48 || headingDelta(outward, across) >= 132;
+  return continuation || along;
+}
+
+function bridgeDanglingEnds(graph: OsmGraph): void {
+  const dangling: OsmGraphNode[] = [];
+  graph.forEach((node) => {
+    if (node.neighbors.size <= 1) {
+      dangling.push(node);
+    }
+  });
+  const radius = Math.max(2, Math.ceil(ENDPOINT_BRIDGE_TOLERANCE_METERS / NODE_GRID_METERS));
+  dangling.forEach((node) => {
+    const nearby = getNearbyKeys(nodeGrid, node.lat, node.lng, NODE_GRID_METERS, radius);
+    let best: OsmGraphNode | null = null;
+    let bestDistance = ENDPOINT_BRIDGE_TOLERANCE_METERS;
+    nearby.forEach((key) => {
+      if (key === node.key || node.neighbors.has(key)) {
+        return;
+      }
+      const other = graph.get(key);
+      if (!other) {
+        return;
+      }
+      const distance = haversineDistance(node, other);
+      if (distance >= bestDistance) {
+        return;
+      }
+      if (other.neighbors.size > 2 && node.neighbors.size > 1) {
+        return;
+      }
+      if (!shouldBridgeDangling(graph, node, other, distance)) {
+        return;
+      }
+      best = other;
+      bestDistance = distance;
+    });
+    const match: OsmGraphNode | null = best;
+    if (match) {
+      linkNodes(node, match, bestDistance);
+    }
+  });
+}
+
 export function extendOsmGraph(graph: OsmGraph, ways: OSMWay[]): void {
-  const lines = ways.map((way) =>
+  const lines = ways.filter(isPathfindingWay).map((way) =>
     (way.geometry || []).map((node) => ({ lat: node.lat, lng: node.lon }))
   );
   lines.forEach((line) => {
@@ -320,16 +463,100 @@ export function extendOsmGraph(graph: OsmGraph, ways: OSMWay[]): void {
       const end = line[i + 1];
       const startNode = ensureGraphNode(graph, start.lat, start.lng);
       const endNode = ensureGraphNode(graph, end.lat, end.lng);
-      const segmentDistance = haversineDistance(start, end);
-      startNode.neighbors.set(endNode.key, segmentDistance);
-      endNode.neighbors.set(startNode.key, segmentDistance);
+      linkNodes(startNode, endNode, haversineDistance(start, end));
     }
-    ensureEndpointBridge(graph, ensureGraphNode(graph, line[0].lat, line[0].lng));
-    ensureEndpointBridge(
-      graph,
-      ensureGraphNode(graph, line[line.length - 1].lat, line[line.length - 1].lng)
-    );
   });
+  bridgeDanglingEnds(graph);
+}
+
+function edgeAlignment(
+  point: { lat: number; lng: number },
+  toward: { lat: number; lng: number } | undefined,
+  left: { lat: number; lng: number },
+  right: { lat: number; lng: number }
+): number {
+  if (!toward) {
+    return 0;
+  }
+  const hx = toward.lng - point.lng;
+  const hy = toward.lat - point.lat;
+  const ex = right.lng - left.lng;
+  const ey = right.lat - left.lat;
+  const hop = Math.hypot(hx, hy);
+  const edge = Math.hypot(ex, ey);
+  if (hop === 0 || edge === 0) {
+    return 0;
+  }
+  return Math.abs((hx * ex + hy * ey) / (hop * edge));
+}
+
+function findNearestRailAnchor(
+  graph: OsmGraph,
+  point: { lat: number; lng: number },
+  maxDistanceMeters = 5000,
+  toward?: { lat: number; lng: number }
+): RailAnchor | null {
+  if (graph.size === 0) {
+    return null;
+  }
+  const radius = Math.max(1, Math.ceil(maxDistanceMeters / EDGE_GRID_METERS));
+  const edgeIds = getNearbyKeys(edgeGrid, point.lat, point.lng, EDGE_GRID_METERS, radius);
+  const candidates: Array<RailAnchor & { score: number }> = [];
+  edgeIds.forEach((id) => {
+    const [leftKey, rightKey] = id.split('|');
+    const left = graph.get(leftKey);
+    const right = graph.get(rightKey);
+    if (!left || !right) {
+      return;
+    }
+    const projected = projectToSegment(point, left, right);
+    if (projected.distance > maxDistanceMeters) {
+      return;
+    }
+    const atVertex = projected.t <= 0.02 || projected.t >= 0.98;
+    const alignment = edgeAlignment(point, toward, left, right);
+    candidates.push({
+      lat: projected.lat,
+      lng: projected.lng,
+      distance: projected.distance,
+      nodes: atVertex ? [projected.t < 0.5 ? left.key : right.key] : [left.key, right.key],
+      score: projected.distance - alignment * 90,
+    });
+  });
+  if (candidates.length > 0) {
+    const nearest = Math.min(...candidates.map((candidate) => candidate.distance));
+    const slack = Math.max(70, nearest * 1.8);
+    let best = candidates[0];
+    candidates.forEach((candidate) => {
+      if (candidate.distance > slack) {
+        return;
+      }
+      if (candidate.score < best.score) {
+        best = candidate;
+      }
+    });
+    return { lat: best.lat, lng: best.lng, distance: best.distance, nodes: best.nodes };
+  }
+  const nodeKeys = getNearbyKeys(
+    nodeGrid,
+    point.lat,
+    point.lng,
+    NODE_GRID_METERS,
+    Math.max(1, Math.ceil(maxDistanceMeters / NODE_GRID_METERS))
+  );
+  let bestNode: RailAnchor | null = null;
+  nodeKeys.forEach((key) => {
+    const node = graph.get(key);
+    if (!node) {
+      return;
+    }
+    const distance = haversineDistance(point, node);
+    if (distance > maxDistanceMeters || (bestNode && distance >= bestNode.distance)) {
+      return;
+    }
+    bestNode = { lat: node.lat, lng: node.lng, distance, nodes: [node.key] };
+  });
+  return bestNode;
 }
 
 export function findNearestGraphNode(
@@ -337,41 +564,8 @@ export function findNearestGraphNode(
   point: { lat: number; lng: number },
   maxDistanceMeters = 5000
 ): string | null {
-  if (graph.size === 0) return null;
-  const cellMeters = NODE_SNAP_TOLERANCE_METERS;
-  const radius = Math.max(1, Math.ceil(maxDistanceMeters / cellMeters));
-  const centerRow = Math.floor(point.lat / NODE_GRID_LAT_DEG);
-  const centerCol = Math.floor(point.lng / NODE_GRID_LNG_DEG);
-  let bestKey: string | null = null;
-  let bestDistance = maxDistanceMeters;
-  for (let ring = 0; ring <= radius; ring += 1) {
-    if (bestKey && ring * cellMeters > bestDistance) {
-      break;
-    }
-    for (let rowOffset = -ring; rowOffset <= ring; rowOffset += 1) {
-      for (let colOffset = -ring; colOffset <= ring; colOffset += 1) {
-        if (ring > 0 && Math.abs(rowOffset) !== ring && Math.abs(colOffset) !== ring) {
-          continue;
-        }
-        const bucket = nodeGrid.get(`${centerRow + rowOffset}:${centerCol + colOffset}`);
-        if (!bucket) {
-          continue;
-        }
-        bucket.forEach((nodeKey) => {
-          const node = graph.get(nodeKey);
-          if (!node) {
-            return;
-          }
-          const distance = haversineDistance(point, { lat: node.lat, lng: node.lng });
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            bestKey = nodeKey;
-          }
-        });
-      }
-    }
-  }
-  return bestKey;
+  const anchor = findNearestRailAnchor(graph, point, maxDistanceMeters);
+  return anchor?.nodes[0] ?? null;
 }
 
 function pushHeap(heap: Array<{ key: string; distance: number }>, item: { key: string; distance: number }) {
@@ -418,7 +612,15 @@ function popHeap(heap: Array<{ key: string; distance: number }>) {
   return top;
 }
 
-function shortestKeys(graph: OsmGraph, startKey: string, endKey: string, limitMeters: number): string[] | null {
+function shortestKeys(
+  graph: OsmGraph,
+  startKey: string,
+  endKey: string,
+  limitMeters: number
+): { keys: string[]; cost: number } | null {
+  if (startKey === endKey) {
+    return { keys: [startKey], cost: 0 };
+  }
   const distanceByKey = new Map<string, number>([[startKey, 0]]);
   const previous = new Map<string, string>();
   const heap: Array<{ key: string; distance: number }> = [{ key: startKey, distance: 0 }];
@@ -434,7 +636,7 @@ function shortestKeys(graph: OsmGraph, startKey: string, endKey: string, limitMe
       break;
     }
     if (current.distance > limitMeters) {
-      return null;
+      continue;
     }
     const node = graph.get(current.key);
     if (!node) {
@@ -442,7 +644,7 @@ function shortestKeys(graph: OsmGraph, startKey: string, endKey: string, limitMe
     }
     node.neighbors.forEach((edgeDistance, neighborKey) => {
       const nextDistance = current.distance + edgeDistance;
-      if (nextDistance >= (distanceByKey.get(neighborKey) ?? Infinity)) {
+      if (nextDistance >= (distanceByKey.get(neighborKey) ?? Infinity) || nextDistance > limitMeters) {
         return;
       }
       distanceByKey.set(neighborKey, nextDistance);
@@ -450,7 +652,8 @@ function shortestKeys(graph: OsmGraph, startKey: string, endKey: string, limitMe
       pushHeap(heap, { key: neighborKey, distance: nextDistance });
     });
   }
-  if ((distanceByKey.get(endKey) ?? Infinity) === Infinity) {
+  const cost = distanceByKey.get(endKey);
+  if (cost === undefined) {
     return null;
   }
   const keys: string[] = [];
@@ -466,7 +669,109 @@ function shortestKeys(graph: OsmGraph, startKey: string, endKey: string, limitMe
     return null;
   }
   keys.reverse();
-  return keys;
+  return { keys, cost };
+}
+
+function sharesRailEdge(start: RailAnchor, end: RailAnchor): boolean {
+  if (start.nodes.length === 1 && end.nodes.length === 1) {
+    return start.nodes[0] === end.nodes[0];
+  }
+  const startSet = new Set(start.nodes);
+  return end.nodes.some((key) => startSet.has(key)) && (
+    start.nodes.length + end.nodes.length <= 3 ||
+    end.nodes.every((key) => startSet.has(key))
+  );
+}
+
+function pathBetweenAnchors(
+  graph: OsmGraph,
+  start: RailAnchor,
+  end: RailAnchor,
+  limitMeters: number
+): Coordinate[] | null {
+  if (sharesRailEdge(start, end)) {
+    if (start.lat === end.lat && start.lng === end.lng) {
+      return [{ lat: start.lat, lng: start.lng, sequence: 1 }];
+    }
+    return [
+      { lat: start.lat, lng: start.lng, sequence: 1 },
+      { lat: end.lat, lng: end.lng, sequence: 2 },
+    ];
+  }
+
+  const endKeys = new Set(end.nodes);
+  const distanceByKey = new Map<string, number>();
+  const previous = new Map<string, string | null>();
+  const heap: Array<{ key: string; distance: number }> = [];
+  start.nodes.forEach((key) => {
+    const node = graph.get(key);
+    if (!node) {
+      return;
+    }
+    const distance = haversineDistance(start, node);
+    if (distance > limitMeters) {
+      return;
+    }
+    distanceByKey.set(key, distance);
+    previous.set(key, null);
+    pushHeap(heap, { key, distance });
+  });
+
+  let bestEndKey: string | null = null;
+  let bestCost = Infinity;
+  while (heap.length > 0) {
+    const current = popHeap(heap);
+    if (!current) {
+      break;
+    }
+    if (current.distance !== distanceByKey.get(current.key)) {
+      continue;
+    }
+    if (current.distance > limitMeters || current.distance > bestCost) {
+      continue;
+    }
+    if (endKeys.has(current.key)) {
+      const endNode = graph.get(current.key);
+      if (endNode) {
+        const cost = current.distance + haversineDistance(end, endNode);
+        if (cost < bestCost) {
+          bestCost = cost;
+          bestEndKey = current.key;
+        }
+      }
+    }
+    const node = graph.get(current.key);
+    if (!node) {
+      continue;
+    }
+    node.neighbors.forEach((edgeDistance, neighborKey) => {
+      const nextDistance = current.distance + edgeDistance;
+      if (nextDistance >= (distanceByKey.get(neighborKey) ?? Infinity) || nextDistance > limitMeters) {
+        return;
+      }
+      distanceByKey.set(neighborKey, nextDistance);
+      previous.set(neighborKey, current.key);
+      pushHeap(heap, { key: neighborKey, distance: nextDistance });
+    });
+  }
+
+  if (!bestEndKey) {
+    return null;
+  }
+  const keys: string[] = [];
+  let cursor: string | null | undefined = bestEndKey;
+  while (cursor) {
+    keys.push(cursor);
+    cursor = previous.get(cursor);
+  }
+  keys.reverse();
+  const path: Coordinate[] = [{ lat: start.lat, lng: start.lng, sequence: 1 }];
+  keys.forEach((key) => appendNode(path, graph, key));
+  const last = path[path.length - 1];
+  if (!last || last.lat !== end.lat || last.lng !== end.lng) {
+    path.push({ lat: end.lat, lng: end.lng, sequence: path.length + 1 });
+  }
+  return path.length >= 2 ? path : null;
 }
 
 function appendNode(path: Coordinate[], graph: OsmGraph, key: string) {
@@ -481,35 +786,168 @@ function appendNode(path: Coordinate[], graph: OsmGraph, key: string) {
   path.push({ lat: node.lat, lng: node.lng, sequence: path.length + 1 });
 }
 
+function pathLengthMeters(path: Coordinate[]): number {
+  let length = 0;
+  for (let index = 1; index < path.length; index += 1) {
+    length += haversineDistance(path[index - 1], path[index]);
+  }
+  return length;
+}
+
+function maxPathMeters(straight: number): number {
+  return Math.max(straight * MAX_DETOUR_RATIO, MIN_PATH_LIMIT_METERS);
+}
+
+function straightJump(start: Coordinate, end: Coordinate): Coordinate[] {
+  return [
+    { lat: start.lat, lng: start.lng, sequence: 1 },
+    { lat: end.lat, lng: end.lng, sequence: 2 },
+  ];
+}
+
+function isReasonableHop(path: Coordinate[] | null, limitMeters: number): path is Coordinate[] {
+  return !!path && path.length >= 2 && pathLengthMeters(path) <= limitMeters;
+}
+
+function appendHop(segment: Coordinate[], hop: Coordinate[]): void {
+  hop.forEach((point) => {
+    const last = segment[segment.length - 1];
+    if (last && last.lat === point.lat && last.lng === point.lng) {
+      return;
+    }
+    segment.push({ ...point, sequence: segment.length + 1 });
+  });
+}
+
+function sliceFallbackLine(
+  line: Coordinate[] | undefined,
+  start: Coordinate,
+  end: Coordinate
+): Coordinate[] | null {
+  if (!line || line.length < 2) {
+    return null;
+  }
+  let startIndex = 0;
+  let endIndex = 0;
+  let startDistance = Infinity;
+  let endDistance = Infinity;
+  line.forEach((point, index) => {
+    const fromStart = haversineDistance(point, start);
+    const fromEnd = haversineDistance(point, end);
+    if (fromStart < startDistance) {
+      startDistance = fromStart;
+      startIndex = index;
+    }
+    if (fromEnd < endDistance) {
+      endDistance = fromEnd;
+      endIndex = index;
+    }
+  });
+  if (startDistance > 8000 || endDistance > 8000 || startIndex === endIndex) {
+    return null;
+  }
+  const forward = startIndex < endIndex;
+  const from = forward ? startIndex : endIndex;
+  const to = forward ? endIndex : startIndex;
+  const slice = line.slice(from, to + 1);
+  if (!forward) {
+    slice.reverse();
+  }
+  const hop: Coordinate[] = [{ lat: start.lat, lng: start.lng, sequence: 1 }];
+  slice.forEach((point) => {
+    const last = hop[hop.length - 1];
+    if (last && last.lat === point.lat && last.lng === point.lng) {
+      return;
+    }
+    hop.push({ lat: point.lat, lng: point.lng, sequence: hop.length + 1 });
+  });
+  const last = hop[hop.length - 1];
+  if (!last || last.lat !== end.lat || last.lng !== end.lng) {
+    hop.push({ lat: end.lat, lng: end.lng, sequence: hop.length + 1 });
+  }
+  return hop.length >= 2 ? hop : null;
+}
+
+function hopAlongRails(
+  graph: OsmGraph,
+  start: Coordinate,
+  end: Coordinate,
+  fallbackLine?: Coordinate[]
+): Coordinate[] | null {
+  const straight = haversineDistance(start, end);
+  const limit = maxPathMeters(straight);
+  const reach = Math.max(2500, Math.min(12000, straight * 0.4 + 1000));
+  const startAnchor = findNearestRailAnchor(graph, start, reach, end);
+  const endAnchor = findNearestRailAnchor(graph, end, reach, start);
+  if (startAnchor && endAnchor) {
+    const hop = pathBetweenAnchors(graph, startAnchor, endAnchor, limit);
+    if (isReasonableHop(hop, limit)) {
+      return hop;
+    }
+  }
+  const fallback = sliceFallbackLine(fallbackLine, start, end);
+  if (isReasonableHop(fallback, limit)) {
+    return fallback;
+  }
+  return straightJump(start, end);
+}
+
 /** Follow the simplified rail graph through a train's waypoints. */
-export function traceWaypoints(graph: OsmGraph, waypoints: Coordinate[]): Coordinate[] {
+export function traceWaypointSegments(
+  graph: OsmGraph,
+  waypoints: Coordinate[],
+  fallbackLine?: Coordinate[]
+): Coordinate[][] {
   if (graph.size === 0 || waypoints.length < 2) {
     return [];
   }
-  const path: Coordinate[] = [];
+  const segments: Coordinate[][] = [];
+  let current: Coordinate[] = [];
   for (let index = 0; index < waypoints.length - 1; index += 1) {
-    const start = waypoints[index];
-    const end = waypoints[index + 1];
-    const straight = haversineDistance(start, end);
-    const reach = Math.max(4000, straight);
-    const startKey = findNearestGraphNode(graph, start, reach);
-    const endKey = findNearestGraphNode(graph, end, reach);
-    if (!startKey || !endKey) {
-      path.push(start, end);
+    const hop = hopAlongRails(graph, waypoints[index], waypoints[index + 1], fallbackLine);
+    if (!hop) {
+      if (current.length >= 2) {
+        segments.push(current);
+      }
+      current = [];
       continue;
     }
-    if (startKey === endKey) {
-      appendNode(path, graph, startKey);
+    if (current.length === 0) {
+      current = hop.map((point, sequence) => ({ ...point, sequence: sequence + 1 }));
       continue;
     }
-    const keys = shortestKeys(graph, startKey, endKey, Math.max(straight * 4.5, 12000));
-    if (!keys) {
-      path.push(start, end);
-      continue;
-    }
-    keys.forEach((key) => appendNode(path, graph, key));
+    appendHop(current, hop);
   }
-  return path;
+  if (current.length >= 2) {
+    segments.push(current);
+  }
+  return mergeNearbySegments(segments);
+}
+
+function mergeNearbySegments(segments: Coordinate[][]): Coordinate[][] {
+  if (segments.length < 2) {
+    return segments;
+  }
+  const merged: Coordinate[][] = [segments[0].slice()];
+  for (let index = 1; index < segments.length; index += 1) {
+    const previous = merged[merged.length - 1];
+    const next = segments[index];
+    const gap = haversineDistance(previous[previous.length - 1], next[0]);
+    if (gap <= 800) {
+      appendHop(previous, next);
+      continue;
+    }
+    merged.push(next.slice());
+  }
+  return merged;
+}
+
+export function traceWaypoints(
+  graph: OsmGraph,
+  waypoints: Coordinate[],
+  fallbackLine?: Coordinate[]
+): Coordinate[] {
+  return traceWaypointSegments(graph, waypoints, fallbackLine)[0] ?? [];
 }
 
 export interface LatLngBounds {
@@ -522,6 +960,7 @@ export interface LatLngBounds {
 
 export interface OsmPathResult {
   path: Coordinate[];
+  paths?: Coordinate[][];
   reason?: string;
 }
 
@@ -595,21 +1034,27 @@ export function findOsmPath(
   maxSearchDistance = 5000,
   allowRelaxed = true
 ): OsmPathResult {
-  const startKey = findNearestGraphNode(
+  const startAnchor = findNearestRailAnchor(
     graph,
     { lat: startPoint.lat, lng: startPoint.lng },
     maxSearchDistance
   );
-  const endKey = findNearestGraphNode(
+  const endAnchor = findNearestRailAnchor(
     graph,
     { lat: endPoint.lat, lng: endPoint.lng },
     maxSearchDistance
   );
-  const alignedStart = alignToNode(graph, startKey, startPoint);
-  const alignedEnd = alignToNode(graph, endKey, endPoint);
+  const startKey = startAnchor?.nodes[0] ?? null;
+  const endKey = endAnchor?.nodes[0] ?? null;
+  const alignedStart = startAnchor
+    ? { lat: startAnchor.lat, lng: startAnchor.lng, sequence: startPoint.sequence ?? 0 }
+    : alignToNode(graph, startKey, startPoint);
+  const alignedEnd = endAnchor
+    ? { lat: endAnchor.lat, lng: endAnchor.lng, sequence: endPoint.sequence ?? 0 }
+    : alignToNode(graph, endKey, endPoint);
   const effectiveStart = alignedStart;
   const effectiveEnd = alignedEnd;
-  if (!startKey || !endKey) {
+  if (!startAnchor || !endAnchor || !startKey || !endKey) {
     if (!allowRelaxed) {
       if (!startKey && !endKey) {
         return { path: [], reason: 'start_and_end_not_found' };
@@ -650,9 +1095,9 @@ export function findOsmPath(
   }
 
   const span = haversineDistance(effectiveStart, effectiveEnd);
-  const limitMeters = Math.max(span * 8, maxSearchDistance * 8, 25000);
-  const pathKeys = shortestKeys(graph, startKey, endKey, limitMeters);
-  if (!pathKeys) {
+  const limitMeters = maxPathMeters(span);
+  const routed = pathBetweenAnchors(graph, startAnchor, endAnchor, limitMeters);
+  if (!routed || !isReasonableHop(routed, limitMeters)) {
     if (!allowRelaxed) {
       return { path: [], reason: 'no_route_found' };
     }
@@ -667,10 +1112,7 @@ export function findOsmPath(
   }
 
   return {
-    path: pathKeys.map((key) => {
-      const node = graph.get(key)!;
-      return { lat: node.lat, lng: node.lng, sequence: 0 };
-    }),
+    path: routed,
   };
 }
 
