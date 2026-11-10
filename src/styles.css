@@ -1267,19 +1267,44 @@ body,
   display: none;
 }
 
-.chrome__tool--search img {
+.chrome__search-glyph {
   display: block;
-  width: 16px;
-  height: 16px;
+  flex: 0 0 auto;
+  color: inherit;
   opacity: 0.72;
   pointer-events: none;
+  transition: opacity var(--dur) var(--ease);
 }
 
-.chrome__tool--search.is-active img {
+.chrome__search-glyph--tool {
+  width: 16px;
+  height: 16px;
+}
+
+.chrome__tool--search:hover .chrome__search-glyph,
+.chrome__tool--search.is-active .chrome__search-glyph {
   opacity: 1;
 }
 
 .chrome__search-backdrop {
+  display: none;
+}
+
+.chrome__search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+
+.chrome__search-dismiss {
+  display: none;
+}
+
+.chrome__search-mobile-hint,
+.chrome__search-empty {
   display: none;
 }
 
@@ -1297,6 +1322,7 @@ body,
   border-radius: var(--ui-radius);
   background: rgba(19, 19, 19, 0.75);
   backdrop-filter: blur(8.55px);
+  color: #f0f0f0;
   cursor: text;
   z-index: 2;
   transition: background-color var(--dur) var(--ease);
@@ -1308,18 +1334,12 @@ body,
   background: rgba(28, 28, 28, 0.9);
 }
 
-.chrome__search img {
-  display: block;
-  width: 14px;
-  height: 14px;
+.chrome__search .chrome__search-glyph {
   opacity: 0.55;
-  flex: 0 0 auto;
-  pointer-events: none;
-  transition: opacity var(--dur) var(--ease);
 }
 
-.chrome__search:hover img,
-.chrome__search:focus-within img {
+.chrome__search:hover .chrome__search-glyph,
+.chrome__search:focus-within .chrome__search-glyph {
   opacity: 0.92;
 }
 
@@ -2335,10 +2355,22 @@ body,
     right: 0;
     flex-direction: column;
     align-items: flex-end;
+    gap: 6px;
   }
 
   .chrome__tool--search {
     display: flex;
+    margin-top: 2px;
+  }
+
+  .chrome__search-glyph--tool {
+    width: 18px;
+    height: 18px;
+  }
+
+  .chrome__search .chrome__search-glyph {
+    width: 16px;
+    height: 16px;
   }
 
   .chrome__search {
@@ -2356,15 +2388,65 @@ body,
     position: fixed;
     left: var(--chrome-inset);
     right: var(--chrome-inset);
-    top: calc(var(--chrome-inset) + var(--chrome-control-height) + 8px);
+    top: calc(env(safe-area-inset-top, 0px) + var(--chrome-inset));
     width: auto;
     height: auto;
     min-height: var(--chrome-control-height);
+    max-height: calc(
+      100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - var(--chrome-inset) * 2
+    );
     z-index: 45;
-    max-height: min(52svh, calc(100svh - var(--chrome-inset) * 2 - var(--chrome-control-height) - 16px));
-    flex-wrap: wrap;
-    align-content: flex-start;
-    padding-bottom: 8px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+    cursor: default;
+  }
+
+  .chrome__search.is-mobile-open .chrome__search-bar {
+    flex: 0 0 var(--chrome-control-height);
+    padding: 0 6px 0 14px;
+    border-bottom: 1px solid var(--ui-line);
+  }
+
+  .chrome__search.is-mobile-open input {
+    font-size: 16px;
+    letter-spacing: -0.02em;
+  }
+
+  .chrome__search-dismiss {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 40px;
+    width: 40px;
+    height: 40px;
+    margin: 0 -4px 0 0;
+    padding: 0;
+    border: 0;
+    border-radius: var(--ui-radius);
+    background: transparent;
+    color: inherit;
+    font-size: 26px;
+    font-weight: 300;
+    line-height: 1;
+    cursor: pointer;
+    transition: background-color var(--dur) var(--ease);
+  }
+
+  .chrome__search-dismiss:active {
+    background: var(--ui-press);
+  }
+
+  .chrome__search-mobile-hint,
+  .chrome__search-empty {
+    display: block;
+    margin: 0;
+    padding: 12px 16px 14px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--ui-muted);
   }
 
   .chrome__search.is-mobile-open .chrome__hits {
@@ -2372,11 +2454,15 @@ body,
     top: auto;
     left: auto;
     right: auto;
-    flex: 1 1 100%;
-    max-height: min(40svh, 320px);
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: none;
+    margin: 0;
     overflow-y: auto;
-    margin-top: 4px;
-    padding-top: 2px;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 0;
+    animation: none;
   }
 
   .chrome__search-backdrop {
@@ -2464,8 +2550,12 @@ body,
   background: #fafafa;
 }
 
-.shell[data-theme='light'] .chrome__search img {
-  filter: invert(1);
+.shell[data-theme='light'] .chrome__search {
+  color: #111111;
+}
+
+.shell[data-theme='light'] .chrome__search-backdrop {
+  background: rgba(17, 17, 17, 0.32);
 }
 
 .shell[data-theme='light'] .chrome__search input,

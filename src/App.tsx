@@ -30,7 +30,7 @@ import {
 } from './appRoute';
 import logoMarkDark from './logo icon white.svg';
 import logoMarkLight from './logo icon black.svg';
-import searchIcon from './icons/search.svg';
+import { ChromeSearchIcon } from './components/ChromeSearchIcon';
 import {
   copyFor,
   LOCALE_STORAGE_KEY,
@@ -328,6 +328,18 @@ const App: React.FC = () => {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [closeSearch, searchMobileOpen]);
+
+  useEffect(() => {
+    if (!searchMobileOpen) {
+      return;
+    }
+    const { body } = document;
+    const previous = body.style.overflow;
+    body.style.overflow = 'hidden';
+    return () => {
+      body.style.overflow = previous;
+    };
+  }, [searchMobileOpen]);
 
   const mapViewRef = useRef<MapViewControls | null>(null);
   const [dockLeaving, setDockLeaving] = useState(false);
@@ -960,7 +972,7 @@ const App: React.FC = () => {
           <button
             type="button"
             className="chrome__search-backdrop"
-            aria-label={t.searchPlaceholder}
+            aria-label={t.searchCloseAria}
             onClick={closeSearch}
           />
         )}
@@ -968,36 +980,62 @@ const App: React.FC = () => {
           className={`chrome__search${searchOpen && searchHits.length > 0 ? ' is-open' : ''}${
             searchMobileOpen ? ' is-mobile-open' : ''
           }`}
-          onMouseDown={(event) => {
-            if (event.target === searchInputRef.current) {
-              return;
-            }
-            event.preventDefault();
-            searchInputRef.current?.focus();
-          }}
+          role={searchMobileOpen ? 'dialog' : undefined}
+          aria-modal={searchMobileOpen ? true : undefined}
+          aria-label={searchMobileOpen ? t.searchPlaceholder : undefined}
         >
-          <img src={searchIcon} alt="" width={14} height={14} />
-          <input
-            ref={searchInputRef}
-            type="search"
-            value={searchQuery}
-            placeholder={t.searchPlaceholder}
-            aria-label={t.searchPlaceholder}
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(event) => {
-              setSearchQuery(event.target.value);
-              setSearchOpen(true);
+          <div
+            className="chrome__search-bar"
+            onMouseDown={(event) => {
+              const target = event.target as HTMLElement;
+              if (target.closest('input, button')) {
+                return;
+              }
+              event.preventDefault();
+              searchInputRef.current?.focus();
             }}
-            onFocus={() => setSearchOpen(true)}
-            onBlur={() => {
-              window.setTimeout(() => {
-                if (!searchMobileOpen) {
-                  setSearchOpen(false);
-                }
-              }, 160);
-            }}
-          />
+          >
+            <ChromeSearchIcon size={14} className="chrome__search-glyph" />
+            <input
+              ref={searchInputRef}
+              type="search"
+              inputMode="search"
+              enterKeyHint="search"
+              value={searchQuery}
+              placeholder={t.searchPlaceholder}
+              aria-label={t.searchPlaceholder}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(event) => {
+                setSearchQuery(event.target.value);
+                setSearchOpen(true);
+              }}
+              onFocus={() => setSearchOpen(true)}
+              onBlur={() => {
+                window.setTimeout(() => {
+                  if (!searchMobileOpen) {
+                    setSearchOpen(false);
+                  }
+                }, 160);
+              }}
+            />
+            {searchMobileOpen && (
+              <button
+                type="button"
+                className="chrome__search-dismiss"
+                aria-label={t.searchCloseAria}
+                onClick={closeSearch}
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            )}
+          </div>
+          {searchMobileOpen && !searchQuery.trim() && (
+            <p className="chrome__search-mobile-hint">{t.searchMobileHint}</p>
+          )}
+          {searchMobileOpen && Boolean(searchQuery.trim()) && searchHits.length === 0 && (
+            <p className="chrome__search-empty">{t.searchNoResults}</p>
+          )}
           {searchOpen && searchHits.length > 0 && (
             <ul className="chrome__hits">
               {searchHits.map((hit) => (
@@ -1057,16 +1095,6 @@ const App: React.FC = () => {
           )}
         </div>
         <div className="chrome__tools">
-          <button
-            type="button"
-            className={`chrome__tool chrome__tool--search${searchMobileOpen ? ' is-active' : ''}`}
-            aria-label={t.searchPlaceholder}
-            aria-pressed={searchMobileOpen}
-            title={t.searchPlaceholder}
-            onClick={() => (searchMobileOpen ? closeSearch() : openMobileSearch())}
-          >
-            <img src={searchIcon} alt="" width={16} height={16} />
-          </button>
           <button
             type="button"
             className="chrome__tool"
@@ -1139,6 +1167,22 @@ const App: React.FC = () => {
             onClick={() => setLocale((current) => (current === 'sk' ? 'en' : 'sk'))}
           >
             <span aria-hidden="true">{t.langSwitchTo}</span>
+          </button>
+          <button
+            type="button"
+            className={`chrome__tool chrome__tool--search${searchMobileOpen ? ' is-active' : ''}`}
+            aria-label={t.searchPlaceholder}
+            aria-pressed={searchMobileOpen}
+            title={t.searchPlaceholder}
+            onClick={() => {
+              if (searchMobileOpen) {
+                searchInputRef.current?.focus();
+                return;
+              }
+              openMobileSearch();
+            }}
+          >
+            <ChromeSearchIcon className="chrome__search-glyph chrome__search-glyph--tool" />
           </button>
         </div>
       </header>

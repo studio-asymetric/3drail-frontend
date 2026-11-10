@@ -15,6 +15,9 @@ export type Copy = {
   loadingTrains: string;
   trainsCount: (count: number) => string;
   searchPlaceholder: string;
+  searchCloseAria: string;
+  searchNoResults: string;
+  searchMobileHint: string;
   station: string;
   zoomIn: string;
   zoomOut: string;
@@ -64,6 +67,9 @@ const sk: Copy = {
   loadingTrains: 'Načítavam vlaky',
   trainsCount: (count) => `${count} vlakov`,
   searchPlaceholder: 'Vyhľadať vlak alebo stanicu',
+  searchCloseAria: 'Zavrieť vyhľadávanie',
+  searchNoResults: 'Nič sa nenašlo',
+  searchMobileHint: 'Zadajte číslo vlaku alebo názov stanice',
   station: 'Stanica',
   zoomIn: 'Priblížiť mapu',
   zoomOut: 'Oddialiť mapu',
@@ -114,6 +120,9 @@ const en: Copy = {
   loadingTrains: 'Loading trains',
   trainsCount: (count) => `${count} trains`,
   searchPlaceholder: 'Search train or station',
+  searchCloseAria: 'Close search',
+  searchNoResults: 'No results',
+  searchMobileHint: 'Enter a train number or station name',
   station: 'Station',
   zoomIn: 'Zoom in',
   zoomOut: 'Zoom out',
