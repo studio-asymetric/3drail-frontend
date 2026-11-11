@@ -2732,46 +2732,27 @@ body,
     overflow: hidden;
   }
 
-  .dock--collapsed:not(.dock--mobile-interactive) .dock__sheet-main {
+  .dock--collapsed .dock__sheet-main {
     display: none;
   }
 
-  .dock--mobile-interactive.dock--collapsed .dock__sheet-main {
+  .dock--mobile-interactive .dock__sheet-main {
     display: flex;
-    opacity: clamp(0, calc((var(--sheet-progress, 0) - 0.02) / 0.22), 1);
+    flex: 1 1 auto;
+    min-height: 0;
   }
 
-  .dock--mobile-interactive.dock--expanded .dock__sheet-main {
-    opacity: 1;
-  }
-
-  .dock--mobile-interactive.dock--dragging .dock__sheet-main {
-    transition: none;
-  }
-
-  .dock--expanded:not(.dock--mobile-interactive) .dock__peek {
+  .dock--mobile-interactive.dock--sheet-opening .dock__peek {
     display: none;
   }
 
-  .dock--mobile-interactive .dock__peek {
-    opacity: clamp(0, calc(1 - var(--sheet-progress, 0) * 1.15), 1);
-    max-height: calc((1 - min(var(--sheet-progress, 0), 1)) * 140px);
-    overflow: hidden;
-    transition: opacity 0ms;
+  .dock--mobile-interactive.dock--sheet-opening .dock__body {
+    gap: 10px;
+    padding-top: 4px;
   }
 
-  .dock--mobile-interactive.dock--dragging .dock__peek {
-    transition: none;
-  }
-
-  .dock--mobile-interactive.dock--expanded .dock__peek {
-    pointer-events: none;
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
+  .dock--expanded .dock__peek {
+    display: none;
   }
 
   .dock--about .dock__sheet-handle,
@@ -2784,15 +2765,9 @@ body,
     gap: 0;
   }
 
-  .dock--expanded:not(.dock--mobile-interactive) .dock__body {
+  .dock--expanded .dock__body {
     padding-top: 4px;
     gap: 10px;
-    height: 100%;
-  }
-
-  .dock--mobile-interactive .dock__body {
-    padding-top: calc(2px + var(--sheet-progress, 0) * 2px);
-    gap: calc(var(--sheet-progress, 0) * 10px);
     height: 100%;
   }
 

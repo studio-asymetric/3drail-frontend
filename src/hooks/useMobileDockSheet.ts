@@ -12,7 +12,8 @@ const FLICK_CLOSE_VELOCITY = 0.42;
 const FLICK_OPEN_VELOCITY = -0.42;
 const LIST_TOP_EPSILON = 2;
 const LIST_SCROLL_SLOP_PX = 6;
-const SHEET_CONTENT_VISIBLE = 0.04;
+/** Sheet height progress above this reveals list content while dragging open. */
+export const SHEET_CONTENT_REVEAL = 0.08;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -56,11 +57,24 @@ export function useMobileDockSheet(
   const [settling, setSettling] = useState(false);
   const [listAtTop, setListAtTop] = useState(true);
 
-  const applyProgress = useCallback((value: number) => {
-    const next = clamp(value, 0, 1);
-    progressRef.current = next;
-    setProgress(next);
-  }, []);
+  const applyProgress = useCallback(
+    (value: number) => {
+      const next = clamp(value, 0, 1);
+      const prev = progressRef.current;
+      progressRef.current = next;
+      setProgress(next);
+      if (!enabled) {
+        return;
+      }
+      const wasOpen = prev >= 0.5;
+      const isOpen = next >= 0.5;
+      if (wasOpen !== isOpen && dragRef.current) {
+        skipExpandedSyncRef.current = true;
+        onExpandedChange(isOpen);
+      }
+    },
+    [enabled, onExpandedChange]
+  );
 
   const listViewport = useCallback(() => {
     return dockRef.current?.querySelector('.dock__pane-viewport') as HTMLElement | null;
@@ -169,7 +183,7 @@ export function useMobileDockSheet(
   }, [listViewport]);
 
   useEffect(() => {
-    if (!enabled || (!expanded && progress < SHEET_CONTENT_VISIBLE)) {
+    if (!enabled || progress < SHEET_CONTENT_REVEAL) {
       setListAtTop(true);
       return;
     }
@@ -242,7 +256,7 @@ export function useMobileDockSheet(
       dock.removeEventListener('touchend', onTouchEnd, { capture: true });
       dock.removeEventListener('touchcancel', onTouchEnd, { capture: true });
     };
-  }, [enabled, expanded, listViewport, progress, syncListAtTop]);
+  }, [enabled, expanded, listViewport, syncListAtTop]);
 
   useEffect(() => {
     if (!enabled || dragging || settling) {
@@ -381,12 +395,11 @@ export function useMobileDockSheet(
     };
   }, [beginDrag, enabled, endDrag, listViewport, measure, moveDrag, releaseCapture]);
 
-  const sheetContentOpen =
-    enabled && (expanded || progress >= SHEET_CONTENT_VISIBLE || dragging || settling);
-  const listAtScrollTop = sheetContentOpen && listAtTop;
+  const listAtScrollTop = enabled && progress >= SHEET_CONTENT_REVEAL && listAtTop;
+  const sheetContentRevealed = enabled && progress >= SHEET_CONTENT_REVEAL;
 
   const listPointerHandoff = useMemo((): DockListPointerHandoff | undefined => {
-    if (!sheetContentOpen) {
+    if (!enabled || progress < SHEET_CONTENT_REVEAL) {
       return undefined;
     }
     const finishListPointer = (event: React.PointerEvent<HTMLElement>) => {
@@ -445,7 +458,7 @@ export function useMobileDockSheet(
       onPointerUp: finishListPointer,
       onPointerCancel: finishListPointer,
     };
-  }, [beginDrag, endDrag, measure, moveDrag, releaseCapture, sheetContentOpen]);
+  }, [beginDrag, enabled, endDrag, measure, moveDrag, progress, releaseCapture]);
 
   const { collapsed, expanded: expandedPx } = metricsRef.current;
   const heightPx = collapsed + progress * (expandedPx - collapsed);
@@ -476,6 +489,7 @@ export function useMobileDockSheet(
     gesture,
     listPointerHandoff,
     listAtScrollTop,
+    sheetContentRevealed,
     measure,
     consumePeekClick,
   };

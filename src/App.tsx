@@ -992,9 +992,13 @@ const App: React.FC = () => {
     mobileDockExpanded,
     setMobileDockExpanded
   );
+  const mobileSheetOpen =
+    mobileSheetEnabled &&
+    (mobileSheet.progress >= 0.5 || mobileDockExpanded);
+  const mobileSheetRevealed = mobileSheet.sheetContentRevealed;
 
   useEffect(() => {
-    if (!isMobile || !mobileDockExpanded) {
+    if (!isMobile || !mobileSheetRevealed) {
       return;
     }
     if (focusedTrainNumber && (journeyStatus === 'idle' || journeyStatus === 'error')) {
@@ -1008,7 +1012,7 @@ const App: React.FC = () => {
     focusedTrainNumber,
     isMobile,
     journeyStatus,
-    mobileDockExpanded,
+    mobileSheetRevealed,
     refreshJourney,
     refreshStationBoard,
     stationBoardStatus,
@@ -1419,11 +1423,13 @@ const App: React.FC = () => {
         ref={mobileSheet.dockRef}
         className={`dock ${dockLeaving ? 'is-leave' : 'is-enter'}${
           mobileSheetEnabled
-            ? mobileDockExpanded
+            ? mobileSheetOpen
               ? ' dock--expanded'
               : ' dock--collapsed'
             : ''
-        }${mobileSheetEnabled ? ' dock--mobile-interactive' : ''}${
+        }${mobileSheetRevealed ? ' dock--sheet-opening' : ''}${
+          mobileSheetEnabled ? ' dock--mobile-interactive' : ''
+        }${
           mobileSheet.dragging ? ' dock--dragging' : ''
         }${displayAbout ? ' dock--about' : ''}`}
         style={
@@ -1450,19 +1456,19 @@ const App: React.FC = () => {
           <div
             className={`dock__body${
               isMobile ? ' dock__body--sheet-touch' : ''
-            }${isMobile && mobileSheet.progress < 0.04 ? ' dock__body--sheet-collapsed' : ''}`}
+            }${isMobile && !mobileSheetRevealed ? ' dock__body--sheet-collapsed' : ''}`}
             {...(isMobile ? mobileSheet.gesture : {})}
           >
             {isMobile && (
               <>
                 <DockSheetHandle
-                  expanded={mobileDockExpanded}
+                  expanded={mobileSheetOpen}
                   expandLabel={t.dockExpandSheet}
                 />
                 <button
                   type="button"
                   className="dock__peek"
-                  aria-expanded={mobileDockExpanded}
+                  aria-expanded={mobileSheetOpen}
                   onClick={() => {
                     if (mobileSheet.consumePeekClick()) {
                       return;
@@ -1537,8 +1543,8 @@ const App: React.FC = () => {
               contentKey={displayTrain.trainNumber}
               listPointerHandoff={mobileSheet.listPointerHandoff}
               listAtScrollTop={mobileSheet.listAtScrollTop}
-              loadingVisible={!isMobile || mobileSheet.progress >= 0.04}
-              loadingDelayMs={isMobile && mobileSheet.progress >= 0.04 ? 500 : 0}
+              loadingVisible={!isMobile || mobileSheetRevealed}
+              loadingDelayMs={isMobile && mobileSheetRevealed ? 500 : 0}
               loadingVariant={isMobile ? 'bar' : 'spinner'}
             >
               <ol className={`dock__stops${stopsHaveDelay ? ' has-delay' : ''}`}>
@@ -1641,19 +1647,19 @@ const App: React.FC = () => {
           <div
             className={`dock__body${
               isMobile ? ' dock__body--sheet-touch' : ''
-            }${isMobile && mobileSheet.progress < 0.04 ? ' dock__body--sheet-collapsed' : ''}`}
+            }${isMobile && !mobileSheetRevealed ? ' dock__body--sheet-collapsed' : ''}`}
             {...(isMobile ? mobileSheet.gesture : {})}
           >
             {isMobile && (
               <>
                 <DockSheetHandle
-                  expanded={mobileDockExpanded}
+                  expanded={mobileSheetOpen}
                   expandLabel={t.dockExpandSheet}
                 />
                 <button
                   type="button"
                   className="dock__peek"
-                  aria-expanded={mobileDockExpanded}
+                  aria-expanded={mobileSheetOpen}
                   onClick={() => {
                     if (mobileSheet.consumePeekClick()) {
                       return;
@@ -1721,8 +1727,8 @@ const App: React.FC = () => {
               contentKey={`${displayStation.id}-${displayStationTab}`}
               listPointerHandoff={mobileSheet.listPointerHandoff}
               listAtScrollTop={mobileSheet.listAtScrollTop}
-              loadingVisible={!isMobile || mobileSheet.progress >= 0.04}
-              loadingDelayMs={isMobile && mobileSheet.progress >= 0.04 ? 500 : 0}
+              loadingVisible={!isMobile || mobileSheetRevealed}
+              loadingDelayMs={isMobile && mobileSheetRevealed ? 500 : 0}
               loadingVariant={isMobile ? 'bar' : 'spinner'}
             >
               <ol className="dock__board">
