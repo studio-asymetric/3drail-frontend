@@ -1450,7 +1450,7 @@ const App: React.FC = () => {
           <div
             className={`dock__body${
               isMobile ? ' dock__body--sheet-touch' : ''
-            }${isMobile && !mobileDockExpanded ? ' dock__body--sheet-collapsed' : ''}`}
+            }${isMobile && mobileSheet.progress < 0.04 ? ' dock__body--sheet-collapsed' : ''}`}
             {...(isMobile ? mobileSheet.gesture : {})}
           >
             {isMobile && (
@@ -1537,8 +1537,8 @@ const App: React.FC = () => {
               contentKey={displayTrain.trainNumber}
               listPointerHandoff={mobileSheet.listPointerHandoff}
               listAtScrollTop={mobileSheet.listAtScrollTop}
-              loadingVisible={!isMobile || mobileDockExpanded}
-              loadingDelayMs={isMobile && mobileDockExpanded ? 500 : 0}
+              loadingVisible={!isMobile || mobileSheet.progress >= 0.04}
+              loadingDelayMs={isMobile && mobileSheet.progress >= 0.04 ? 500 : 0}
               loadingVariant={isMobile ? 'bar' : 'spinner'}
             >
               <ol className={`dock__stops${stopsHaveDelay ? ' has-delay' : ''}`}>
@@ -1641,7 +1641,7 @@ const App: React.FC = () => {
           <div
             className={`dock__body${
               isMobile ? ' dock__body--sheet-touch' : ''
-            }${isMobile && !mobileDockExpanded ? ' dock__body--sheet-collapsed' : ''}`}
+            }${isMobile && mobileSheet.progress < 0.04 ? ' dock__body--sheet-collapsed' : ''}`}
             {...(isMobile ? mobileSheet.gesture : {})}
           >
             {isMobile && (
@@ -1721,8 +1721,8 @@ const App: React.FC = () => {
               contentKey={`${displayStation.id}-${displayStationTab}`}
               listPointerHandoff={mobileSheet.listPointerHandoff}
               listAtScrollTop={mobileSheet.listAtScrollTop}
-              loadingVisible={!isMobile || mobileDockExpanded}
-              loadingDelayMs={isMobile && mobileDockExpanded ? 500 : 0}
+              loadingVisible={!isMobile || mobileSheet.progress >= 0.04}
+              loadingDelayMs={isMobile && mobileSheet.progress >= 0.04 ? 500 : 0}
               loadingVariant={isMobile ? 'bar' : 'spinner'}
             >
               <ol className="dock__board">

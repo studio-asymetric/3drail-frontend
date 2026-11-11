@@ -12,6 +12,7 @@ const FLICK_CLOSE_VELOCITY = 0.42;
 const FLICK_OPEN_VELOCITY = -0.42;
 const LIST_TOP_EPSILON = 2;
 const LIST_SCROLL_SLOP_PX = 6;
+const SHEET_CONTENT_VISIBLE = 0.04;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -168,7 +169,7 @@ export function useMobileDockSheet(
   }, [listViewport]);
 
   useEffect(() => {
-    if (!enabled || !expanded) {
+    if (!enabled || (!expanded && progress < SHEET_CONTENT_VISIBLE)) {
       setListAtTop(true);
       return;
     }
@@ -241,7 +242,7 @@ export function useMobileDockSheet(
       dock.removeEventListener('touchend', onTouchEnd, { capture: true });
       dock.removeEventListener('touchcancel', onTouchEnd, { capture: true });
     };
-  }, [enabled, expanded, listViewport, syncListAtTop]);
+  }, [enabled, expanded, listViewport, progress, syncListAtTop]);
 
   useEffect(() => {
     if (!enabled || dragging || settling) {
@@ -380,10 +381,12 @@ export function useMobileDockSheet(
     };
   }, [beginDrag, enabled, endDrag, listViewport, measure, moveDrag, releaseCapture]);
 
-  const listAtScrollTop = enabled && expanded && listAtTop;
+  const sheetContentOpen =
+    enabled && (expanded || progress >= SHEET_CONTENT_VISIBLE || dragging || settling);
+  const listAtScrollTop = sheetContentOpen && listAtTop;
 
   const listPointerHandoff = useMemo((): DockListPointerHandoff | undefined => {
-    if (!enabled || !expanded) {
+    if (!sheetContentOpen) {
       return undefined;
     }
     const finishListPointer = (event: React.PointerEvent<HTMLElement>) => {
@@ -442,7 +445,7 @@ export function useMobileDockSheet(
       onPointerUp: finishListPointer,
       onPointerCancel: finishListPointer,
     };
-  }, [beginDrag, enabled, endDrag, expanded, measure, moveDrag, releaseCapture]);
+  }, [beginDrag, endDrag, measure, moveDrag, releaseCapture, sheetContentOpen]);
 
   const { collapsed, expanded: expandedPx } = metricsRef.current;
   const heightPx = collapsed + progress * (expandedPx - collapsed);
