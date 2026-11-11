@@ -5,6 +5,7 @@ import { DockPanelControls } from './components/DockPanelControls';
 import { DockSheetHandle } from './components/DockSheetHandle';
 import { AboutPanel } from './components/AboutPanel';
 import { useMobileLayout } from './hooks/useMobileLayout';
+import { useMobileDockSheet } from './hooks/useMobileDockSheet';
 import {
   TrainService,
   type JourneyStop,
@@ -868,6 +869,13 @@ const App: React.FC = () => {
     setMobileDockExpanded(false);
   }, [focusedTrainNumber, focusedStation?.id, aboutOpen]);
 
+  const mobileSheetEnabled = isMobile && showDock && !displayAbout;
+  const mobileSheet = useMobileDockSheet(
+    mobileSheetEnabled,
+    mobileDockExpanded,
+    setMobileDockExpanded
+  );
+
   const accent =
     displayTrain?.color || getDelayColor(displayTrain?.delayMinutes ?? focusedTrain?.delayMinutes ?? 0);
   const nextStopIndex = journeyNextIndex(
@@ -1254,14 +1262,23 @@ const App: React.FC = () => {
       )}
       {showDock && (
       <aside
+        ref={mobileSheet.dockRef}
         className={`dock ${dockLeaving ? 'is-leave' : 'is-enter'}${
-          isMobile && showDock && !displayAbout
+          mobileSheetEnabled
             ? mobileDockExpanded
               ? ' dock--expanded'
               : ' dock--collapsed'
             : ''
+        }${mobileSheetEnabled ? ' dock--mobile-interactive' : ''}${
+          mobileSheet.dragging ? ' dock--dragging' : ''
         }${displayAbout ? ' dock--about' : ''}`}
-        style={{ '--accent': accent, '--accent-ink': contrastInk(accent) } as React.CSSProperties}
+        style={
+          {
+            '--accent': accent,
+            '--accent-ink': contrastInk(accent),
+            ...mobileSheet.dockStyle,
+          } as React.CSSProperties
+        }
         onAnimationEnd={(event) => {
           if (event.currentTarget !== event.target) {
             return;
@@ -1276,20 +1293,28 @@ const App: React.FC = () => {
         }}
       >
         {displayTrain ? (
-          <div className="dock__body">
+          <div
+            className={`dock__body${
+              isMobile ? ' dock__body--sheet-touch' : ''
+            }${isMobile && !mobileDockExpanded ? ' dock__body--sheet-collapsed' : ''}`}
+            {...(isMobile ? mobileSheet.gesture : {})}
+          >
             {isMobile && (
               <>
                 <DockSheetHandle
                   expanded={mobileDockExpanded}
-                  onExpand={() => setMobileDockExpanded(true)}
-                  onCollapse={() => setMobileDockExpanded(false)}
                   expandLabel={t.dockExpandSheet}
                 />
                 <button
                   type="button"
                   className="dock__peek"
                   aria-expanded={mobileDockExpanded}
-                  onClick={() => setMobileDockExpanded(true)}
+                  onClick={() => {
+                    if (mobileSheet.consumePeekClick()) {
+                      return;
+                    }
+                    setMobileDockExpanded(true);
+                  }}
                 >
                   <span className="dock__peek-identity">
                     <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
@@ -1317,41 +1342,50 @@ const App: React.FC = () => {
                 </button>
               </>
             )}
-            <div className="dock__sheet-main">
-              <DockPanelControls
-                backLabel={t.back}
-                closeLabel={t.dockCloseAria}
-                onBack={handleDockBack}
-                onClose={handleClearFocus}
-              />
-              <div className="dock__head">
-                <p className="dock__identity">
-                  <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
-                  <span className={`dock__name${properTrainName ? '' : ' is-route'}`}>
-                    {properTrainName ||
-                      (routeEnds ? (
-                        <>
-                          {routeEnds.from}
-                          <span className="dock__name-arrow" aria-hidden="true">
-                            →
-                          </span>
-                          {routeEnds.to}
-                        </>
-                      ) : (
-                        t.train
-                      ))}
-                  </span>
-                </p>
-                <div className="dock__meta">
-                  <p className="dock__delay">{displayDelayText}</p>
+            <div
+              className={`dock__sheet-main${
+                mobileSheet.listSheetGrab ? ' dock__sheet-main--list-grab' : ''
+              }`}
+            >
+              {!isMobile && (
+                <DockPanelControls
+                  backLabel={t.back}
+                  closeLabel={t.dockCloseAria}
+                  onBack={handleDockBack}
+                  onClose={handleClearFocus}
+                />
+              )}
+              {!isMobile && (
+                <div className="dock__head">
+                  <p className="dock__identity">
+                    <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
+                    <span className={`dock__name${properTrainName ? '' : ' is-route'}`}>
+                      {properTrainName ||
+                        (routeEnds ? (
+                          <>
+                            {routeEnds.from}
+                            <span className="dock__name-arrow" aria-hidden="true">
+                              →
+                            </span>
+                            {routeEnds.to}
+                          </>
+                        ) : (
+                          t.train
+                        ))}
+                    </span>
+                  </p>
+                  <div className="dock__meta">
+                    <p className="dock__delay">{displayDelayText}</p>
+                  </div>
                 </div>
-              </div>
+              )}
               {displayTrain.note && <p className="dock__note">{displayTrain.note}</p>}
               <DockScroller
               loading={displayJourneyStatus === 'loading' || displayJourneyStatus === 'idle'}
               error={displayJourneyStatus === 'error' ? t.stationListUnavailable : null}
               label={t.loadingStations}
               contentKey={displayTrain.trainNumber}
+              listSheetGrab={mobileSheet.listSheetGrab}
             >
               <ol className={`dock__stops${stopsHaveDelay ? ' has-delay' : ''}`}>
                 {displayStops.map((stop, index) => {
@@ -1450,20 +1484,28 @@ const App: React.FC = () => {
             </div>
           </div>
         ) : displayStation ? (
-          <div className="dock__body">
+          <div
+            className={`dock__body${
+              isMobile ? ' dock__body--sheet-touch' : ''
+            }${isMobile && !mobileDockExpanded ? ' dock__body--sheet-collapsed' : ''}`}
+            {...(isMobile ? mobileSheet.gesture : {})}
+          >
             {isMobile && (
               <>
                 <DockSheetHandle
                   expanded={mobileDockExpanded}
-                  onExpand={() => setMobileDockExpanded(true)}
-                  onCollapse={() => setMobileDockExpanded(false)}
                   expandLabel={t.dockExpandSheet}
                 />
                 <button
                   type="button"
                   className="dock__peek"
                   aria-expanded={mobileDockExpanded}
-                  onClick={() => setMobileDockExpanded(true)}
+                  onClick={() => {
+                    if (mobileSheet.consumePeekClick()) {
+                      return;
+                    }
+                    setMobileDockExpanded(true);
+                  }}
                 >
                   <span className="dock__peek-identity">
                     <span className="dock__pill is-station">{t.station}</span>
@@ -1475,18 +1517,26 @@ const App: React.FC = () => {
                 </button>
               </>
             )}
-            <div className="dock__sheet-main">
-              <DockPanelControls
-                backLabel={t.back}
-                closeLabel={t.dockCloseAria}
-                onBack={handleDockBack}
-                onClose={handleClearFocus}
-              />
+            <div
+              className={`dock__sheet-main${
+                mobileSheet.listSheetGrab ? ' dock__sheet-main--list-grab' : ''
+              }`}
+            >
+              {!isMobile && (
+                <DockPanelControls
+                  backLabel={t.back}
+                  closeLabel={t.dockCloseAria}
+                  onBack={handleDockBack}
+                  onClose={handleClearFocus}
+                />
+              )}
               <div className="dock__head">
-              <p className="dock__identity">
-                <span className="dock__pill is-station">{t.station}</span>
-                <span className="dock__name">{displayStation.name}</span>
-              </p>
+              {!isMobile && (
+                <p className="dock__identity">
+                  <span className="dock__pill is-station">{t.station}</span>
+                  <span className="dock__name">{displayStation.name}</span>
+                </p>
+              )}
               <div className="dock__tabs" role="tablist" aria-label={t.stationBoard}>
                 <button
                   type="button"
@@ -1519,6 +1569,7 @@ const App: React.FC = () => {
               }
               label={displayStationTab === 'arrivals' ? t.loadingArrivals : t.loadingDepartures}
               contentKey={`${displayStation.id}-${displayStationTab}`}
+              listSheetGrab={mobileSheet.listSheetGrab}
             >
               <ol className="dock__board">
                 {displayBoard.map((row, index) => {

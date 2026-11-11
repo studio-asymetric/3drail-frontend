@@ -6,6 +6,8 @@ interface DockScrollerProps {
   label: string;
   contentKey: string;
   children: React.ReactNode;
+  /** List is scrolled to top — sheet drag owns vertical touch on the viewport. */
+  listSheetGrab?: boolean;
 }
 
 export const DockScroller: React.FC<DockScrollerProps> = ({
@@ -14,6 +16,7 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
   label,
   contentKey,
   children,
+  listSheetGrab,
 }) => {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -150,7 +153,10 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
       ) : error ? (
         <p className="dock__pane-error">{error}</p>
       ) : (
-        <div className="dock__pane-viewport" ref={wrapperRef}>
+        <div
+          className={`dock__pane-viewport${listSheetGrab ? ' has-sheet-handoff' : ''}`}
+          ref={wrapperRef}
+        >
           <div className="dock__pane-content" ref={contentRef}>
             <div key={contentKey} className="dock__pane-rise">
               {children}
