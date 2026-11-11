@@ -1849,9 +1849,8 @@ body,
   display: none;
 }
 
-.dock__pane-viewport.has-sheet-handoff {
+.dock__pane-viewport.is-list-at-top {
   overscroll-behavior-y: none;
-  touch-action: none;
 }
 
 .dock__scrollbar {
@@ -1906,6 +1905,36 @@ body,
   font-size: 12px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.dock__loading-placeholder {
+  flex: 1 1 0;
+  min-height: 120px;
+}
+
+.dock__loading-bar-wrap {
+  flex: 1 1 0;
+  min-height: 120px;
+  padding: 6px 0 4px;
+}
+
+.dock__loading-bar {
+  width: 100%;
+}
+
+.dock__loading-bar__progress {
+  width: 38%;
+  will-change: transform;
+  animation: dock-loading-bar-slide 1.05s ease-in-out infinite;
+}
+
+@keyframes dock-loading-bar-slide {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
 }
 
 .dock__spinner {
@@ -2743,10 +2772,6 @@ body,
 
   .dock__body--sheet-touch {
     touch-action: pan-x;
-  }
-
-  .dock__sheet-main--list-grab {
-    touch-action: none;
   }
 
   .dock__body--sheet-touch.dock__body--sheet-collapsed {

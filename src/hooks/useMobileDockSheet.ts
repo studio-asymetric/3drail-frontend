@@ -11,6 +11,7 @@ import {
 const FLICK_CLOSE_VELOCITY = 0.42;
 const FLICK_OPEN_VELOCITY = -0.42;
 const LIST_TOP_EPSILON = 2;
+const LIST_SCROLL_SLOP_PX = 6;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -20,12 +21,14 @@ function easeOutCubic(t: number) {
   return 1 - Math.pow(1 - t, 3);
 }
 
-type PointerGesture = {
+export type DockListPointerHandoff = {
   onPointerDown: (event: React.PointerEvent<HTMLElement>) => void;
   onPointerMove: (event: React.PointerEvent<HTMLElement>) => void;
   onPointerUp: (event: React.PointerEvent<HTMLElement>) => void;
   onPointerCancel: (event: React.PointerEvent<HTMLElement>) => void;
 };
+
+type PointerGesture = DockListPointerHandoff;
 
 export function useMobileDockSheet(
   enabled: boolean,
@@ -46,6 +49,7 @@ export function useMobileDockSheet(
   const skipExpandedSyncRef = useRef(false);
   const suppressPeekClickRef = useRef(false);
   const captureElRef = useRef<HTMLElement | null>(null);
+  const pendingListRef = useRef<{ startY: number; pointerId: number } | null>(null);
   const [progress, setProgress] = useState(expanded ? 1 : 0);
   const [dragging, setDragging] = useState(false);
   const [settling, setSettling] = useState(false);
@@ -182,11 +186,62 @@ export function useMobileDockSheet(
     dock.addEventListener('scroll', onScroll, { passive: true, capture: true });
     const observer = new MutationObserver(() => syncListAtTop());
     observer.observe(dock, { childList: true, subtree: true });
+
+    let touchStartY = 0;
+    let touchTrackingTop = false;
+    const onTouchStart = (event: TouchEvent) => {
+      const target = event.target;
+      const viewport = listViewport();
+      if (!viewport || !(target instanceof Node) || !viewport.contains(target)) {
+        touchTrackingTop = false;
+        return;
+      }
+      if (viewport.scrollTop > LIST_TOP_EPSILON) {
+        touchTrackingTop = false;
+        return;
+      }
+      touchTrackingTop = true;
+      touchStartY = event.touches[0]?.clientY ?? 0;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const viewport = listViewport();
+      if (!viewport) {
+        return;
+      }
+      if (dragRef.current) {
+        event.preventDefault();
+        return;
+      }
+      if (!touchTrackingTop || viewport.scrollTop > LIST_TOP_EPSILON) {
+        return;
+      }
+      const clientY = event.touches[0]?.clientY ?? touchStartY;
+      const dy = clientY - touchStartY;
+      if (dy < -LIST_SCROLL_SLOP_PX) {
+        touchTrackingTop = false;
+        return;
+      }
+      if (dy > 0) {
+        event.preventDefault();
+      }
+    };
+    const onTouchEnd = () => {
+      touchTrackingTop = false;
+    };
+    dock.addEventListener('touchstart', onTouchStart, { passive: true, capture: true });
+    dock.addEventListener('touchmove', onTouchMove, { passive: false, capture: true });
+    dock.addEventListener('touchend', onTouchEnd, { passive: true, capture: true });
+    dock.addEventListener('touchcancel', onTouchEnd, { passive: true, capture: true });
+
     return () => {
       dock.removeEventListener('scroll', onScroll, { capture: true });
       observer.disconnect();
+      dock.removeEventListener('touchstart', onTouchStart, { capture: true });
+      dock.removeEventListener('touchmove', onTouchMove, { capture: true });
+      dock.removeEventListener('touchend', onTouchEnd, { capture: true });
+      dock.removeEventListener('touchcancel', onTouchEnd, { capture: true });
     };
-  }, [enabled, expanded, syncListAtTop]);
+  }, [enabled, expanded, listViewport, syncListAtTop]);
 
   useEffect(() => {
     if (!enabled || dragging || settling) {
@@ -245,6 +300,7 @@ export function useMobileDockSheet(
   const endDrag = useCallback(() => {
     const drag = dragRef.current;
     dragRef.current = null;
+    pendingListRef.current = null;
     captureElRef.current = null;
     setDragging(false);
     if (!drag) {
@@ -294,7 +350,7 @@ export function useMobileDockSheet(
         const viewport = listViewport();
         const target = event.target;
         const inList = viewport && target instanceof Node && viewport.contains(target);
-        if (inList && viewport.scrollTop > LIST_TOP_EPSILON) {
+        if (inList) {
           return;
         }
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -324,7 +380,69 @@ export function useMobileDockSheet(
     };
   }, [beginDrag, enabled, endDrag, listViewport, measure, moveDrag, releaseCapture]);
 
-  const listSheetGrab = enabled && expanded && listAtTop;
+  const listAtScrollTop = enabled && expanded && listAtTop;
+
+  const listPointerHandoff = useMemo((): DockListPointerHandoff | undefined => {
+    if (!enabled || !expanded) {
+      return undefined;
+    }
+    const finishListPointer = (event: React.PointerEvent<HTMLElement>) => {
+      if (pendingListRef.current?.pointerId === event.pointerId) {
+        pendingListRef.current = null;
+      }
+      if (!dragRef.current) {
+        return;
+      }
+      releaseCapture(event);
+      endDrag();
+    };
+    return {
+      onPointerDown: (event) => {
+        if (event.pointerType === 'mouse' && event.button !== 0) {
+          return;
+        }
+        const viewport = event.currentTarget;
+        if (viewport.scrollTop > LIST_TOP_EPSILON) {
+          return;
+        }
+        measure();
+        pendingListRef.current = { startY: event.clientY, pointerId: event.pointerId };
+      },
+      onPointerMove: (event) => {
+        if (dragRef.current) {
+          event.preventDefault();
+          moveDrag(event.clientY);
+          return;
+        }
+        const pending = pendingListRef.current;
+        if (!pending || pending.pointerId !== event.pointerId) {
+          return;
+        }
+        const viewport = event.currentTarget;
+        if (viewport.scrollTop > LIST_TOP_EPSILON) {
+          pendingListRef.current = null;
+          return;
+        }
+        const dy = event.clientY - pending.startY;
+        if (dy < -LIST_SCROLL_SLOP_PX) {
+          pendingListRef.current = null;
+          return;
+        }
+        if (dy <= 0) {
+          return;
+        }
+        event.preventDefault();
+        if (!dragRef.current) {
+          pendingListRef.current = null;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          beginDrag(pending.startY, event.currentTarget);
+        }
+        moveDrag(event.clientY);
+      },
+      onPointerUp: finishListPointer,
+      onPointerCancel: finishListPointer,
+    };
+  }, [beginDrag, enabled, endDrag, expanded, measure, moveDrag, releaseCapture]);
 
   const { collapsed, expanded: expandedPx } = metricsRef.current;
   const heightPx = collapsed + progress * (expandedPx - collapsed);
@@ -353,7 +471,8 @@ export function useMobileDockSheet(
     settling,
     progress,
     gesture,
-    listSheetGrab,
+    listPointerHandoff,
+    listAtScrollTop,
     measure,
     consumePeekClick,
   };

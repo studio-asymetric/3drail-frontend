@@ -321,6 +321,10 @@ const App: React.FC = () => {
   );
   const [journeyStops, setJourneyStops] = useState<JourneyStop[]>([]);
   const [journeyStatus, setJourneyStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const journeyAbortRef = useRef<AbortController | null>(null);
+  const journeyPollRef = useRef(0);
+  const stationBoardAbortRef = useRef<AbortController | null>(null);
+  const bootPanelLoadRef = useRef(false);
   const [clock, setClock] = useState(() => new Date());
   const [following, setFollowing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -519,111 +523,209 @@ const App: React.FC = () => {
     };
   }, [service, t, useLiveApi]);
 
-  useEffect(() => {
-    if (!focusedTrainNumber) {
-      setJourneyStops([]);
-      setJourneyStatus('idle');
-      return;
+  const stopJourneyLoad = useCallback(() => {
+    journeyAbortRef.current?.abort();
+    journeyAbortRef.current = null;
+    if (journeyPollRef.current) {
+      window.clearInterval(journeyPollRef.current);
+      journeyPollRef.current = 0;
     }
-    const controller = new AbortController();
-    setJourneyStops([]);
-    setJourneyStatus('loading');
-    fetch(`/proxy/detail?mode=detail&train=${encodeURIComponent(focusedTrainNumber)}`, {
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        const body = (await response.json()) as { stops?: JourneyStop[] };
-        if (!controller.signal.aborted) {
-          setJourneyStops(
-            filterTimedJourneyStops(Array.isArray(body.stops) ? body.stops : [])
-          );
-          setJourneyStatus('ready');
-        }
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          return;
-        }
-        if (!controller.signal.aborted) {
-          setJourneyStops([]);
-          setJourneyStatus('error');
-        }
-      });
-    const interval = window.setInterval(() => {
-      fetch(`/proxy/detail?mode=detail&train=${encodeURIComponent(focusedTrainNumber)}`, {
+  }, []);
+
+  const refreshJourney = useCallback(
+    (trainNumber: string) => {
+      if (!trainNumber) {
+        stopJourneyLoad();
+        setJourneyStops([]);
+        setJourneyStatus('idle');
+        return;
+      }
+      stopJourneyLoad();
+      const controller = new AbortController();
+      journeyAbortRef.current = controller;
+      setJourneyStops([]);
+      setJourneyStatus('loading');
+      fetch(`/proxy/detail?mode=detail&train=${encodeURIComponent(trainNumber)}`, {
         signal: controller.signal,
       })
         .then(async (response) => {
           if (!response.ok) {
-            return;
+            throw new Error(`HTTP ${response.status}`);
           }
           const body = (await response.json()) as { stops?: JourneyStop[] };
-          if (!controller.signal.aborted && Array.isArray(body.stops) && body.stops.length > 0) {
-            setJourneyStops(filterTimedJourneyStops(body.stops));
+          if (!controller.signal.aborted) {
+            setJourneyStops(
+              filterTimedJourneyStops(Array.isArray(body.stops) ? body.stops : [])
+            );
             setJourneyStatus('ready');
           }
         })
-        .catch(() => undefined);
-    }, following ? 20_000 : 45_000);
-    return () => {
-      controller.abort();
-      window.clearInterval(interval);
-    };
-  }, [focusedTrainNumber, following]);
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            return;
+          }
+          if (!controller.signal.aborted) {
+            setJourneyStops([]);
+            setJourneyStatus('error');
+          }
+        });
+      journeyPollRef.current = window.setInterval(() => {
+        fetch(`/proxy/detail?mode=detail&train=${encodeURIComponent(trainNumber)}`, {
+          signal: controller.signal,
+        })
+          .then(async (response) => {
+            if (!response.ok) {
+              return;
+            }
+            const body = (await response.json()) as { stops?: JourneyStop[] };
+            if (!controller.signal.aborted && Array.isArray(body.stops) && body.stops.length > 0) {
+              setJourneyStops(filterTimedJourneyStops(body.stops));
+              setJourneyStatus('ready');
+            }
+          })
+          .catch(() => undefined);
+      }, following ? 20_000 : 45_000);
+    },
+    [following, stopJourneyLoad]
+  );
+
+  const stopStationBoardLoad = useCallback(() => {
+    stationBoardAbortRef.current?.abort();
+    stationBoardAbortRef.current = null;
+  }, []);
+
+  const refreshStationBoard = useCallback(
+    (station: FocusedStation | null, tab: 'departures' | 'arrivals') => {
+      if (!station?.name) {
+        stopStationBoardLoad();
+        setStationBoard([]);
+        setStationBoardStatus('idle');
+        return;
+      }
+      stopStationBoardLoad();
+      const controller = new AbortController();
+      stationBoardAbortRef.current = controller;
+      setStationBoardStatus('loading');
+      fetchStationBoard(station.name, tab === 'arrivals', controller.signal)
+        .then((payload) => {
+          if (controller.signal.aborted) {
+            return;
+          }
+          setStationBoard(payload.rows ?? []);
+          setStationBoardStatus(payload.rows?.length ? 'ready' : 'error');
+        })
+        .catch((error: unknown) => {
+          if (error instanceof DOMException && error.name === 'AbortError') {
+            return;
+          }
+          if (!controller.signal.aborted) {
+            setStationBoard([]);
+            setStationBoardStatus('error');
+          }
+        });
+    },
+    [stopStationBoardLoad]
+  );
+
+  useEffect(() => {
+    if (bootPanelLoadRef.current) {
+      return;
+    }
+    bootPanelLoadRef.current = true;
+    if (bootRoute.train) {
+      refreshJourney(bootRoute.train);
+    }
+    if (bootRoute.station) {
+      refreshStationBoard(bootRoute.station, bootRoute.tab);
+    }
+  }, [bootRoute, refreshJourney, refreshStationBoard]);
+
+  useEffect(() => {
+    if (!focusedTrainNumber) {
+      stopJourneyLoad();
+      setJourneyStops([]);
+      setJourneyStatus('idle');
+    }
+  }, [focusedTrainNumber, stopJourneyLoad]);
+
+  useEffect(() => {
+    if (!focusedStation) {
+      stopStationBoardLoad();
+      setStationBoard([]);
+      setStationBoardStatus('idle');
+    }
+  }, [focusedStation, stopStationBoardLoad]);
+
+  const focusedTrainNumberRef = useRef(focusedTrainNumber);
+  focusedTrainNumberRef.current = focusedTrainNumber;
+  const focusedStationRef = useRef(focusedStation);
+  focusedStationRef.current = focusedStation;
+  const followingPrimedRef = useRef(false);
+  const stationTabPrimedRef = useRef(false);
+
+  useEffect(() => {
+    if (!followingPrimedRef.current) {
+      followingPrimedRef.current = true;
+      return;
+    }
+    const train = focusedTrainNumberRef.current;
+    if (!train) {
+      return;
+    }
+    refreshJourney(train);
+  }, [following, refreshJourney]);
+
+  useEffect(() => {
+    if (!stationTabPrimedRef.current) {
+      stationTabPrimedRef.current = true;
+      return;
+    }
+    const station = focusedStationRef.current;
+    if (!station?.name) {
+      return;
+    }
+    refreshStationBoard(station, stationTab);
+  }, [stationTab, refreshStationBoard]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    if (!focusedStation?.name) {
-      setStationBoard([]);
-      setStationBoardStatus('idle');
-      return;
-    }
-    const controller = new AbortController();
-    setStationBoardStatus('loading');
-    fetchStationBoard(focusedStation.name, stationTab === 'arrivals', controller.signal)
-      .then((payload) => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        setStationBoard(payload.rows ?? []);
-        setStationBoardStatus(payload.rows?.length ? 'ready' : 'error');
-      })
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          return;
-        }
-        if (!controller.signal.aborted) {
-          setStationBoard([]);
-          setStationBoardStatus('error');
-        }
-      });
-    return () => controller.abort();
-  }, [focusedStation, stationTab]);
+  useEffect(
+    () => () => {
+      stopJourneyLoad();
+      stopStationBoardLoad();
+    },
+    [stopJourneyLoad, stopStationBoardLoad]
+  );
 
   const handleCanvasStateChange = useCallback((state: 'loading' | 'loaded') => {
     setMapBooting(state === 'loading');
   }, []);
-  const applyRoute = useCallback((route: AppRoute, leaving: boolean) => {
-    setAboutOpen(route.about);
-    setFocusedTrainNumber(route.train);
-    setFocusedStation(route.station);
-    setStationTab(route.tab);
-    if (!route.train) {
-      setFollowing(false);
-    }
-    if (leaving) {
-      setDockLeaving(true);
-    } else {
-      setDockLeaving(false);
-    }
-  }, []);
+  const applyRoute = useCallback(
+    (route: AppRoute, leaving: boolean) => {
+      setAboutOpen(route.about);
+      setFocusedTrainNumber(route.train);
+      setFocusedStation(route.station);
+      setStationTab(route.tab);
+      if (route.train) {
+        refreshJourney(route.train);
+      }
+      if (route.station) {
+        refreshStationBoard(route.station, route.tab);
+      }
+      if (!route.train) {
+        setFollowing(false);
+      }
+      if (leaving) {
+        setDockLeaving(true);
+      } else {
+        setDockLeaving(false);
+      }
+    },
+    [refreshJourney, refreshStationBoard]
+  );
   const centerMapOn = useCallback((lng: number, lat: number, minZoom = 10) => {
     mapViewRef.current?.centerOn(lng, lat, { minZoom });
   }, []);
@@ -672,7 +774,18 @@ const App: React.FC = () => {
     (trainNumber: string) => {
       setAboutOpen(false);
       setFocusedStation(null);
-      setFocusedTrainNumber(trainNumber || null);
+      stopStationBoardLoad();
+      setStationBoard([]);
+      setStationBoardStatus('idle');
+      const next = trainNumber || null;
+      setFocusedTrainNumber(next);
+      if (next) {
+        refreshJourney(next);
+      } else {
+        stopJourneyLoad();
+        setJourneyStops([]);
+        setJourneyStatus('idle');
+      }
       setDockLeaving(false);
       const train = trains.find((item) => item.trainNumber === trainNumber);
       const position = train?.position;
@@ -680,19 +793,23 @@ const App: React.FC = () => {
         centerMapOn(position.lng, position.lat, 10);
       }
     },
-    [centerMapOn, trains]
+    [centerMapOn, refreshJourney, stopJourneyLoad, stopStationBoardLoad, trains]
   );
   const handleStationClick = useCallback(
     (station: FocusedStation) => {
       setAboutOpen(false);
       setFocusedTrainNumber(null);
       setFollowing(false);
+      stopJourneyLoad();
+      setJourneyStops([]);
+      setJourneyStatus('idle');
       setStationTab('departures');
       setFocusedStation(station);
+      refreshStationBoard(station, 'departures');
       setDockLeaving(false);
       centerMapOn(station.lng, station.lat, 11);
     },
-    [centerMapOn]
+    [centerMapOn, refreshStationBoard, stopJourneyLoad]
   );
   const handleDockStopActivate = useCallback(
     (index: number) => {
@@ -876,6 +993,28 @@ const App: React.FC = () => {
     setMobileDockExpanded
   );
 
+  useEffect(() => {
+    if (!isMobile || !mobileDockExpanded) {
+      return;
+    }
+    if (focusedTrainNumber && (journeyStatus === 'idle' || journeyStatus === 'error')) {
+      refreshJourney(focusedTrainNumber);
+    }
+    if (focusedStation && (stationBoardStatus === 'idle' || stationBoardStatus === 'error')) {
+      refreshStationBoard(focusedStation, stationTab);
+    }
+  }, [
+    focusedStation,
+    focusedTrainNumber,
+    isMobile,
+    journeyStatus,
+    mobileDockExpanded,
+    refreshJourney,
+    refreshStationBoard,
+    stationBoardStatus,
+    stationTab,
+  ]);
+
   const accent =
     displayTrain?.color || getDelayColor(displayTrain?.delayMinutes ?? focusedTrain?.delayMinutes ?? 0);
   const nextStopIndex = journeyNextIndex(
@@ -883,10 +1022,25 @@ const App: React.FC = () => {
     displayTrain,
     cursor?.stopIndex ?? null
   );
-  const approachingStopName =
-    nextStopIndex >= 0 && displayStops[nextStopIndex]
-      ? displayStops[nextStopIndex].name
-      : displayTrain?.nextStation ?? displayTrain?.currentStation ?? '—';
+  const approachingStopName = useMemo(() => {
+    if (nextStopIndex >= 0 && displayStops[nextStopIndex]) {
+      return displayStops[nextStopIndex].name;
+    }
+    const liveNext = displayTrain?.nextStation ?? displayTrain?.rosterNextStation;
+    if (liveNext && !/^\d{5,}$/.test(liveNext.replace(/\s/g, ''))) {
+      return liveNext;
+    }
+    if (liveNext && dataset) {
+      const normalized = liveNext.replace(/\D/g, '');
+      const match = Object.values(dataset.stops).find(
+        (stop) => stop.uicCode?.replace(/\D/g, '') === normalized
+      );
+      if (match?.name) {
+        return match.name;
+      }
+    }
+    return displayTrain?.currentStation ?? '—';
+  }, [dataset, displayStops, displayTrain, nextStopIndex]);
   const trailheadIndex = useMemo(() => {
     if (displayStops.length === 0) {
       return -1;
@@ -1342,11 +1496,7 @@ const App: React.FC = () => {
                 </button>
               </>
             )}
-            <div
-              className={`dock__sheet-main${
-                mobileSheet.listSheetGrab ? ' dock__sheet-main--list-grab' : ''
-              }`}
-            >
+            <div className="dock__sheet-main">
               {!isMobile && (
                 <DockPanelControls
                   backLabel={t.back}
@@ -1385,7 +1535,11 @@ const App: React.FC = () => {
               error={displayJourneyStatus === 'error' ? t.stationListUnavailable : null}
               label={t.loadingStations}
               contentKey={displayTrain.trainNumber}
-              listSheetGrab={mobileSheet.listSheetGrab}
+              listPointerHandoff={mobileSheet.listPointerHandoff}
+              listAtScrollTop={mobileSheet.listAtScrollTop}
+              loadingVisible={!isMobile || mobileDockExpanded}
+              loadingDelayMs={isMobile && mobileDockExpanded ? 500 : 0}
+              loadingVariant={isMobile ? 'bar' : 'spinner'}
             >
               <ol className={`dock__stops${stopsHaveDelay ? ' has-delay' : ''}`}>
                 {displayStops.map((stop, index) => {
@@ -1517,11 +1671,7 @@ const App: React.FC = () => {
                 </button>
               </>
             )}
-            <div
-              className={`dock__sheet-main${
-                mobileSheet.listSheetGrab ? ' dock__sheet-main--list-grab' : ''
-              }`}
-            >
+            <div className="dock__sheet-main">
               {!isMobile && (
                 <DockPanelControls
                   backLabel={t.back}
@@ -1569,7 +1719,11 @@ const App: React.FC = () => {
               }
               label={displayStationTab === 'arrivals' ? t.loadingArrivals : t.loadingDepartures}
               contentKey={`${displayStation.id}-${displayStationTab}`}
-              listSheetGrab={mobileSheet.listSheetGrab}
+              listPointerHandoff={mobileSheet.listPointerHandoff}
+              listAtScrollTop={mobileSheet.listAtScrollTop}
+              loadingVisible={!isMobile || mobileDockExpanded}
+              loadingDelayMs={isMobile && mobileDockExpanded ? 500 : 0}
+              loadingVariant={isMobile ? 'bar' : 'spinner'}
             >
               <ol className="dock__board">
                 {displayBoard.map((row, index) => {

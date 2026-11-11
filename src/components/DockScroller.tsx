@@ -1,4 +1,5 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import type { DockListPointerHandoff } from '../hooks/useMobileDockSheet';
 
 interface DockScrollerProps {
   loading: boolean;
@@ -6,8 +7,13 @@ interface DockScrollerProps {
   label: string;
   contentKey: string;
   children: React.ReactNode;
-  /** List is scrolled to top — sheet drag owns vertical touch on the viewport. */
-  listSheetGrab?: boolean;
+  listPointerHandoff?: DockListPointerHandoff;
+  listAtScrollTop?: boolean;
+  /** When false, loading UI is suppressed (e.g. collapsed mobile sheet). */
+  loadingVisible?: boolean;
+  /** Milliseconds loading must persist before showing UI (0 = immediate). */
+  loadingDelayMs?: number;
+  loadingVariant?: 'spinner' | 'bar';
 }
 
 export const DockScroller: React.FC<DockScrollerProps> = ({
@@ -16,9 +22,29 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
   label,
   contentKey,
   children,
-  listSheetGrab,
+  listPointerHandoff,
+  listAtScrollTop,
+  loadingVisible = true,
+  loadingDelayMs = 0,
+  loadingVariant = 'spinner',
 }) => {
+  const [showLoadingUi, setShowLoadingUi] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+
+  const trackLoading = loading && loadingVisible;
+
+  useEffect(() => {
+    if (!trackLoading) {
+      setShowLoadingUi(false);
+      return;
+    }
+    if (loadingDelayMs <= 0) {
+      setShowLoadingUi(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setShowLoadingUi(true), loadingDelayMs);
+    return () => window.clearTimeout(timer);
+  }, [loadingDelayMs, trackLoading, contentKey]);
   const contentRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
@@ -145,17 +171,28 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
       <div className="dock__scrollbar" ref={trackRef} aria-hidden="true">
         <div className="dock__scrollbar-thumb" ref={thumbRef} />
       </div>
-      {loading ? (
-        <div className="dock__loading" role="status">
-          <span className="dock__spinner" />
-          <span>{label}</span>
-        </div>
+      {trackLoading && showLoadingUi ? (
+        loadingVariant === 'bar' ? (
+          <div className="dock__loading-bar-wrap" role="status" aria-label={label}>
+            <div className="map-loading-bar dock__loading-bar">
+              <div className="map-loading-bar__progress dock__loading-bar__progress" />
+            </div>
+          </div>
+        ) : (
+          <div className="dock__loading" role="status">
+            <span className="dock__spinner" />
+            <span>{label}</span>
+          </div>
+        )
+      ) : trackLoading ? (
+        <div className="dock__loading-placeholder" aria-hidden="true" />
       ) : error ? (
         <p className="dock__pane-error">{error}</p>
       ) : (
         <div
-          className={`dock__pane-viewport${listSheetGrab ? ' has-sheet-handoff' : ''}`}
+          className={`dock__pane-viewport${listAtScrollTop ? ' is-list-at-top' : ''}`}
           ref={wrapperRef}
+          {...(listPointerHandoff ?? {})}
         >
           <div className="dock__pane-content" ref={contentRef}>
             <div key={contentKey} className="dock__pane-rise">

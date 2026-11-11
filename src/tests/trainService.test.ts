@@ -89,6 +89,23 @@ trip101,12:30:00,12:35:00,s2,2`;
     expect(renderState?.progress).toBeLessThanOrEqual(1);
   });
 
+  it('resolves next station UIC codes to stop names', () => {
+    const roster: TrainRosterItem = {
+      train: { number: '101', name: 'Test' },
+      timestamp: Date.now(),
+      rosterNextStation: 'Fallback',
+      trainDelay: {
+        trainNumber: '101',
+        delayMinutes: 0,
+        nextStationName: '5392013',
+        timestamp: Date.now(),
+      },
+    };
+
+    const renderState = buildTrainRenderState(roster, dataset, roster.trainDelay);
+    expect(renderState?.nextStation).toBe('Bratislava');
+  });
+
   it('keeps a live GPS train off the GTFS polyline', () => {
     const roster: TrainRosterItem = {
       train: { number: '101', name: 'Live', type: 'Ex' },

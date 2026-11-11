@@ -145,6 +145,26 @@ function findStopNameByUic(
   )?.name;
 }
 
+function isStationUicCode(value: string) {
+  return /^\d{5,}$/.test(value.replace(/\s/g, ''));
+}
+
+function resolveStationDisplayName(
+  dataset: GtfsDataset,
+  label?: string,
+  fallback?: string
+): string | undefined {
+  const trimmed = label?.trim();
+  if (!trimmed) {
+    const fb = fallback?.trim();
+    return fb || undefined;
+  }
+  if (isStationUicCode(trimmed)) {
+    return findStopNameByUic(dataset, trimmed) ?? fallback?.trim() ?? undefined;
+  }
+  return trimmed;
+}
+
 function estimateProgress(
   trainNumber: string,
   trip: GtfsTrip,
@@ -647,6 +667,11 @@ export function buildTrainRenderState(
     const currentStation = delayInfo?.currentName
       ? delayInfo.currentName
       : findStopNameByUic(dataset, delayInfo?.currentUic);
+    const nextStation = resolveStationDisplayName(
+      dataset,
+      delayInfo?.nextStationName,
+      roster.rosterNextStation
+    );
     return {
       trainNumber,
       trainName: roster.train?.name
@@ -658,7 +683,7 @@ export function buildTrainRenderState(
       progress: 0.5,
       delayMinutes,
       color: getDelayColor(delayMinutes),
-      nextStation: delayInfo?.nextStationName,
+      nextStation,
       currentStation,
       reportedAt,
       rosterPreviousStation: roster.rosterPreviousStation,
@@ -697,6 +722,11 @@ export function buildTrainRenderState(
   const currentStation = delayInfo?.currentName
     ? delayInfo.currentName
     : findStopNameByUic(dataset, delayInfo?.currentUic);
+  const nextStation = resolveStationDisplayName(
+    dataset,
+    delayInfo?.nextStationName,
+    roster.rosterNextStation
+  );
 
   return {
     trainNumber,
@@ -709,7 +739,7 @@ export function buildTrainRenderState(
     progress,
     delayMinutes,
     color: getDelayColor(delayMinutes),
-    nextStation: delayInfo?.nextStationName,
+    nextStation,
     currentStation,
     reportedAt,
     rosterPreviousStation: roster.rosterPreviousStation,
