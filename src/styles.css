@@ -2742,16 +2742,26 @@ body,
     min-height: 0;
   }
 
-  .dock--mobile-interactive.dock--sheet-opening .dock__peek {
+  .dock--mobile-interactive.dock--sheet-opening .dock__peek,
+  .dock--mobile-interactive.dock--expanded .dock__peek {
+    flex-shrink: 0;
+    gap: 0;
+    padding: 0 0 6px;
+    cursor: grab;
+  }
+
+  .dock--mobile-interactive.dock--sheet-opening .dock__peek-meta,
+  .dock--mobile-interactive.dock--expanded .dock__peek-meta {
     display: none;
   }
 
-  .dock--mobile-interactive.dock--sheet-opening .dock__body {
-    gap: 10px;
+  .dock--mobile-interactive.dock--sheet-opening .dock__body,
+  .dock--mobile-interactive.dock--expanded .dock__body {
+    gap: 8px;
     padding-top: 4px;
   }
 
-  .dock--expanded .dock__peek {
+  .dock--expanded:not(.dock--mobile-interactive) .dock__peek {
     display: none;
   }
 
