@@ -2,10 +2,19 @@
   box-sizing: border-box;
 }
 
+html {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body,
 #root {
   margin: 0;
-  height: 100%;
+  height: 100svh;
+  max-height: 100svh;
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
@@ -13,10 +22,14 @@ body {
   background: var(--black);
   letter-spacing: -.03em;
   font-feature-settings: "ss03" on,"ss04" on,"ss06" on;
+  position: fixed;
+  inset: 0;
+  width: 100%;
 }
 
 #root {
-  min-height: 100svh;
+  height: 100%;
+  max-height: 100svh;
 }
 @font-face {
   font-family: 'Geist';
@@ -41,7 +54,6 @@ body,
   margin: 0;
   padding: 0;
   width: 100%;
-  height: 100%;
 }
 
 #root * {
@@ -830,10 +842,15 @@ body,
 }
 
 .map-loading-overlay {
-  position: absolute;
-  right: 16px;
-  bottom: 42px;
-  z-index: 12;
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(10px);
   transition: opacity 0.35s var(--ease), visibility 0.35s var(--ease);
   pointer-events: none;
 }
@@ -846,12 +863,19 @@ body,
 .map-loading-overlay--visible {
   opacity: 1;
   visibility: visible;
+  pointer-events: auto;
+}
+
+.shell--booting .chrome,
+.shell--booting .dock,
+.shell--booting .shell__toast {
+  pointer-events: none;
 }
 
 .map-loading-card {
-  width: 196px;
-  padding: 10px 12px 11px;
-  border-radius: 8px;
+  width: min(320px, calc(100vw - 48px));
+  padding: 22px 24px 20px;
+  border-radius: 12px;
   background: var(--ui-bg-translucent);
   border: 1px solid rgba(248, 250, 252, 0.16);
   display: flex;
@@ -870,27 +894,29 @@ body,
 
 .map-loading-kicker {
   color: var(--ui-muted);
-  font-size: 10px;
-  letter-spacing: 0.04em;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .map-loading-label {
   color: #fff;
-  font-size: 13px;
+  font-size: 20px;
   font-weight: 560;
   letter-spacing: -0.03em;
+  line-height: 1.2;
 }
 
 .map-loading-rest {
   color: var(--ui-muted);
-  font-size: 11px;
+  font-size: 13px;
   letter-spacing: -0.02em;
+  line-height: 1.35;
 }
 
 .map-loading-bar {
   width: 100%;
-  height: 3px;
+  height: 4px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.16);
   overflow: hidden;
@@ -967,9 +993,11 @@ body,
 }
 
 .shell {
-  position: relative;
-  width: 100vw;
-  height: 100vh;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100svh;
+  max-height: 100svh;
   overflow: hidden;
   background: #000;
   color: #f4f4f4;
@@ -1507,6 +1535,20 @@ body,
   flex: 1;
   height: 100%;
   padding: 22px 20px 20px;
+  overflow: hidden;
+}
+
+.dock__sheet-handle,
+.dock__peek {
+  display: none;
+}
+
+.dock__sheet-main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -2557,8 +2599,126 @@ body,
     right: 8px;
     bottom: calc(8px + env(safe-area-inset-bottom, 0px));
     width: auto;
-    height: 52svh;
-    max-height: 52svh;
+    height: auto;
+    max-height: min(72svh, calc(100svh - var(--chrome-control-height) - 32px));
+    transition: max-height var(--enter-dur) var(--ease);
+  }
+
+  .dock--collapsed {
+    max-height: none;
+    height: auto;
+  }
+
+  .dock--expanded {
+    height: min(72svh, calc(100svh - var(--chrome-control-height) - 24px));
+    max-height: min(72svh, calc(100svh - var(--chrome-control-height) - 24px));
+  }
+
+  .dock__sheet-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 100%;
+    padding: 8px 0 4px;
+    touch-action: none;
+    cursor: grab;
+  }
+
+  .dock__sheet-handle:active {
+    cursor: grabbing;
+  }
+
+  .dock__sheet-grab {
+    display: block;
+    width: 40px;
+    height: 4px;
+    border-radius: 99px;
+    background: color-mix(in srgb, currentColor 28%, transparent);
+  }
+
+  .dock__peek {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    margin: 0;
+    padding: 4px 0 10px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .dock__peek-identity {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+
+  .dock__peek-identity .dock__name {
+    font-size: 15px;
+    -webkit-line-clamp: 1;
+  }
+
+  .dock__peek-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--ui-muted);
+  }
+
+  .dock__peek-meta strong {
+    color: inherit;
+    font-weight: 560;
+  }
+
+  .dock__sheet-main {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .dock--collapsed .dock__sheet-main {
+    display: none;
+  }
+
+  .dock--expanded .dock__peek {
+    display: none;
+  }
+
+  .dock--about .dock__sheet-handle,
+  .dock--about .dock__peek {
+    display: none;
+  }
+
+  .dock__body {
+    padding: 10px 16px 14px;
+    gap: 0;
+  }
+
+  .dock--expanded .dock__body {
+    padding-top: 4px;
+    gap: 10px;
+    height: 100%;
+  }
+
+  .dock__sheet-main .dock__facts {
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--ui-line);
+  }
+
+  .dock .dock__nav {
+    margin: -2px 0 0;
   }
 
   .dock__name {

@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MapScene } from './components/MapScene';
 import { DockScroller } from './components/DockScroller';
 import { DockPanelControls } from './components/DockPanelControls';
+import { DockSheetHandle } from './components/DockSheetHandle';
 import { AboutPanel } from './components/AboutPanel';
+import { useMobileLayout } from './hooks/useMobileLayout';
 import {
   TrainService,
   type JourneyStop,
@@ -324,6 +326,9 @@ const App: React.FC = () => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchMobileOpen, setSearchMobileOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const isMobile = useMobileLayout();
+  const [mobileDockExpanded, setMobileDockExpanded] = useState(false);
+  const [mapBooting, setMapBooting] = useState(true);
 
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
@@ -601,7 +606,9 @@ const App: React.FC = () => {
     return () => controller.abort();
   }, [focusedStation, stationTab]);
 
-  const handleCanvasStateChange = useCallback((_state: 'loading' | 'loaded') => {}, []);
+  const handleCanvasStateChange = useCallback((state: 'loading' | 'loaded') => {
+    setMapBooting(state === 'loading');
+  }, []);
   const applyRoute = useCallback((route: AppRoute, leaving: boolean) => {
     setAboutOpen(route.about);
     setFocusedTrainNumber(route.train);
@@ -855,6 +862,12 @@ const App: React.FC = () => {
     ? selectedTrainDelayText
     : leaveSnap?.delayText ?? selectedTrainDelayText;
   const showDock = Boolean(displayTrain || displayStation || displayAbout);
+  const bootLocked = mapBooting || statusKind === 'loading';
+
+  useEffect(() => {
+    setMobileDockExpanded(false);
+  }, [focusedTrainNumber, focusedStation?.id, aboutOpen]);
+
   const accent =
     displayTrain?.color || getDelayColor(displayTrain?.delayMinutes ?? focusedTrain?.delayMinutes ?? 0);
   const nextStopIndex = journeyNextIndex(
@@ -862,6 +875,10 @@ const App: React.FC = () => {
     displayTrain,
     cursor?.stopIndex ?? null
   );
+  const approachingStopName =
+    nextStopIndex >= 0 && displayStops[nextStopIndex]
+      ? displayStops[nextStopIndex].name
+      : displayTrain?.nextStation ?? displayTrain?.currentStation ?? '—';
   const trailheadIndex = useMemo(() => {
     if (displayStops.length === 0) {
       return -1;
@@ -959,7 +976,10 @@ const App: React.FC = () => {
   }, [dataset, searchQuery, trains]);
 
   return (
-    <div className={`shell ${panelOpen ? 'is-panel-open' : ''}`} data-theme={theme}>
+    <div
+      className={`shell ${panelOpen ? 'is-panel-open' : ''} ${bootLocked ? 'shell--booting' : ''}`}
+      data-theme={theme}
+    >
       <div className="shell__map">
         <MapScene
           trains={trains}
@@ -1234,7 +1254,13 @@ const App: React.FC = () => {
       )}
       {showDock && (
       <aside
-        className={`dock ${dockLeaving ? 'is-leave' : 'is-enter'}`}
+        className={`dock ${dockLeaving ? 'is-leave' : 'is-enter'}${
+          isMobile && showDock && !displayAbout
+            ? mobileDockExpanded
+              ? ' dock--expanded'
+              : ' dock--collapsed'
+            : ''
+        }${displayAbout ? ' dock--about' : ''}`}
         style={{ '--accent': accent, '--accent-ink': contrastInk(accent) } as React.CSSProperties}
         onAnimationEnd={(event) => {
           if (event.currentTarget !== event.target) {
@@ -1251,62 +1277,77 @@ const App: React.FC = () => {
       >
         {displayTrain ? (
           <div className="dock__body">
-            <DockPanelControls
-              backLabel={t.back}
-              closeLabel={t.dockCloseAria}
-              onBack={handleDockBack}
-              onClose={handleClearFocus}
-            />
-            <div className="dock__head">
-              <p className="dock__identity">
-                <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
-                <span className={`dock__name${properTrainName ? '' : ' is-route'}`}>
-                  {properTrainName ||
-                    (routeEnds ? (
-                      <>
-                        {routeEnds.from}
-                        <span className="dock__name-arrow" aria-hidden="true">
-                          →
-                        </span>
-                        {routeEnds.to}
-                      </>
-                    ) : (
-                      t.train
-                    ))}
-                </span>
-              </p>
-              <div className="dock__meta">
-                <p className="dock__delay">{displayDelayText}</p>
+            {isMobile && (
+              <>
+                <DockSheetHandle
+                  expanded={mobileDockExpanded}
+                  onExpand={() => setMobileDockExpanded(true)}
+                  onCollapse={() => setMobileDockExpanded(false)}
+                  expandLabel={t.dockExpandSheet}
+                />
+                <button
+                  type="button"
+                  className="dock__peek"
+                  aria-expanded={mobileDockExpanded}
+                  onClick={() => setMobileDockExpanded(true)}
+                >
+                  <span className="dock__peek-identity">
+                    <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
+                    <span className={`dock__name${properTrainName ? '' : ' is-route'}`}>
+                      {properTrainName ||
+                        (routeEnds ? (
+                          <>
+                            {routeEnds.from}
+                            <span className="dock__name-arrow" aria-hidden="true">
+                              →
+                            </span>
+                            {routeEnds.to}
+                          </>
+                        ) : (
+                          t.train
+                        ))}
+                    </span>
+                  </span>
+                  <span className="dock__peek-meta">
+                    <span>{displayDelayText}</span>
+                    <span>
+                      {t.approachingStation}: <strong>{approachingStopName}</strong>
+                    </span>
+                  </span>
+                </button>
+              </>
+            )}
+            <div className="dock__sheet-main">
+              <DockPanelControls
+                backLabel={t.back}
+                closeLabel={t.dockCloseAria}
+                onBack={handleDockBack}
+                onClose={handleClearFocus}
+              />
+              <div className="dock__head">
+                <p className="dock__identity">
+                  <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
+                  <span className={`dock__name${properTrainName ? '' : ' is-route'}`}>
+                    {properTrainName ||
+                      (routeEnds ? (
+                        <>
+                          {routeEnds.from}
+                          <span className="dock__name-arrow" aria-hidden="true">
+                            →
+                          </span>
+                          {routeEnds.to}
+                        </>
+                      ) : (
+                        t.train
+                      ))}
+                  </span>
+                </p>
+                <div className="dock__meta">
+                  <p className="dock__delay">{displayDelayText}</p>
+                </div>
               </div>
-            </div>
-            <dl className="dock__facts">
-              {displayTrain.operator && (
-                <div>
-                  <dt>{t.operator}</dt>
-                  <dd>{displayTrain.operator}</dd>
-                </div>
-              )}
-              {displayTrain.currentStation && (
-                <div>
-                  <dt>{t.lastPosition}</dt>
-                  <dd>
-                    {focusedTrain ? (
-                      <button
-                        type="button"
-                        className="dock__fact-link"
-                        onClick={centerOnTrainPosition}
-                      >
-                        {displayTrain.currentStation}
-                      </button>
-                    ) : (
-                      displayTrain.currentStation
-                    )}
-                  </dd>
-                </div>
-              )}
-            </dl>
-            {displayTrain.note && <p className="dock__note">{displayTrain.note}</p>}
-            <DockScroller
+              {displayTrain.note && <p className="dock__note">{displayTrain.note}</p>}
+              <DockScroller
               loading={displayJourneyStatus === 'loading' || displayJourneyStatus === 'idle'}
               error={displayJourneyStatus === 'error' ? t.stationListUnavailable : null}
               label={t.loadingStations}
@@ -1380,16 +1421,68 @@ const App: React.FC = () => {
                 })}
               </ol>
             </DockScroller>
+              <dl className="dock__facts">
+                {displayTrain.operator && (
+                  <div>
+                    <dt>{t.operator}</dt>
+                    <dd>{displayTrain.operator}</dd>
+                  </div>
+                )}
+                {displayTrain.currentStation && (
+                  <div>
+                    <dt>{t.lastPosition}</dt>
+                    <dd>
+                      {focusedTrain ? (
+                        <button
+                          type="button"
+                          className="dock__fact-link"
+                          onClick={centerOnTrainPosition}
+                        >
+                          {displayTrain.currentStation}
+                        </button>
+                      ) : (
+                        displayTrain.currentStation
+                      )}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            </div>
           </div>
         ) : displayStation ? (
           <div className="dock__body">
-            <DockPanelControls
-              backLabel={t.back}
-              closeLabel={t.dockCloseAria}
-              onBack={handleDockBack}
-              onClose={handleClearFocus}
-            />
-            <div className="dock__head">
+            {isMobile && (
+              <>
+                <DockSheetHandle
+                  expanded={mobileDockExpanded}
+                  onExpand={() => setMobileDockExpanded(true)}
+                  onCollapse={() => setMobileDockExpanded(false)}
+                  expandLabel={t.dockExpandSheet}
+                />
+                <button
+                  type="button"
+                  className="dock__peek"
+                  aria-expanded={mobileDockExpanded}
+                  onClick={() => setMobileDockExpanded(true)}
+                >
+                  <span className="dock__peek-identity">
+                    <span className="dock__pill is-station">{t.station}</span>
+                    <span className="dock__name">{displayStation.name}</span>
+                  </span>
+                  <span className="dock__peek-meta">
+                    {displayStationTab === 'arrivals' ? t.arrivals : t.departures}
+                  </span>
+                </button>
+              </>
+            )}
+            <div className="dock__sheet-main">
+              <DockPanelControls
+                backLabel={t.back}
+                closeLabel={t.dockCloseAria}
+                onBack={handleDockBack}
+                onClose={handleClearFocus}
+              />
+              <div className="dock__head">
               <p className="dock__identity">
                 <span className="dock__pill is-station">{t.station}</span>
                 <span className="dock__name">{displayStation.name}</span>
@@ -1482,6 +1575,7 @@ const App: React.FC = () => {
             >
               {t.openOnCpSk}
             </a>
+            </div>
           </div>
         ) : displayAbout ? (
           <AboutPanel onBack={handleAboutBack} copy={t} locale={locale} />

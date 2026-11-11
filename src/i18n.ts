@@ -52,6 +52,8 @@ export type Copy = {
   aboutPill: string;
   back: string;
   dockCloseAria: string;
+  approachingStation: string;
+  dockExpandSheet: string;
   loadingAbout: string;
   mapLoading: string;
   mapStepMap: string;
@@ -105,6 +107,8 @@ const sk: Copy = {
   aboutPill: 'O aplikácii',
   back: 'Späť',
   dockCloseAria: 'Zavrieť a zrušiť výber',
+  approachingStation: 'Ďalšia zastávka',
+  dockExpandSheet: 'Rozbaliť panel',
   loadingAbout: 'Načítavam',
   mapLoading: 'Načítava sa',
   mapStepMap: 'Mapa',
@@ -159,6 +163,8 @@ const en: Copy = {
   aboutPill: 'About',
   back: 'Back',
   dockCloseAria: 'Close and clear selection',
+  approachingStation: 'Next stop',
+  dockExpandSheet: 'Expand panel',
   loadingAbout: 'Loading',
   mapLoading: 'Loading',
   mapStepMap: 'Map',
