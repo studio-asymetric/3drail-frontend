@@ -404,9 +404,17 @@ function scheduleJourneySync() {
   setInterval(run, JOURNEY_SYNC_MS);
 }
 
-function handleJourneys(res) {
-  sendCompressed(res, 200, journeyStore.payload(), 'application/json; charset=utf-8', {
+function handleJourneys(req, res) {
+  const body = journeyStore.payload();
+  const etag = journeyStore.etag();
+  if (etag && req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
+    res.end();
+    return;
+  }
+  sendCompressed(res, 200, body, 'application/json; charset=utf-8', {
     'Cache-Control': 'no-cache',
+    ETag: etag,
   });
 }
 
@@ -1442,7 +1450,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (mode === 'journeys') {
-      handleJourneys(res);
+      handleJourneys(req, res);
       return;
     }
     if (mode === 'stations') {

@@ -479,9 +479,18 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail })
           ok: route.hops.every((hop) => hop === 1),
         });
       });
-      const body = JSON.stringify({ v: JOURNEY_FORMAT_VERSION, generatedAt: Math.round(nowMs / 1000), journeys });
-      payloadCache = { at: nowMs, body };
+      journeys.sort((left, right) => (left.n < right.n ? -1 : left.n > right.n ? 1 : 0));
+      const list = JSON.stringify(journeys);
+      const etag = `"${crypto.createHash('sha1').update(list).digest('hex').slice(0, 20)}"`;
+      const body = `{"v":${JOURNEY_FORMAT_VERSION},"journeys":${list}}`;
+      payloadCache = { at: nowMs, body, etag };
       return body;
+    },
+
+    /** ETag of the current payload, so unchanged lists can be answered with 304. */
+    etag(nowMs = Date.now()) {
+      this.payload(nowMs);
+      return payloadCache?.etag ?? '';
     },
 
     stats() {

@@ -53,6 +53,7 @@ import {
 import { closeRailGaps } from '../data/railStitch';
 import { decodePolyline, encodePolyline, fetchTrainRoute } from '../data/routeService';
 import { fetchJourneys, JourneyAnimator } from '../data/journeyService';
+import { TrainCanvasLayer } from './trainCanvas';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
 import {
   clipWaysToOutline,
@@ -266,13 +267,12 @@ type TrainPillPoint = {
 
 /** Zoom from which timetable-driven trains move smoothly (below it they update every few seconds). */
 const JOURNEY_SMOOTH_ZOOM = 9;
+/** Zoom the camera moves to when a train is opened (close enough for smooth motion). */
+const TRAIN_FOCUS_ZOOM = 12;
+/** Extra pixels around a station dot that still hover or select it. */
+const STATION_HIT_PX = 14;
 
 type TrainMarkerEntry = {
-  marker: Marker;
-  attached: boolean;
-  el: HTMLButtonElement;
-  typeEl: HTMLElement;
-  arrowEl: HTMLElement;
   heading: number | null;
   lastLng: number;
   lastLat: number;
@@ -288,8 +288,6 @@ type TrainMarkerEntry = {
   motionRequestId?: string;
   /** Position comes from the timetable model (journeyService), not the reported point. */
   journeyActive?: boolean;
-  lastArrowKey: string;
-  lastColor: string;
   lastSelected: boolean;
   lastType: string;
   width: number;
@@ -316,51 +314,8 @@ function trainNumberLabel(type: string, trainNumber: string): string {
   return number;
 }
 
-function placeTrainArrow(entry: TrainMarkerEntry) {
-  const heading = entry.heading;
-  if (heading == null) {
-    if (entry.lastArrowKey !== 'hidden') {
-      entry.arrowEl.style.opacity = '0';
-      entry.lastArrowKey = 'hidden';
-    }
-      return;
-    }
-  const width = entry.width || 26;
-  const height = 14;
-  const key = `${heading.toFixed(2)}:${width}:${height}:${TRAIN_ARROW_INSET_PX}`;
-  if (entry.lastArrowKey === key) {
-      return;
-    }
-  const { x, y } = stadiumEdgePoint(width, height, heading, TRAIN_ARROW_INSET_PX);
-  entry.lastArrowKey = key;
-  entry.arrowEl.style.opacity = '1';
-  entry.arrowEl.style.transform = `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px) rotate(${heading}deg)`;
-}
-
-function createTrainPill(onPick: (trainId: string) => void): TrainMarkerEntry {
-  const el = document.createElement('button');
-  el.type = 'button';
-  el.className = 'train-pill';
-  const typeEl = document.createElement('span');
-  typeEl.className = 'train-pill__type';
-  const arrowEl = document.createElement('span');
-  arrowEl.className = 'train-pill__arrow';
-  arrowEl.setAttribute('aria-hidden', 'true');
-  el.append(typeEl, arrowEl);
-  el.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const id = el.dataset.trainId;
-    if (id) {
-      onPick(id);
-    }
-  });
+function createTrainEntry(): TrainMarkerEntry {
   return {
-    marker: new Marker({ element: el, anchor: 'center', className: 'train-pill-wrap' }),
-    attached: false,
-    el,
-    typeEl,
-    arrowEl,
     heading: null,
     lastLng: Number.NaN,
     lastLat: Number.NaN,
@@ -368,8 +323,6 @@ function createTrainPill(onPick: (trainId: string) => void): TrainMarkerEntry {
     trackLng: Number.NaN,
     targetLat: Number.NaN,
     targetLng: Number.NaN,
-    lastArrowKey: '',
-    lastColor: '',
     lastSelected: false,
     lastType: '',
     width: 26,
@@ -432,7 +385,7 @@ const STATION_HIT_LAYERS = [
   'stations-fill',
   'stations-selected',
 ];
-const STATION_DOT_MIN_ZOOM = 12.8;
+const STATION_DOT_MIN_ZOOM = 10.6;
 
 function stationLabelFont(map: MapLibreMap): string[] {
   for (const layer of map.getStyle()?.layers ?? []) {
@@ -453,6 +406,8 @@ function stationCircleRadius(base: [number, number, number, number]): Expression
     'interpolate',
     ['linear'],
     ['zoom'],
+    STATION_DOT_MIN_ZOOM,
+    ['case', ['boolean', ['feature-state', 'hover'], false], close * hoverGain, close],
     12.8,
     ['case', ['boolean', ['feature-state', 'hover'], false], close * hoverGain, close],
     14,
@@ -898,7 +853,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   const labelLayout = {
     'text-font': labelFont,
     'text-field': ['coalesce', ['get', 'name'], ''],
-    'text-size': ['interpolate', ['linear'], ['zoom'], 12.8, 10.5, 14, 12, 16, 13],
+    'text-size': ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 10, 12.8, 10.5, 14, 12, 16, 13],
     'text-anchor': 'left' as const,
     'text-offset': [1.15, 0],
     'text-optional': true,
@@ -933,7 +888,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     source: 'stations',
     minzoom: STATION_DOT_MIN_ZOOM,
     paint: {
-      'circle-radius': stationCircleRadius([5.2, 8.4, 12, 1.35]),
+      'circle-radius': stationCircleRadius([6.4, 8.4, 12, 1.35]),
       'circle-color': fillColor,
       'circle-opacity': [
         'case',
@@ -953,7 +908,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     source: 'stations',
     minzoom: STATION_DOT_MIN_ZOOM,
     paint: {
-      'circle-radius': stationCircleRadius([2.3, 3.5, 4.8, 1.18]),
+      'circle-radius': stationCircleRadius([3.2, 3.6, 4.8, 1.18]),
       'circle-color': casingColor,
       'circle-pitch-alignment': 'map',
     },
@@ -964,7 +919,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     source: 'stations',
     minzoom: STATION_DOT_MIN_ZOOM,
     paint: {
-      'circle-radius': stationCircleRadius([1.55, 2.45, 3.35, 1.18]),
+      'circle-radius': stationCircleRadius([2.2, 2.5, 3.35, 1.18]),
       'circle-color': fillColor,
       'circle-pitch-alignment': 'map',
     },
@@ -975,7 +930,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     source: 'stations',
     minzoom: STATION_DOT_MIN_ZOOM,
     paint: {
-      'circle-radius': stationCircleRadius([4.2, 6.2, 8, 1.08]),
+      'circle-radius': stationCircleRadius([5, 6.2, 8, 1.08]),
       'circle-color': '#fddf57',
       'circle-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 1, 0],
       'circle-stroke-width': ['case', ['boolean', ['feature-state', 'selected'], false], 2, 0],
@@ -987,11 +942,11 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     id: 'stations-label-major',
     type: 'symbol',
     source: 'stations',
-    minzoom: 13,
+    minzoom: STATION_DOT_MIN_ZOOM,
     filter: ['==', ['get', 'rank'], 3],
     layout: {
       ...labelLayout,
-      'text-size': ['interpolate', ['linear'], ['zoom'], 13, 11, 14, 13, 16, 14],
+      'text-size': ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 10.5, 13, 11, 14, 13, 16, 14],
     },
     paint: { ...labelPaint, 'text-opacity': hideLabelWhenHovered },
   });
@@ -999,7 +954,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     id: 'stations-label-mid',
     type: 'symbol',
     source: 'stations',
-    minzoom: 13.4,
+    minzoom: STATION_DOT_MIN_ZOOM,
     filter: ['==', ['get', 'rank'], 2],
     layout: labelLayout,
     paint: { ...labelPaint, 'text-opacity': hideLabelWhenHovered },
@@ -1008,11 +963,11 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     id: 'stations-label-minor',
     type: 'symbol',
     source: 'stations',
-    minzoom: 14.1,
+    minzoom: STATION_DOT_MIN_ZOOM,
     filter: ['==', ['get', 'rank'], 1],
     layout: {
       ...labelLayout,
-      'text-size': ['interpolate', ['linear'], ['zoom'], 13, 10.5, 15, 12],
+      'text-size': ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 9.5, 13, 10.5, 15, 12],
     },
     paint: { ...labelPaint, 'text-opacity': hideLabelWhenHovered },
   });
@@ -1161,6 +1116,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const followDragStartRef = useRef<{ lat: number; lng: number } | null>(null);
   const publishTrainMarkersRef = useRef<() => void>(() => undefined);
   const trainMarkersRef = useRef<Map<string, TrainMarkerEntry>>(new Map());
+  const trainCanvasRef = useRef<TrainCanvasLayer | null>(null);
   const lastTrainPositionsRef = useRef<Map<string, { lat: number; lng: number }>>(new Map());
   const trainNodeStampRef = useRef<Map<string, string>>(new Map());
   const lastScheduledPositionRef = useRef<{ lat: number; lng: number } | null>(null);
@@ -1423,9 +1379,37 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       setSourceData(map, 'stations-hover', EMPTY_COLLECTION);
       map.getCanvas().style.cursor = '';
     };
-    const handleStationMove = (event: MapLayerMouseEvent) => {
+    /** Nearest station within STATION_HIT_PX of the pointer (dots are tiny on their own). */
+    const stationNear = (point: { x: number; y: number }) => {
       const layers = STATION_HIT_LAYERS.filter((layerId) => Boolean(map.getLayer(layerId)));
-      const feature = layers.length > 0 ? map.queryRenderedFeatures(event.point, { layers })[0] : undefined;
+      if (layers.length === 0) {
+        return undefined;
+      }
+      const hits = map.queryRenderedFeatures(
+        [
+          [point.x - STATION_HIT_PX, point.y - STATION_HIT_PX],
+          [point.x + STATION_HIT_PX, point.y + STATION_HIT_PX],
+        ],
+        { layers }
+      );
+      let best: (typeof hits)[number] | undefined;
+      let bestDistance = Infinity;
+      hits.forEach((hit) => {
+        if (hit.geometry?.type !== 'Point') {
+          return;
+        }
+        const [lng, lat] = hit.geometry.coordinates as [number, number];
+        const projected = map.project([lng, lat]);
+        const distance = Math.hypot(projected.x - point.x, projected.y - point.y);
+        if (distance <= STATION_HIT_PX && distance < bestDistance) {
+          best = hit;
+          bestDistance = distance;
+        }
+      });
+      return best;
+    };
+    const handleStationMove = (event: MapLayerMouseEvent) => {
+      const feature = stationNear(event.point);
       const id = feature?.properties?.id ?? (feature?.id != null ? String(feature.id) : null);
       const name = feature?.properties?.name;
       const coordinates = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : null;
@@ -1467,7 +1451,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       map.getCanvas().style.cursor = 'pointer';
     };
     const handleStationClick = (event: MapLayerMouseEvent) => {
-      const feature = event.features?.[0];
+      const feature = stationNear(event.point);
       const id = feature?.properties?.id;
       const name = feature?.properties?.name;
       const coordinates = feature?.geometry?.type === 'Point' ? feature.geometry.coordinates : null;
@@ -1483,14 +1467,11 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     };
     map.on('mousemove', handleStationMove);
     map.on('mouseout', clearStationHover);
-    STATION_HIT_LAYERS.forEach((layerId) => {
-      map.on('click', layerId, handleStationClick);
-    });
     const handleBackgroundClick = (event: MapLayerMouseEvent) => {
-      const layers = STATION_HIT_LAYERS.filter((layerId) => Boolean(map.getLayer(layerId)));
-      if (layers.length > 0 && map.queryRenderedFeatures(event.point, { layers }).length > 0) {
-          return;
-        }
+      if (stationNear(event.point)) {
+        handleStationClick(event);
+        return;
+      }
       onBackgroundClickRef.current?.();
     };
     map.on('click', handleBackgroundClick);
@@ -1541,10 +1522,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         window.cancelAnimationFrame(trainPublishRafRef.current);
         trainPublishRafRef.current = 0;
       }
-      trainMarkersRef.current.forEach((entry) => {
-        entry.marker.remove();
-        entry.attached = false;
-      });
+      trainCanvasRef.current?.destroy();
+      trainCanvasRef.current = null;
       trainMarkersRef.current.clear();
       map.remove();
       mapRef.current = null;
@@ -1598,6 +1577,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     if (!following || !focusedTrainNumber || !focusedRouteCursor) {
       return null;
     }
+    // Trains with a stored journey are moved (and followed) by the journey loop.
+    if (journeyAnimatorRef.current.isActive(focusedTrainNumber)) {
+      return null;
+    }
     const { from, to, fraction, position } = focusedRouteCursor;
     const routed = (networkRoute ?? []).filter((path) => path.length > 1);
     if (routed.length > 0 && from && to) {
@@ -1605,7 +1588,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       return placeOnPath(path, from, to, fraction);
     }
     return position;
-  }, [following, focusedTrainNumber, focusedRouteCursor, networkRoute]);
+  }, [following, focusedTrainNumber, focusedRouteCursor, networkRoute, journeysVersion, trains]);
   const focusedInterpolatedPositionRef = useRef(focusedInterpolatedPosition);
   focusedInterpolatedPositionRef.current = focusedInterpolatedPosition;
 
@@ -1902,29 +1885,14 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       seen.add(point.id);
       let entry = live.get(point.id);
       if (!entry) {
-        entry = createTrainPill((trainId) => onTrainClickRef.current?.(trainId));
+        entry = createTrainEntry();
         live.set(point.id, entry);
       }
-      entry.el.dataset.trainId = point.id;
-      if (entry.lastColor !== point.color) {
-        entry.el.style.backgroundColor = point.color;
-        entry.el.style.color = contrastInk(point.color);
-        entry.lastColor = point.color;
-      }
-      if (entry.lastSelected !== point.selected) {
-        entry.el.classList.toggle('is-selected', point.selected);
-        entry.el.style.zIndex = point.selected ? '3' : '1';
+      if (entry.lastSelected !== point.selected || entry.lastType !== point.type) {
         entry.lastSelected = point.selected;
-        entry.width = estimateTrainPillWidth(point.type, point.selected);
-        entry.lastArrowKey = '';
-      }
-      if (entry.lastType !== point.type) {
-        entry.typeEl.textContent = point.type;
         entry.lastType = point.type;
         entry.width = estimateTrainPillWidth(point.type, point.selected);
-        entry.lastArrowKey = '';
       }
-      entry.el.setAttribute('aria-label', `${point.type} ${point.number}`);
       if (!Number.isFinite(entry.trackLat)) {
         entry.trackLat = point.lat;
         entry.trackLng = point.lng;
@@ -1938,13 +1906,6 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       const trackLat = entry.trackLat;
       const trackLng = entry.trackLng;
       entry.heading = entry.motion || entry.journeyActive ? entry.heading : point.heading;
-      if (!entry.attached) {
-        entry.marker.setLngLat([trackLng, trackLat]);
-        entry.lastLng = trackLng;
-        entry.lastLat = trackLat;
-        entry.marker.addTo(map);
-        entry.attached = true;
-      }
     return {
         ...point,
         lat: trackLat,
@@ -1971,24 +1932,32 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
               iterations: packIterations,
             }
           );
-    spread.forEach((point) => {
-      const entry = live.get(point.id);
-      if (!entry) {
-        return;
+    if (!trainCanvasRef.current) {
+      trainCanvasRef.current = new TrainCanvasLayer(map, (trainId) => onTrainClickRef.current?.(trainId));
+    }
+    trainCanvasRef.current.setPills(
+      spread.map((point) => {
+        const entry = live.get(point.id);
+        if (entry) {
+          entry.lastLng = point.lng;
+          entry.lastLat = point.lat;
+        }
+        return {
+          id: point.id,
+          lng: point.lng,
+          lat: point.lat,
+          type: point.type,
+          color: point.color,
+          selected: point.selected,
+          heading: point.heading ?? null,
+          label: `${point.type} ${point.number}`,
+        };
+      })
+    );
+    live.forEach((_, id) => {
+      if (!seen.has(id)) {
+        live.delete(id);
       }
-      if (entry.lastLng !== point.lng || entry.lastLat !== point.lat) {
-        entry.marker.setLngLat([point.lng, point.lat]);
-        entry.lastLng = point.lng;
-        entry.lastLat = point.lat;
-      }
-      placeTrainArrow(entry);
-    });
-    live.forEach((entry, id) => {
-      if (seen.has(id)) {
-        return;
-      }
-      entry.marker.remove();
-      live.delete(id);
     });
     } catch (error) {
       console.error('Failed to publish train pills', error);
@@ -2200,7 +2169,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       controller = new AbortController();
       try {
         const journeys = await fetchJourneys(controller.signal);
-        if (cancelled) {
+        if (cancelled || !journeys) {
           return;
         }
         journeyAnimatorRef.current.setJourneys(journeys);
@@ -2244,7 +2213,16 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       const followed = followingRef.current ? focusedTrainRef.current : null;
       let changed = false;
       trainMarkersRef.current.forEach((entry, id) => {
-        const position = id === followed ? null : animator.position(id, now);
+        const position = animator.position(id, now);
+        if (position && id === followed) {
+          followPositionRef.current = { lat: position.lat, lng: position.lng, sequence: 0 };
+          if (!userDraggingRef.current && !map.isMoving()) {
+            const center = map.getCenter();
+            if (Math.hypot(center.lat - position.lat, center.lng - position.lng) > 0.000005) {
+              map.jumpTo({ center: [position.lng, position.lat] });
+            }
+          }
+        }
         if (position) {
           entry.trackLat = position.lat;
           entry.trackLng = position.lng;
@@ -2295,15 +2273,21 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     }
     const map = mapRef.current;
     const train = trains.find((item) => item.trainNumber === focusedTrainNumber);
-    const position = focusedInterpolatedPosition ?? train?.position;
+    // Where the pill is drawn (timetable model), not the last station ZSR reported.
+    const modelled = journeyAnimatorRef.current.peek(focusedTrainNumber);
+    const position = modelled ?? focusedInterpolatedPosition ?? train?.position;
     if (!map || !position || lastFlownTrainRef.current === focusedTrainNumber) {
       return;
     }
     lastFlownTrainRef.current = focusedTrainNumber;
+    const duration = 700;
+    // Aim where the train will be when the camera arrives.
+    const ahead = modelled ? journeyAnimatorRef.current.peek(focusedTrainNumber, Date.now() + duration) : null;
+    const target = ahead ?? position;
     map.easeTo({
-      center: [position.lng, position.lat],
-      zoom: Math.max(map.getZoom(), 10),
-      duration: 700,
+      center: [target.lng, target.lat],
+      zoom: Math.max(map.getZoom(), TRAIN_FOCUS_ZOOM),
+      duration,
     });
   }, [focusedTrainNumber, following, trains, focusedInterpolatedPosition]);
 
@@ -2315,6 +2299,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     const position = followPosition;
     if (!mapReadyRef.current || !map || !position || userDraggingRef.current) {
       return;
+    }
+    if (journeyAnimatorRef.current.isActive(focusedTrainNumber)) {
+      return; // the journey loop keeps the camera on the moving train
     }
     const center = map.getCenter();
     if (Math.hypot(center.lat - position.lat, center.lng - position.lng) < 0.00012) {

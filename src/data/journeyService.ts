@@ -103,10 +103,18 @@ export function buildJourney(raw: RawJourney): Journey | null {
   return { train: raw.n, sig: raw.sig, lat, lng, cum, stops, at: raw.at ?? [], ok: raw.ok };
 }
 
-export async function fetchJourneys(signal?: AbortSignal): Promise<Map<string, Journey>> {
-  const response = await fetch('/proxy/journeys?mode=journeys&v=1', { signal, cache: 'no-store' });
+let lastJourneysEtag = '';
+
+/** All running trains' journeys, or null when the list has not changed since the last call. */
+export async function fetchJourneys(signal?: AbortSignal): Promise<Map<string, Journey> | null> {
+  // no-cache: the browser revalidates with the ETag and gets a 304 when nothing changed.
+  const response = await fetch('/proxy/journeys?mode=journeys&v=1', { signal, cache: 'no-cache' });
   if (!response.ok) {
     throw new Error(`Journeys HTTP ${response.status}`);
+  }
+  const etag = response.headers.get('etag') ?? '';
+  if (etag && etag === lastJourneysEtag) {
+    return null;
   }
   const payload = (await response.json()) as { journeys?: RawJourney[] };
   const out = new Map<string, Journey>();
@@ -116,6 +124,7 @@ export async function fetchJourneys(signal?: AbortSignal): Promise<Map<string, J
       out.set(journey.train, journey);
     }
   });
+  lastJourneysEtag = etag;
   return out;
 }
 
@@ -230,6 +239,8 @@ export interface LiveTrainInput {
   delayMinutes: number;
   position?: { lat: number; lng: number };
   rosterOrderCurrentStation?: number;
+  /** ZSR's PotvrdenyOdj: false while the train has not left its reported station. */
+  departureConfirmed?: boolean;
 }
 
 /**
@@ -256,6 +267,11 @@ export class JourneyAnimator {
 
   has(train: string): boolean {
     return this.journeys.has(train);
+  }
+
+  /** True when this train's position currently comes from the model. */
+  isActive(train: string): boolean {
+    return Boolean(this.states.get(train)?.active && this.journeys.get(train)?.stops.length);
   }
 
   update(trains: LiveTrainInput[]) {
@@ -287,7 +303,9 @@ export class JourneyAnimator {
       // Wait at the next timetabled stop until ZSR reports the train past it.
       // (Untimed passing points are not used: not all of them send reports.)
       const nextStop = journey.stops.find((stop) => stop.along > floor! + 1);
-      const ceiling = nextStop ? nextStop.along : Infinity;
+      // Not yet confirmed out of the station (e.g. waiting at the origin before its
+      // first report, when the delay still reads 0): keep it there.
+      const ceiling = train.departureConfirmed === false ? floor : nextStop ? nextStop.along : Infinity;
       const previous = this.states.get(train.trainNumber);
       this.states.set(train.trainNumber, {
         sig: journey.sig,
@@ -324,6 +342,17 @@ export class JourneyAnimator {
     const scheduled = alongAtTime(journey, nowMs / 1000 - state.delaySeconds);
     const along = scheduled ?? state.floor;
     return Math.min(state.ceiling, Math.max(state.floor, along));
+  }
+
+  /** Where the train is drawn right now, without advancing the animation. */
+  peek(train: string, nowMs = Date.now()): JourneyPosition | null {
+    const journey = this.journeys.get(train);
+    const state = this.states.get(train);
+    const target = this.target(train, nowMs);
+    if (!journey || !state || target == null) {
+      return null;
+    }
+    return pointAtAlong(journey, state.shownAlong ?? target);
   }
 
   /** Position on the rails for this frame, or null when the reported point should be shown instead. */

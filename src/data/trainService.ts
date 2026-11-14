@@ -41,6 +41,8 @@ interface MapaZsrTrain {
   OrderCurrentStation?: number | string;
   NadOd?: string | null;
   NadDo?: string | null;
+  /** True once ZSR has confirmed the train left its current station. */
+  PotvrdenyOdj?: boolean | null;
 }
 
 export interface RouteSegment {
@@ -70,6 +72,7 @@ export interface TrainRosterItem {
   route?: Coordinate[]; // Route coordinates from mapa.zsr.sk
   routeSegments?: RouteSegment[];
   position?: Coordinate; // Current position
+  departureConfirmed?: boolean;
   rosterPreviousStation?: string;
   rosterNextStation?: string;
   orderCurrentStation?: number;
@@ -113,6 +116,8 @@ export interface TrainRenderState {
   routeSegments?: RouteSegment[];
   /** Every point mapa.zsr.sk lists for the journey, junctions included, in order. */
   stopPath?: Coordinate[];
+  /** False while the train still stands at its reported station. */
+  departureConfirmed?: boolean;
   summary?: string;
   operator?: string;
   delayText?: string;
@@ -624,6 +629,7 @@ function convertTrainsToRosterItems(trains: MapaZsrTrain[]): TrainRosterItem[] {
       },
       timestamp: Date.now(),
       route: parseTrasa(train.Trasa),
+      departureConfirmed: typeof train.PotvrdenyOdj === 'boolean' ? train.PotvrdenyOdj : undefined,
       position: train.Position
         ? {
             lat: train.Position[0],
@@ -742,6 +748,7 @@ export function buildTrainRenderState(
       replacementTo: roster.replacementTo,
       note: roster.note,
       stopPath: roster.route && roster.route.length >= 2 ? roster.route : undefined,
+      departureConfirmed: roster.departureConfirmed,
     };
   }
 

@@ -804,6 +804,22 @@ body,
   z-index: 1;
 }
 
+.train-pill::after {
+  /* Invisible, larger click/hover target around the small pill. */
+  content: '';
+  position: absolute;
+  inset: -10px -9px;
+  border-radius: 999px;
+  background: transparent;
+  pointer-events: auto;
+}
+
+@media (pointer: coarse) {
+  .train-pill::after {
+    inset: -14px -12px;
+  }
+}
+
 .train-pill__arrow {
   position: absolute;
   left: 50%;
