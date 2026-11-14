@@ -60,8 +60,12 @@ const EASE_SECONDS = 2.5;
 const SNAP_METERS = 6000;
 /** A target this far behind the shown position is applied; smaller ones wait in place. */
 const BACKTRACK_METERS = 4000;
+/** Seconds a train shown too far on takes to slide back to where ZSR puts it. */
+const EASE_BACK_SECONDS = 4;
+/** A train ZSR still lists as waiting leaves this long after departure + delay. */
+const UNCONFIRMED_GRACE_SECONDS = 120;
 /** Passenger stops timetabled with no dwell (arr = dep) still stand this long. */
-const MIN_STOP_DWELL_SECONDS = 30;
+const MIN_STOP_DWELL_SECONDS = 60;
 /**
  * ZSR times are whole minutes; the event falls somewhere inside that minute.
  * Model it at the middle: a 20:46 departure (with delay) leaves at 20:46:30.
@@ -318,6 +322,8 @@ type TrainModelState = {
   delaySeconds: number;
   /** Delay as ZSR reported it, to tell when a new report arrives. */
   reportedDelay: number;
+  /** ZSR lists the train as not yet departed from its reported station. */
+  unconfirmed: boolean;
   /** Metres along the line of the last reported checkpoint. */
   floor: number;
   shownAlong: number | null;
@@ -426,6 +432,7 @@ export class JourneyAnimator {
         sig: journey.sig,
         delaySeconds,
         reportedDelay,
+        unconfirmed: train.departureConfirmed === false,
         floor,
         shownAlong: previous && previous.sig === journey.sig ? previous.shownAlong : null,
         lastMs: previous?.lastMs ?? 0,
@@ -440,6 +447,7 @@ export class JourneyAnimator {
       sig,
       delaySeconds: 0,
       reportedDelay: 0,
+      unconfirmed: false,
       floor: 0,
       shownAlong: null,
       lastMs: previous?.lastMs ?? 0,
@@ -454,7 +462,10 @@ export class JourneyAnimator {
     if (!journey || !state || !state.active) {
       return null;
     }
-    const scheduled = alongAtTime(journey, nowMs / 1000 - state.delaySeconds);
+    // ZSR often raises the delay of a train it still lists as waiting: give it a
+    // short grace after departure + delay before the pill leaves the station.
+    const grace = state.unconfirmed ? UNCONFIRMED_GRACE_SECONDS : 0;
+    const scheduled = alongAtTime(journey, nowMs / 1000 - state.delaySeconds - grace);
     const along = scheduled ?? state.floor;
     return Math.max(state.floor, along);
   }
@@ -482,7 +493,11 @@ export class JourneyAnimator {
     state.lastMs = nowMs;
     let shown = state.shownAlong ?? target;
     const gap = target - shown;
-    if (Math.abs(gap) > SNAP_METERS || gap < -BACKTRACK_METERS) {
+    if (gap < -BACKTRACK_METERS) {
+      // The train was shown further on than ZSR says it can be: slide it back
+      // instead of teleporting it.
+      shown += gap * Math.min(1, dt / EASE_BACK_SECONDS);
+    } else if (gap > SNAP_METERS) {
       shown = target;
     } else if (gap > 0) {
       shown += gap * Math.min(1, dt / EASE_SECONDS);

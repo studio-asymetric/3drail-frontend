@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error plain ESM module from the proxy, no type declarations
 import { classifyStops, isNonStopName, normalizeStationName } from '../../proxy/trainDetail.mjs';
-import { alongAtTime, buildJourney } from '../data/journeyService';
+import { alongAtTime, buildJourney, JourneyAnimator } from '../data/journeyService';
 import { encodePolyline } from '../data/routeService';
 
 type Row = {
@@ -93,17 +93,17 @@ describe('buildJourney stop dwell', () => {
         [9000, t0 + 540, null, 3, 1],
       ],
     })!;
-    // Times sit mid-minute: the 0-minute halt stands from :00 to :30.
+    // Times sit mid-minute: the 0-minute halt stands one minute, ending at :30.
     expect(journey.stops[0].dep).toBe(t0 + 30);
-    expect(journey.stops[1].arr).toBe(t0 + 180);
+    expect(journey.stops[1].arr).toBe(t0 + 150);
     expect(journey.stops[1].dep).toBe(t0 + 210);
     expect(journey.stops[2].dep - journey.stops[2].arr).toBe(0);
-    expect(alongAtTime(journey, t0 + 185)).toBe(3000);
+    expect(alongAtTime(journey, t0 + 155)).toBe(3000);
     expect(alongAtTime(journey, t0 + 209)).toBe(3000);
     expect(alongAtTime(journey, t0 + 212)).toBeGreaterThan(3000);
     // The passing point is one run with the halt-to-terminus leg: no stand there.
     expect(journey.runs).toEqual([
-      [t0 + 30, t0 + 180],
+      [t0 + 30, t0 + 150],
       [t0 + 210, t0 + 570],
     ]);
   });
@@ -131,5 +131,61 @@ describe('buildJourney stop dwell', () => {
     expect(at(40) - at(30)).toBeGreaterThan(at(20) - at(10));
     // Symmetric braking.
     expect(6000 - at(590)).toBeCloseTo(at(10), 5);
+  });
+});
+
+describe('JourneyAnimator glitches', () => {
+  const line = encodePolyline([
+    { lat: 48.0, lng: 17.0 },
+    { lat: 48.5, lng: 17.0 },
+  ]);
+  const t0 = 1_800_000_000;
+  const raw = {
+    n: '7',
+    sig: 'z',
+    line,
+    ok: true,
+    at: [0, 50000] as Array<number | null>,
+    stops: [
+      [0, null, t0, 0, 1],
+      [50000, t0 + 3600, null, 1, 1],
+    ] as Array<[number, number | null, number | null, number, number?]>,
+  };
+  const make = (departureConfirmed: boolean, delayMinutes = 0) => {
+    const animator = new JourneyAnimator();
+    animator.setJourneys(new Map([['7', buildJourney(raw)!]]));
+    animator.update([{ trainNumber: '7', delayMinutes, rosterOrderCurrentStation: 0, departureConfirmed }]);
+    return animator;
+  };
+  // Timetable times sit mid-minute, so the departure is t0 + 30 s.
+  const departure = (t0 + 30) * 1000;
+
+  afterEach(() => vi.useRealTimers());
+
+  it('holds a train ZSR still lists as waiting for a short grace after departure + delay', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(departure);
+    const waiting = make(false);
+    const left = make(true);
+    expect(waiting.target('7', departure + 60_000)).toBe(0);
+    expect(left.target('7', departure + 60_000)).toBeGreaterThan(500);
+    expect(waiting.target('7', departure + 150_000)).toBeGreaterThan(50);
+  });
+
+  it('slides a train back instead of teleporting it when its delay grows', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(departure);
+    const animator = make(true, 0);
+    const later = departure + 1_800_000;
+    animator.position('7', later);
+    const before = animator.peek('7', later)!.along;
+    animator.update([{ trainNumber: '7', delayMinutes: 20, rosterOrderCurrentStation: 0, departureConfirmed: true }]);
+    const target = animator.target('7', later)!;
+    expect(before - target).toBeGreaterThan(8000);
+    animator.position('7', later + 1000);
+    animator.position('7', later + 2000);
+    const shown = animator.peek('7', later + 2000)!.along;
+    expect(shown).toBeLessThan(before - 1000);
+    expect(shown).toBeGreaterThan(target + 1000);
   });
 });
