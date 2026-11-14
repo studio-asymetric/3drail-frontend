@@ -56,3 +56,57 @@ export function parseTrainDetail(html) {
 
   return stops;
 }
+
+/**
+ * Operational points that never serve passengers: junctions (Odb.), passing
+ * loops (Výh., "výh. č."), automatic block signals (AH), sidings (Vlečka),
+ * region borders, km posts, freight yards and state borders.
+ */
+const NON_STOP_NAME =
+  /^(odb\.?|odbočka|výh\.?|vyh\.?|ah|vlečka|vlecka|hranica|km|hláska|hlaska)\s|\svýh\.\s*č\.|\sodb\.?$|nákladná stanic|tranzitná skupina|zriaďovacia stanica|\sšt\.\s*hr\.?$/i;
+
+export function isNonStopName(name) {
+  return NON_STOP_NAME.test(String(name ?? '').trim());
+}
+
+export function normalizeStationName(name) {
+  return String(name ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+const hasTime = (value) => /\d{1,2}:\d{2}/.test(String(value ?? ''));
+
+/**
+ * Whether the train calls at each row ('stop') or only runs through it ('pass').
+ *
+ * Rows ahead of the train are reliable: mapa.zsr.sk gives times only where it
+ * stops. Rows already passed also carry times for points it ran through (they
+ * reported), so there a name in the GTFS stop list of this train decides when
+ * one is known (`gtfsStops`, normalized names), and a scheduled dwell always
+ * counts as a stop (crossing waits at a passing loop included).
+ */
+export function classifyStops(stops, gtfsStops = null) {
+  const last = stops.length - 1;
+  return stops.map((stop, index) => {
+    if (index === 0 || index === last) {
+      return { ...stop, kind: 'stop' };
+    }
+    const arr = stop.scheduledArrival;
+    const dep = stop.scheduledDeparture;
+    if (!hasTime(arr) && !hasTime(dep)) {
+      return { ...stop, kind: 'pass' };
+    }
+    const dwells = hasTime(arr) && hasTime(dep) && arr !== dep;
+    if (isNonStopName(stop.name)) {
+      return { ...stop, kind: dwells ? 'wait' : 'pass' };
+    }
+    if (stop.state !== 'ahead' && !dwells && gtfsStops && gtfsStops.size > 0) {
+      return { ...stop, kind: gtfsStops.has(normalizeStationName(stop.name)) ? 'stop' : 'pass' };
+    }
+    return { ...stop, kind: 'stop' };
+  });
+}

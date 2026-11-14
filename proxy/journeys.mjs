@@ -14,6 +14,10 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { encodePolyline, traceRoute } from './railRoute.mjs';
+import { classifyStops } from './trainDetail.mjs';
+
+/** Stop kind codes sent to browsers: 0 runs through, 1 passenger stop, 2 operational wait (crossing). */
+const KIND_CODE = { pass: 0, stop: 1, wait: 2 };
 
 const LAT_METERS = 110_574;
 const LNG_METERS_AT_EQUATOR = 111_320;
@@ -232,7 +236,7 @@ export function scheduleEpochs(stops, anchorIndex, anchorText, nowMs = Date.now(
 
 // --- Store ----------------------------------------------------------------
 
-export function createJourneyStore({ file, log = () => undefined, fetchDetail }) {
+export function createJourneyStore({ file, log = () => undefined, fetchDetail, classify = (train, stops) => classifyStops(stops) }) {
   let graph = null;
   /** sig -> { line: [[lat,lng]], encoded, cum, located: (number|null)[], hops, tracedAt } */
   const routes = new Map();
@@ -471,15 +475,25 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail })
         let stops = [];
         if (usable) {
           const epochs = scheduleEpochs(timetable.stops, entry.anchorIndex, entry.anchorText, nowMs);
+          // Timetables saved before stops were classified get a name/time-based pass.
+          const kinds = timetable.stops.every((stop) => stop.kind)
+            ? timetable.stops
+            : classify(train, timetable.stops);
           stops = timetable.stops
-            .map((stop, index) => [route.located[index], epochs[index].arr, epochs[index].dep, index])
+            .map((stop, index) => [
+              route.located[index],
+              epochs[index].arr,
+              epochs[index].dep,
+              index,
+              KIND_CODE[kinds[index].kind] ?? 1,
+            ])
             .filter(([along, arr, dep]) => along != null && (arr != null || dep != null));
         }
         journeys.push({
           n: train,
           sig: entry.sig,
           line: route.encoded,
-          // [metres along line, scheduled arrival (epoch s), scheduled departure, stop index]
+          // [metres along line, scheduled arrival (epoch s), scheduled departure, stop index, kind code]
           stops,
           // Metres along the line for every listed point (null when off it); the
           // train's reported checkpoint (OrderCurrentStation) indexes this list.

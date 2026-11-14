@@ -3,7 +3,7 @@ import path from 'node:path';
 import http from 'node:http';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { parseTrainDetail } from './trainDetail.mjs';
+import { classifyStops, isNonStopName, normalizeStationName, parseTrainDetail } from './trainDetail.mjs';
 import { simplifyOsmPayload } from './simplifyRail.mjs';
 import {
   fetchMaptilerRails,
@@ -351,6 +351,7 @@ const journeyStore = createJourneyStore({
   file: path.join(path.dirname(config.cacheFile), 'journeys.json'),
   log: logMessage,
   fetchDetail: async (train) => (await fetchTrainDetailStops(train)).stops,
+  classify: (train, stops) => classifyStops(stops, gtfsCallsFor(train)),
 });
 journeyStore.load();
 
@@ -498,6 +499,52 @@ function gtfsDir() {
   return candidates.find((dir) => fs.existsSync(path.join(dir, 'stops.txt'))) ?? null;
 }
 
+/** trainNumber -> normalized names of the stations it calls at, from GTFS (null = not loaded). */
+let gtfsCalls = null;
+
+/** Stations the train calls at per the GTFS timetable, or null when it is not in the feed. */
+function gtfsCallsFor(train) {
+  if (!gtfsCalls) {
+    gtfsCalls = new Map();
+    try {
+      const dir = gtfsDir();
+      if (dir) {
+        const read = (name) => parseCsvRows(fs.readFileSync(path.join(dir, name), 'utf8'));
+        const stops = read('stops.txt');
+        const stopName = new Map(
+          stops.rows.map((row) => [row[stops.headers.indexOf('stop_id')], row[stops.headers.indexOf('stop_name')]])
+        );
+        const trips = read('trips.txt');
+        const tripTrain = new Map();
+        trips.rows.forEach((row) => {
+          // trip_short_name looks like "Ex 629 TATRAN": the number is the second token.
+          const number = String(row[trips.headers.indexOf('trip_short_name')] ?? '').split(/\s+/)[1];
+          if (number && /^\d+$/.test(number)) {
+            tripTrain.set(row[trips.headers.indexOf('trip_id')], number);
+          }
+        });
+        const times = read('stop_times.txt');
+        const tripIdx = times.headers.indexOf('trip_id');
+        const stopIdx = times.headers.indexOf('stop_id');
+        times.rows.forEach((row) => {
+          const number = tripTrain.get(row[tripIdx]);
+          const name = stopName.get(row[stopIdx]);
+          if (!number || !name) {
+            return;
+          }
+          if (!gtfsCalls.has(number)) {
+            gtfsCalls.set(number, new Set());
+          }
+          gtfsCalls.get(number).add(normalizeStationName(name));
+        });
+      }
+    } catch (error) {
+      logMessage(`GTFS call index failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return gtfsCalls.get(String(train)) ?? null;
+}
+
 function parseCsvRows(text) {
   const lines = String(text).replace(/^\uFEFF/, '').split(/\r?\n/).filter((line) => line.trim());
   const split = (line) => {
@@ -560,6 +607,9 @@ function buildStationsBody() {
       return;
     }
     const id = row[idIdx];
+    if (isNonStopName(row[nameIdx])) {
+      return; // passing loops and freight yards: no use to passengers
+    }
     stations.push([
       id,
       row[nameIdx],
@@ -1302,7 +1352,7 @@ async function fetchTrainDetailStops(train) {
     error.status = response.status;
     throw error;
   }
-  const stops = parseTrainDetail(html);
+  const stops = classifyStops(parseTrainDetail(html), gtfsCallsFor(train));
   detailCache.set(train, { at: Date.now(), stops });
   logMessage(`Fetched train detail ${train}, ${stops.length} stops`);
   return { stops, status: 'fetched' };

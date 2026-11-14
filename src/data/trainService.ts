@@ -59,6 +59,13 @@ export interface JourneyStop {
   scheduledArrival: string;
   scheduledDeparture: string;
   state: 'passed' | 'current' | 'ahead';
+  /** From the proxy: 'stop' serves passengers; 'pass' and 'wait' (crossings) do not. */
+  kind?: 'stop' | 'pass' | 'wait';
+}
+
+/** Whether passengers can board here; rows from an older proxy count as stops. */
+export function isPassengerStop(stop: JourneyStop): boolean {
+  return stop.kind == null || stop.kind === 'stop';
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

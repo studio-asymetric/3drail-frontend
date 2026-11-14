@@ -9,8 +9,8 @@ import { decodePolyline } from './routeService';
  *
  * mapa.zsr.sk does not send live GPS: `Position` is the last point the train
  * reported at (`OrderCurrentStation`). So the model never shows a train behind
- * that point, holds it there while its departure is unconfirmed, and otherwise
- * runs it on timetable + delay until the next report corrects it.
+ * that point, and otherwise runs it on timetable + delay (leaving each station at
+ * its departure time + delay, confirmed or not) until the next report corrects it.
  */
 
 export interface Journey {
@@ -20,12 +20,26 @@ export interface Journey {
   lng: Float64Array;
   /** Metres from the start of the line to each vertex. */
   cum: Float64Array;
-  /** Timed stops: metres along the line, arrival and departure in epoch seconds. */
-  stops: Array<{ along: number; arr: number; dep: number }>;
+  /**
+   * Timed points: metres along the line, arrival and departure in epoch seconds,
+   * and what happens there: 'stop' (passengers), 'wait' (operational, e.g. a
+   * crossing at a passing loop) or 'pass' (the train runs through).
+   */
+  stops: Array<{ along: number; arr: number; dep: number; kind: StopKind }>;
+  /**
+   * Runs between two places the train stands (departure, arrival in epoch s).
+   * Within a run the train speeds up and slows down gently; passing points
+   * inside it are rolled through.
+   */
+  runs: Array<[number, number]>;
   /** Metres along the line for every point ZSR lists (null when off the line). */
   at: Array<number | null>;
   ok: boolean;
 }
+
+export type StopKind = 'stop' | 'wait' | 'pass';
+
+const KIND_BY_CODE: Record<number, StopKind> = { 0: 'pass', 1: 'stop', 2: 'wait' };
 
 export interface JourneyPosition {
   lat: number;
@@ -46,6 +60,15 @@ const EASE_SECONDS = 2.5;
 const SNAP_METERS = 6000;
 /** A target this far behind the shown position is applied; smaller ones wait in place. */
 const BACKTRACK_METERS = 4000;
+/** Passenger stops timetabled with no dwell (arr = dep) still stand this long. */
+const MIN_STOP_DWELL_SECONDS = 30;
+/**
+ * ZSR times are whole minutes; the event falls somewhere inside that minute.
+ * Model it at the middle: a 20:46 departure (with delay) leaves at 20:46:30.
+ */
+const MID_MINUTE_SECONDS = 30;
+/** Seconds a train takes to reach cruising pace after a stand, and to brake into the next. */
+const ACCEL_SECONDS = 45;
 
 function meters(latA: number, lngA: number, latB: number, lngB: number): number {
   const dy = (latB - latA) * LAT_METERS;
@@ -66,7 +89,8 @@ type RawJourney = {
   n: string;
   sig: string;
   line: string;
-  stops: Array<[number, number | null, number | null, number]>;
+  /** [metres along, arrival, departure, index in ZSR's list, kind code (0 pass, 1 stop, 2 wait)] */
+  stops: Array<[number, number | null, number | null, number, number?]>;
   at?: Array<number | null>;
   ok: boolean;
 };
@@ -87,7 +111,7 @@ export function buildJourney(raw: RawJourney): Journey | null {
     }
   });
   const stops: Journey['stops'] = [];
-  (raw.stops ?? []).forEach(([along, arrRaw, depRaw]) => {
+  (raw.stops ?? []).forEach(([along, arrRaw, depRaw, , kindCode]) => {
     const arr = arrRaw ?? depRaw;
     const dep = depRaw ?? arrRaw;
     if (arr == null || dep == null) {
@@ -98,9 +122,69 @@ export function buildJourney(raw: RawJourney): Journey | null {
     if (last && (along < last.along - 50 || arr < last.dep)) {
       return;
     }
-    stops.push({ along, arr, dep: Math.max(dep, arr) });
+    stops.push({
+      along,
+      arr: arr + MID_MINUTE_SECONDS,
+      dep: Math.max(dep, arr) + MID_MINUTE_SECONDS,
+      kind: KIND_BY_CODE[kindCode ?? 1] ?? 'stop',
+    });
   });
-  return { train: raw.n, sig: raw.sig, lat, lng, cum, stops, at: raw.at ?? [], ok: raw.ok };
+  // A halt reads arr = dep. Give such passenger stops a short stand that ends
+  // at the (mid-minute) departure, taken from the run before, so the pill
+  // visibly stops there and rolls through passing points.
+  for (let index = 1; index < stops.length - 1; index += 1) {
+    const stop = stops[index];
+    const extra = MIN_STOP_DWELL_SECONDS - (stop.dep - stop.arr);
+    if (stop.kind !== 'stop' || extra <= 0) {
+      continue;
+    }
+    const before = stops[index - 1];
+    if (stop.arr - extra > before.dep + MIN_STOP_DWELL_SECONDS) {
+      stop.arr -= extra;
+    }
+  }
+  const runs: Journey['runs'] = [];
+  let runStart = stops.length > 0 ? stops[0].dep : 0;
+  for (let index = 1; index < stops.length; index += 1) {
+    const stop = stops[index];
+    const stands = index === stops.length - 1 || stop.dep > stop.arr;
+    if (stands) {
+      if (stop.arr > runStart) {
+        runs.push([runStart, stop.arr]);
+      }
+      runStart = stop.dep;
+    }
+  }
+  return { train: raw.n, sig: raw.sig, lat, lng, cum, stops, runs, at: raw.at ?? [], ok: raw.ok };
+}
+
+/**
+ * Time along the timetable for clock time `t` inside a run, so the train
+ * speeds up for ACCEL_SECONDS after leaving, cruises, and brakes for the same
+ * time before the next stand, still leaving and arriving on time.
+ */
+function easedRunTime(runs: Journey['runs'], t: number): number {
+  for (const [start, end] of runs) {
+    if (t <= start || t >= end) {
+      continue;
+    }
+    const total = end - start;
+    const ramp = Math.min(ACCEL_SECONDS, total / 2);
+    if (ramp <= 0) {
+      return t;
+    }
+    const pace = total / (total - ramp);
+    const s = t - start;
+    if (s < ramp) {
+      return start + (pace * s * s) / (2 * ramp);
+    }
+    if (s > total - ramp) {
+      const left = total - s;
+      return end - (pace * left * left) / (2 * ramp);
+    }
+    return start + pace * (s - ramp / 2);
+  }
+  return t;
 }
 
 let lastJourneysEtag = '';
@@ -147,6 +231,7 @@ export function alongAtTime(journey: Journey, t: number): number | null {
   if (t <= first.dep) {
     return first.along;
   }
+  t = easedRunTime(journey.runs ?? [], t);
   for (let index = 0; index < stops.length - 1; index += 1) {
     const from = stops[index];
     const to = stops[index + 1];
@@ -235,8 +320,6 @@ type TrainModelState = {
   reportedDelay: number;
   /** Metres along the line of the last reported checkpoint. */
   floor: number;
-  /** The train is not drawn past this (its station while departure is unconfirmed). */
-  ceiling: number;
   shownAlong: number | null;
   lastMs: number;
   active: boolean;
@@ -311,10 +394,9 @@ export class JourneyAnimator {
         return;
       }
       // ZSR does not report at every stop, so between reports the train keeps
-      // running on timetable + delay. Only a train whose departure from its
-      // reported station is not yet confirmed (e.g. waiting at the origin before
-      // its first report, when the delay still reads 0) is held there.
-      const ceiling = train.departureConfirmed === false ? floor : Infinity;
+      // running on timetable + delay. An unconfirmed departure is not held
+      // either: ZSR often confirms late, so the train leaves at departure +
+      // delay and the next report pulls it back if it really was still standing.
       const previous = this.states.get(train.trainNumber);
       const reportedDelay = Math.max(0, (train.latestDelayMinutes ?? train.delayMinutes ?? 0) * 60);
       let delaySeconds = reportedDelay;
@@ -345,7 +427,6 @@ export class JourneyAnimator {
         delaySeconds,
         reportedDelay,
         floor,
-        ceiling,
         shownAlong: previous && previous.sig === journey.sig ? previous.shownAlong : null,
         lastMs: previous?.lastMs ?? 0,
         active: true,
@@ -360,7 +441,6 @@ export class JourneyAnimator {
       delaySeconds: 0,
       reportedDelay: 0,
       floor: 0,
-      ceiling: Infinity,
       shownAlong: null,
       lastMs: previous?.lastMs ?? 0,
       active: false,
@@ -376,7 +456,7 @@ export class JourneyAnimator {
     }
     const scheduled = alongAtTime(journey, nowMs / 1000 - state.delaySeconds);
     const along = scheduled ?? state.floor;
-    return Math.min(state.ceiling, Math.max(state.floor, along));
+    return Math.max(state.floor, along);
   }
 
   /** Where the train is drawn right now, without advancing the animation. */

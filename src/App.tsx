@@ -13,6 +13,7 @@ import {
   contrastInk,
   getDelayColor,
   filterTimedJourneyStops,
+  isPassengerStop,
   mergeTrainList,
   routeCursor,
   stationPoints,
@@ -354,7 +355,9 @@ const App: React.FC = () => {
   const [statusKind, setStatusKind] = useState<'loading' | 'success' | 'error'>(
     'loading'
   );
-  const [journeyStops, setJourneyStops] = useState<JourneyStop[]>([]);
+  const [journeyRows, setJourneyRows] = useState<JourneyStop[]>([]);
+  /** Stops passengers can use: the panel list and its cursor. Passing points are left out. */
+  const journeyStops = useMemo(() => journeyRows.filter(isPassengerStop), [journeyRows]);
   const [journeyStatus, setJourneyStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const journeyAbortRef = useRef<AbortController | null>(null);
   const journeyPollRef = useRef(0);
@@ -461,6 +464,13 @@ const App: React.FC = () => {
     }
     return stationPoints(journeyStops, Object.values(dataset.stops));
   }, [dataset, journeyStops]);
+  /** Every listed point, passing points included: route waypoints for the map. */
+  const routeStations = useMemo(() => {
+    if (!dataset || journeyRows.length === 0) {
+      return [] as Array<Coordinate | null>;
+    }
+    return stationPoints(journeyRows, Object.values(dataset.stops));
+  }, [dataset, journeyRows]);
 
   const cursor = useMemo(() => {
     if (!focusedTrain || journeyStops.length === 0) {
@@ -571,14 +581,14 @@ const App: React.FC = () => {
     (trainNumber: string) => {
       if (!trainNumber) {
         stopJourneyLoad();
-        setJourneyStops([]);
+        setJourneyRows([]);
         setJourneyStatus('idle');
         return;
       }
       stopJourneyLoad();
       const controller = new AbortController();
       journeyAbortRef.current = controller;
-      setJourneyStops([]);
+      setJourneyRows([]);
       setJourneyStatus('loading');
       fetch(`/proxy/detail?mode=detail&train=${encodeURIComponent(trainNumber)}`, {
         signal: controller.signal,
@@ -589,7 +599,7 @@ const App: React.FC = () => {
           }
           const body = (await response.json()) as { stops?: JourneyStop[] };
           if (!controller.signal.aborted) {
-            setJourneyStops(
+            setJourneyRows(
               filterTimedJourneyStops(Array.isArray(body.stops) ? body.stops : [])
             );
             setJourneyStatus('ready');
@@ -600,7 +610,7 @@ const App: React.FC = () => {
             return;
           }
           if (!controller.signal.aborted) {
-            setJourneyStops([]);
+            setJourneyRows([]);
             setJourneyStatus('error');
           }
         });
@@ -614,7 +624,7 @@ const App: React.FC = () => {
             }
             const body = (await response.json()) as { stops?: JourneyStop[] };
             if (!controller.signal.aborted && Array.isArray(body.stops) && body.stops.length > 0) {
-              setJourneyStops(filterTimedJourneyStops(body.stops));
+              setJourneyRows(filterTimedJourneyStops(body.stops));
               setJourneyStatus('ready');
             }
           })
@@ -678,7 +688,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!focusedTrainNumber) {
       stopJourneyLoad();
-      setJourneyStops([]);
+      setJourneyRows([]);
       setJourneyStatus('idle');
     }
   }, [focusedTrainNumber, stopJourneyLoad]);
@@ -818,7 +828,7 @@ const App: React.FC = () => {
         refreshJourney(next);
       } else {
         stopJourneyLoad();
-        setJourneyStops([]);
+        setJourneyRows([]);
         setJourneyStatus('idle');
       }
       setDockLeaving(false);
@@ -836,7 +846,7 @@ const App: React.FC = () => {
       setFocusedTrainNumber(null);
       setFollowing(false);
       stopJourneyLoad();
-      setJourneyStops([]);
+      setJourneyRows([]);
       setJourneyStatus('idle');
       setStationTab('departures');
       setFocusedStation(station);
@@ -1184,8 +1194,8 @@ const App: React.FC = () => {
       <div className="shell__map">
         <MapScene
           trains={trains}
-          focusedStations={focusedStations}
-          journeyStops={journeyStops}
+          focusedStations={routeStations}
+          journeyStops={journeyRows}
           journeyStatus={journeyStatus}
           following={following}
           onFollowBreak={() => setFollowing(false)}
