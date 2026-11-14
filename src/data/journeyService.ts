@@ -9,8 +9,8 @@ import { decodePolyline } from './routeService';
  *
  * mapa.zsr.sk does not send live GPS: `Position` is the last point the train
  * reported at (`OrderCurrentStation`). So the model never shows a train behind
- * that point, and never lets it run past the next timetabled stop before ZSR
- * confirms it; it waits there until the next report moves the checkpoint on.
+ * that point, holds it there while its departure is unconfirmed, and otherwise
+ * runs it on timetable + delay until the next report corrects it.
  */
 
 export interface Journey {
@@ -44,8 +44,8 @@ const OFF_LINE_METERS = 900;
 const EASE_SECONDS = 2.5;
 /** Gaps larger than this are jumped instead of eased (e.g. after a long pause). */
 const SNAP_METERS = 6000;
-/** A target this far behind the shown position is applied; smaller ones wait. */
-const BACKTRACK_METERS = 1500;
+/** A target this far behind the shown position is applied; smaller ones wait in place. */
+const BACKTRACK_METERS = 4000;
 
 function meters(latA: number, lngA: number, latB: number, lngB: number): number {
   const dy = (latB - latA) * LAT_METERS;
@@ -136,8 +136,13 @@ export function alongAtTime(journey: Journey, t: number): number | null {
   }
   const first = stops[0];
   const last = stops[stops.length - 1];
-  if (t < first.dep - EDGE_SECONDS || t > last.arr + EDGE_SECONDS) {
+  if (t < first.dep - EDGE_SECONDS) {
     return null;
+  }
+  // Past the scheduled arrival but still listed by ZSR (late beyond the reported
+  // delay): wait at the terminus instead of falling back to the last report.
+  if (t >= last.arr) {
+    return last.along;
   }
   if (t <= first.dep) {
     return first.along;
@@ -224,10 +229,13 @@ export function projectOnJourney(journey: Journey, pointLat: number, pointLng: n
 
 type TrainModelState = {
   sig: string;
+  /** Delay the model runs on: the reported one, or lower if the train made up time. */
   delaySeconds: number;
+  /** Delay as ZSR reported it, to tell when a new report arrives. */
+  reportedDelay: number;
   /** Metres along the line of the last reported checkpoint. */
   floor: number;
-  /** Metres along the line of the next timetabled stop; the train waits here. */
+  /** The train is not drawn past this (its station while departure is unconfirmed). */
   ceiling: number;
   shownAlong: number | null;
   lastMs: number;
@@ -241,6 +249,8 @@ export interface LiveTrainInput {
   rosterOrderCurrentStation?: number;
   /** ZSR's PotvrdenyOdj: false while the train has not left its reported station. */
   departureConfirmed?: boolean;
+  /** Delay from ZSR's newer report at a later station; preferred over `delayMinutes`. */
+  latestDelayMinutes?: number;
 }
 
 /**
@@ -300,16 +310,40 @@ export class JourneyAnimator {
         this.markInactive(train.trainNumber, journey.sig);
         return;
       }
-      // Wait at the next timetabled stop until ZSR reports the train past it.
-      // (Untimed passing points are not used: not all of them send reports.)
-      const nextStop = journey.stops.find((stop) => stop.along > floor! + 1);
-      // Not yet confirmed out of the station (e.g. waiting at the origin before its
-      // first report, when the delay still reads 0): keep it there.
-      const ceiling = train.departureConfirmed === false ? floor : nextStop ? nextStop.along : Infinity;
+      // ZSR does not report at every stop, so between reports the train keeps
+      // running on timetable + delay. Only a train whose departure from its
+      // reported station is not yet confirmed (e.g. waiting at the origin before
+      // its first report, when the delay still reads 0) is held there.
+      const ceiling = train.departureConfirmed === false ? floor : Infinity;
       const previous = this.states.get(train.trainNumber);
+      const reportedDelay = Math.max(0, (train.latestDelayMinutes ?? train.delayMinutes ?? 0) * 60);
+      let delaySeconds = reportedDelay;
+      const sameReport =
+        previous?.active &&
+        previous.sig === journey.sig &&
+        previous.floor === floor &&
+        previous.reportedDelay === reportedDelay;
+      if (sameReport) {
+        // Keep the delay chosen when this report arrived, so a lowered one
+        // (below) is not recomputed against the clock and dragged back.
+        delaySeconds = previous.delaySeconds;
+      } else {
+        // Reported further on than timetable + delay allows: the train has made
+        // up time. Lower the delay so it runs on from the reported point now
+        // instead of waiting there for the timetable to catch up.
+        const nowSeconds = Date.now() / 1000;
+        const scheduled = alongAtTime(journey, nowSeconds - reportedDelay);
+        if (scheduled != null && scheduled < floor - 50) {
+          const passedAt = timeAtAlong(journey, floor, nowSeconds - reportedDelay);
+          if (passedAt != null) {
+            delaySeconds = Math.max(0, Math.min(reportedDelay, nowSeconds - passedAt));
+          }
+        }
+      }
       this.states.set(train.trainNumber, {
         sig: journey.sig,
-        delaySeconds: Math.max(0, (train.delayMinutes || 0) * 60),
+        delaySeconds,
+        reportedDelay,
         floor,
         ceiling,
         shownAlong: previous && previous.sig === journey.sig ? previous.shownAlong : null,
@@ -324,6 +358,7 @@ export class JourneyAnimator {
     this.states.set(train, {
       sig,
       delaySeconds: 0,
+      reportedDelay: 0,
       floor: 0,
       ceiling: Infinity,
       shownAlong: null,

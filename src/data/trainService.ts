@@ -27,6 +27,8 @@ interface MapaZsrTrain {
   Trasa?: Array<{ Key: string; Value: [number, number][] }> | string | null;
   Meska: number;
   MeskaSkutocne: number;
+  /** Station of a newer delay report (`MeskaSkutocne`), further on than `InfoZoStanice`. */
+  MeskaSkutocneZoStanice?: string | null;
   MeskaColor: string;
   MeskaText?: string;
   MeskaTextEn?: string;
@@ -73,6 +75,8 @@ export interface TrainRosterItem {
   routeSegments?: RouteSegment[];
   position?: Coordinate; // Current position
   departureConfirmed?: boolean;
+  /** Delay from ZSR's newer report at a later station, when it sends one. */
+  latestDelayMinutes?: number;
   rosterPreviousStation?: string;
   rosterNextStation?: string;
   orderCurrentStation?: number;
@@ -118,6 +122,8 @@ export interface TrainRenderState {
   stopPath?: Coordinate[];
   /** False while the train still stands at its reported station. */
   departureConfirmed?: boolean;
+  /** Delay from ZSR's newer report at a later station (position model only). */
+  latestDelayMinutes?: number;
   summary?: string;
   operator?: string;
   delayText?: string;
@@ -630,6 +636,8 @@ function convertTrainsToRosterItems(trains: MapaZsrTrain[]): TrainRosterItem[] {
       timestamp: Date.now(),
       route: parseTrasa(train.Trasa),
       departureConfirmed: typeof train.PotvrdenyOdj === 'boolean' ? train.PotvrdenyOdj : undefined,
+      latestDelayMinutes:
+        train.MeskaSkutocneZoStanice && Number.isFinite(train.MeskaSkutocne) ? train.MeskaSkutocne : undefined,
       position: train.Position
         ? {
             lat: train.Position[0],
@@ -749,6 +757,7 @@ export function buildTrainRenderState(
       note: roster.note,
       stopPath: roster.route && roster.route.length >= 2 ? roster.route : undefined,
       departureConfirmed: roster.departureConfirmed,
+      latestDelayMinutes: roster.latestDelayMinutes,
     };
   }
 

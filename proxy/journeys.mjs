@@ -243,6 +243,8 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail })
   const detailQueue = [];
   const queued = new Set();
   let detailTimer = null;
+  /** Trains in the most recent gtall payload: only these are sent to browsers. */
+  let current = new Set();
   let saveTimer = null;
   let payloadCache = null;
 
@@ -405,6 +407,7 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail })
       const now = Date.now();
       let traced = 0;
       const startedAt = now;
+      const seen = new Set();
       trains.forEach((item) => {
         const train = String(item?.CisloVlaku ?? '').trim();
         if (!train) {
@@ -415,6 +418,7 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail })
           return;
         }
         const sig = journeySignature(points);
+        seen.add(train);
         const order = Number(item.OrderCurrentStation);
         live.set(train, {
           sig,
@@ -433,6 +437,7 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail })
           detailQueue.push(train);
         }
       });
+      current = seen;
       live.forEach((entry, train) => {
         if (now - entry.seenAt > FORGET_AFTER_MS) {
           live.delete(train);
@@ -454,6 +459,9 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail })
       }
       const journeys = [];
       live.forEach((entry, train) => {
+        if (!current.has(train)) {
+          return; // finished or not running right now
+        }
         const route = routeFor(entry.sig);
         if (!route || !route.encoded || route.line.length < 2) {
           return;
