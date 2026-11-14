@@ -51,6 +51,7 @@ import {
   type OsmPathResult,
 } from '../data/trainOsmMapper';
 import { closeRailGaps } from '../data/railStitch';
+import { fetchTrainRoute } from '../data/routeService';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
 import {
   clipWaysToOutline,
@@ -1101,7 +1102,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const osmWaysRef = useRef<Map<number, OSMWay>>(new Map());
   const simplifiedWaysRef = useRef<OSMWay[]>([]);
   const osmGraphRef = useRef<OsmGraph>(new Map());
-  const [osmGraphTick, setOsmGraphTick] = useState(0);
+  // Ways for the in-browser fallback graph. The graph is only built (and sent to
+  // the worker) if the server route call fails, so normal loads skip it.
+  const pathfindingWaysRef = useRef<OSMWay[]>([]);
+  const workerGraphPostedRef = useRef(false);
   const [networkRoute, setNetworkRoute] = useState<Coordinate[][] | null>(null);
   const [osmWayCount, setOsmWayCount] = useState(0);
   const [osmStatus, setOsmStatus] = useState<OsmStatus>({
@@ -1217,20 +1221,27 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     };
   }, []);
 
-  const osmGraph = useMemo(() => osmGraphRef.current, [osmGraphTick]);
-
-  useEffect(() => {
+  /** Build the fallback graph and hand it to the worker, once per network load. */
+  const ensureWorkerGraph = useCallback((): boolean => {
     const worker = pathfinderWorkerRef.current;
-    if (!worker || osmGraph.size === 0) {
-      pathfinderGraphReadyRef.current = false;
-      return;
+    if (!worker || pathfindingWaysRef.current.length === 0) {
+      return false;
+    }
+    if (workerGraphPostedRef.current) {
+      return true;
+    }
+    if (osmGraphRef.current.size === 0) {
+      resetSpatialIndex();
+      extendOsmGraph(osmGraphRef.current, pathfindingWaysRef.current);
     }
     pathfinderGraphReadyRef.current = false;
     worker.postMessage({
       type: 'initGraph',
-      graph: serializeOsmGraph(osmGraph),
+      graph: serializeOsmGraph(osmGraphRef.current),
     });
-  }, [osmGraph, osmGraphTick]);
+    workerGraphPostedRef.current = true;
+    return true;
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1260,10 +1271,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       osmWaysRef.current = new Map();
       simplifiedWaysRef.current = filtered;
       filtered.forEach((way) => osmWaysRef.current.set(way.id, way));
-      resetSpatialIndex();
       osmGraphRef.current = new Map();
-      extendOsmGraph(osmGraphRef.current, stitched.filter(isPathfindingWay));
-      setOsmGraphTick((prev) => prev + 1);
+      pathfindingWaysRef.current = stitched.filter(isPathfindingWay);
+      workerGraphPostedRef.current = false;
       setOsmWayCount(filtered.length);
       setTileLoadPlan({ total: 1, completed: 1 });
       appendLoadingMessage('Loaded: 1/1 OSM tiles');
@@ -2065,29 +2075,27 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         return point;
       })
       .filter((point): point is Coordinate => point != null);
-    if (
-      journeyStatus !== 'ready' ||
-      !focusedTrainNumber ||
-      waypoints.length < 2 ||
-      osmGraphRef.current.size === 0
-    ) {
+    if (journeyStatus !== 'ready' || !focusedTrainNumber || waypoints.length < 2) {
       return;
     }
     let cancelled = false;
     const requestId = `trace-${focusedTrainNumber}-${Date.now()}`;
+    const routeAbort = new AbortController();
     const applyPath = (paths: Coordinate[][]) => {
       const usable = paths.filter((path) => path.length >= 2);
       if (!cancelled && focusedTrainRef.current === focusedTrainNumber && usable.length > 0) {
         setNetworkRoute(usable);
       }
     };
+    // Fallback: trace in the browser worker when the proxy cannot answer.
     const postTrace = (attempt: number) => {
       const worker = pathfinderWorkerRef.current;
       if (cancelled) {
         return;
       }
-      if (!worker || osmGraphRef.current.size === 0 || !pathfinderGraphReadyRef.current) {
-        if (attempt < 12) {
+      const posted = ensureWorkerGraph();
+      if (!worker || !posted || !pathfinderGraphReadyRef.current) {
+        if (attempt < 40) {
           window.setTimeout(() => postTrace(attempt + 1), 250);
         }
         return;
@@ -2110,10 +2118,24 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         })
         .catch(() => undefined);
     };
-    const timer = window.setTimeout(() => postTrace(0), osmStatus.loading ? 400 : 0);
+    fetchTrainRoute(waypoints, routeAbort.signal)
+      .then((route) => {
+        if (cancelled) {
+          return;
+        }
+        if (route.segments.length === 0) {
+          throw new Error('empty route');
+        }
+        applyPath(route.segments);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          postTrace(0);
+        }
+      });
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
+      routeAbort.abort();
       pathfinderResolversRef.current.delete(requestId);
       pathfinderRejectorsRef.current.delete(requestId);
     };
@@ -2122,8 +2144,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     focusedStations,
     journeyStops,
     journeyStatus,
-    osmGraphTick,
-    osmStatus.loading,
+    ensureWorkerGraph,
   ]);
 
   useEffect(() => {

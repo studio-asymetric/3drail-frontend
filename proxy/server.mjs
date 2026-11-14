@@ -22,7 +22,14 @@ import {
   railatlasStyle,
   withAbsoluteAssetUrls,
 } from './maptilerStyle.mjs';
-import { packRails } from './packRails.mjs';
+import { packRails, unpackRails } from './packRails.mjs';
+import {
+  buildRouteGraph,
+  decodePolyline,
+  encodePolyline,
+  ROUTE_ALGORITHM_VERSION,
+  traceRoute,
+} from './railRoute.mjs';
 import { fetchStationBoard } from './cpStationBoard.mjs';
 import { ensureRailwayTunnels, mergeTunnelWays } from './osmTunnels.mjs';
 
@@ -324,6 +331,111 @@ function warmupNetworkPack() {
     logMessage(
       `Network pack warmup failed: ${error instanceof Error ? error.message : String(error)}`
     );
+  });
+}
+
+// --- Train route tracing ------------------------------------------------
+// The client sends its stations as one encoded polyline; the proxy traces the
+// route on the same rail pack the map draws and returns encoded polylines.
+const ROUTE_CACHE_LIMIT = 4000;
+const ROUTE_MAX_STOPS = 160;
+const ROUTE_MAX_PARAM = 6000;
+const routeCache = new Map();
+let routeGraph = null;
+let routeGraphPack = '';
+let routeGraphBuild = null;
+
+async function ensureRouteGraph() {
+  const packPath = await ensureNetworkPack();
+  const stamp = `${packPath}:${fs.statSync(packPath).mtimeMs}`;
+  if (routeGraph && routeGraphPack === stamp) {
+    return routeGraph;
+  }
+  if (!routeGraphBuild) {
+    routeGraphBuild = Promise.resolve()
+      .then(() => {
+        let raw = fs.readFileSync(packPath);
+        try {
+          raw = zlib.gunzipSync(raw);
+        } catch {
+          // already uncompressed
+        }
+        const graph = buildRouteGraph(unpackRails(raw));
+        routeGraph = graph;
+        routeGraphPack = stamp;
+        routeCache.clear();
+        logMessage(`Route graph ready: ${JSON.stringify(graph.stats)}`);
+        return graph;
+      })
+      .finally(() => {
+        routeGraphBuild = null;
+      });
+  }
+  return routeGraphBuild;
+}
+
+function warmupRouteGraph() {
+  ensureRouteGraph().catch((error) => {
+    if (error?.code === 'BUILDING') {
+      setTimeout(warmupRouteGraph, 15_000);
+      return;
+    }
+    logMessage(`Route graph warmup failed: ${error instanceof Error ? error.message : String(error)}`);
+  });
+}
+
+async function handleRoute(reqUrl, res) {
+  const encoded = reqUrl.searchParams.get('w') ?? '';
+  if (!encoded || encoded.length > ROUTE_MAX_PARAM || !/^[\x3f-\x7e]+$/.test(encoded)) {
+    sendJson(res, 400, { error: 'Missing or invalid waypoints' });
+    return;
+  }
+  let points;
+  try {
+    points = decodePolyline(encoded);
+  } catch {
+    points = [];
+  }
+  const valid =
+    points.length >= 2 &&
+    points.length <= ROUTE_MAX_STOPS &&
+    points.every(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180);
+  if (!valid) {
+    sendJson(res, 400, { error: 'Waypoints must be 2 to 160 points' });
+    return;
+  }
+
+  let graph;
+  try {
+    graph = await ensureRouteGraph();
+  } catch (error) {
+    const building = error?.code === 'BUILDING';
+    res.setHeader('Retry-After', '10');
+    sendJson(res, 503, { error: building ? 'Rail network is building' : 'Route graph unavailable' });
+    return;
+  }
+
+  let body = routeCache.get(encoded);
+  if (body) {
+    routeCache.delete(encoded);
+  } else {
+    const result = traceRoute(
+      graph,
+      points.map(([lat, lng]) => ({ lat, lng }))
+    );
+    body = JSON.stringify({
+      v: ROUTE_ALGORITHM_VERSION,
+      network: NETWORK_PACK_NAME,
+      segments: result.segments.map((line) => encodePolyline(line)),
+      hops: result.hops.map((hop) => (hop === 'ok' ? 1 : hop === 'gap' ? 0 : -1)),
+    });
+    if (routeCache.size >= ROUTE_CACHE_LIMIT) {
+      routeCache.delete(routeCache.keys().next().value);
+    }
+  }
+  routeCache.set(encoded, body);
+  sendCompressed(res, 200, body, 'application/json; charset=utf-8', {
+    'Cache-Control': 'public, max-age=86400',
   });
 }
 
@@ -1186,6 +1298,10 @@ const server = http.createServer(async (req, res) => {
       await handleDetail(reqUrl, res);
       return;
     }
+    if (mode === 'route') {
+      await handleRoute(reqUrl, res);
+      return;
+    }
     if (mode === 'station') {
       await handleStationBoard(reqUrl, res);
       return;
@@ -1205,4 +1321,5 @@ server.listen(port, '0.0.0.0', () => {
   fs.mkdirSync(config.osmCacheDir, { recursive: true });
   console.log(`3D Railmap proxy listening on http://0.0.0.0:${port}`);
   warmupNetworkPack();
+  setTimeout(warmupRouteGraph, 2_000);
 });
