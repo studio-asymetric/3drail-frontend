@@ -31,6 +31,7 @@ import {
   traceRoute,
 } from './railRoute.mjs';
 import { fetchStationBoard } from './cpStationBoard.mjs';
+import { createJourneyStore } from './journeys.mjs';
 import { ensureRailwayTunnels, mergeTunnelWays } from './osmTunnels.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -338,12 +339,20 @@ function warmupNetworkPack() {
 // The client sends its stations as one encoded polyline; the proxy traces the
 // route on the same rail pack the map draws and returns encoded polylines.
 const ROUTE_CACHE_LIMIT = 4000;
-const ROUTE_MAX_STOPS = 160;
-const ROUTE_MAX_PARAM = 6000;
+const ROUTE_MAX_STOPS = 400;
+const ROUTE_MAX_PARAM = 8000;
 const routeCache = new Map();
 let routeGraph = null;
 let routeGraphPack = '';
 let routeGraphBuild = null;
+
+// Every running train's route and timetable, kept across restarts in /data.
+const journeyStore = createJourneyStore({
+  file: path.join(path.dirname(config.cacheFile), 'journeys.json'),
+  log: logMessage,
+  fetchDetail: async (train) => (await fetchTrainDetailStops(train)).stops,
+});
+journeyStore.load();
 
 async function ensureRouteGraph() {
   const packPath = await ensureNetworkPack();
@@ -365,6 +374,7 @@ async function ensureRouteGraph() {
         routeGraphPack = stamp;
         routeCache.clear();
         logMessage(`Route graph ready: ${JSON.stringify(graph.stats)}`);
+        journeyStore.setGraph(graph);
         return graph;
       })
       .finally(() => {
@@ -372,6 +382,32 @@ async function ensureRouteGraph() {
       });
   }
   return routeGraphBuild;
+}
+
+const JOURNEY_SYNC_MS = 60 * 60 * 1000;
+
+/** Hourly: fetch every train even with nobody on the site, so routes are ready. */
+function scheduleJourneySync() {
+  const run = async () => {
+    try {
+      await ensureRouteGraph();
+      const { state } = await refreshGtall({ force: true, ping: false });
+      if (Array.isArray(state.data)) {
+        journeyStore.observe(state.data);
+      }
+      logMessage(`Journey sync: ${JSON.stringify(journeyStore.stats())}`);
+    } catch (error) {
+      logMessage(`Journey sync failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  setTimeout(run, 8_000);
+  setInterval(run, JOURNEY_SYNC_MS);
+}
+
+function handleJourneys(res) {
+  sendCompressed(res, 200, journeyStore.payload(), 'application/json; charset=utf-8', {
+    'Cache-Control': 'no-cache',
+  });
 }
 
 function warmupRouteGraph() {
@@ -401,7 +437,7 @@ async function handleRoute(reqUrl, res) {
     points.length <= ROUTE_MAX_STOPS &&
     points.every(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180);
   if (!valid) {
-    sendJson(res, 400, { error: 'Waypoints must be 2 to 160 points' });
+    sendJson(res, 400, { error: 'Waypoints must be 2 to 400 points' });
     return;
   }
 
@@ -630,7 +666,8 @@ async function fetchGtallUpstream(cookie) {
   return parseGtallPayload(result);
 }
 
-async function handleGtall(reqUrl, res) {
+/** Read the cached gtall state, fetch upstream when due (or forced), and save. */
+async function refreshGtall({ force = false, ping = true } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const state = {
     lastFetch: 0,
@@ -644,14 +681,15 @@ async function handleGtall(reqUrl, res) {
     ...readJson(config.cacheFile, {}),
   };
 
-  state.lastPing = now;
+  if (ping) {
+    state.lastPing = now;
+  }
   if (isTokenErrorPayload(state.data) || (state.data != null && !Array.isArray(state.data))) {
     state.data = [];
     state.cookies = null;
     state.cookieUpdated = 0;
     state.status = 'idle';
   }
-  const force = reqUrl.searchParams.has('refresh');
   const handshakeNeeded = !state.cookies || now - (state.cookieUpdated ?? 0) >= 1800;
   const shouldFetch = force || now - (state.lastFetch ?? 0) >= 30;
 
@@ -683,6 +721,11 @@ async function handleGtall(reqUrl, res) {
       state.error = null;
       state.raw = null;
       logMessage(`Fetched gtall at ${now}, ${state.data.length} trains`);
+      try {
+        journeyStore.observe(state.data);
+      } catch (error) {
+        logMessage(`Journey update failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     } catch (error) {
       state.status = 'error';
       state.error = error instanceof Error ? error.message : String(error);
@@ -694,6 +737,11 @@ async function handleGtall(reqUrl, res) {
   }
 
   writeJson(config.cacheFile, state);
+  return { state, now };
+}
+
+async function handleGtall(reqUrl, res) {
+  const { state, now } = await refreshGtall({ force: reqUrl.searchParams.has('refresh') });
   sendJson(res, 200, {
     source: 'proxy',
     lastFetch: state.lastFetch,
@@ -1216,67 +1264,51 @@ async function ensureCookies(state) {
   return state.cookies || config.cookies;
 }
 
+/** Station list with times for one train (mapa.zsr.sk TrainDetail), cached for a minute. */
+async function fetchTrainDetailStops(train) {
+  const cached = detailCache.get(train);
+  if (cached && Date.now() - cached.at < DETAIL_CACHE_MS) {
+    return { stops: cached.stops, status: 'cached' };
+  }
+  const state = readTrainState();
+  const cookie = await ensureCookies(state);
+  if (!cookie) {
+    throw new Error('Handshake produced no cookies');
+  }
+  const response = await fetch('https://mapa.zsr.sk/Start/TrainDetail', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+      Origin: 'https://mapa.zsr.sk',
+      Referer: 'https://mapa.zsr.sk/index.aspx',
+      'User-Agent': ZSR_USER_AGENT,
+      'X-Requested-With': 'XMLHttpRequest',
+      Cookie: cookie,
+    },
+    body: new URLSearchParams({ cisloVlaku: train }).toString(),
+  });
+  const html = await response.text();
+  const looksLikeErrorPage = html.trim().startsWith('<!DOCTYPE') && !html.includes('timeline__list');
+  if (!response.ok || !html || looksLikeErrorPage) {
+    const error = new Error(`Train detail HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  const stops = parseTrainDetail(html);
+  detailCache.set(train, { at: Date.now(), stops });
+  logMessage(`Fetched train detail ${train}, ${stops.length} stops`);
+  return { stops, status: 'fetched' };
+}
+
 async function handleDetail(reqUrl, res) {
   const train = reqUrl.searchParams.get('train') ?? '';
   if (!/^[0-9A-Za-z]{1,12}$/.test(train)) {
     sendJson(res, 400, { error: 'Missing train number' });
     return;
   }
-
-  const cached = detailCache.get(train);
-  if (cached && Date.now() - cached.at < DETAIL_CACHE_MS) {
-    sendJson(res, 200, {
-      source: 'proxy',
-      train,
-      status: 'cached',
-      stops: cached.stops,
-    });
-    return;
-  }
-
-  const state = readTrainState();
-  const cookie = await ensureCookies(state);
-  if (!cookie) {
-    sendJson(res, 200, {
-      source: 'proxy',
-      train,
-      status: 'error',
-      error: 'Handshake produced no cookies',
-      stops: [],
-    });
-    return;
-  }
-
   try {
-    const response = await fetch('https://mapa.zsr.sk/Start/TrainDetail', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        Origin: 'https://mapa.zsr.sk',
-        Referer: 'https://mapa.zsr.sk/index.aspx',
-        'User-Agent': ZSR_USER_AGENT,
-        'X-Requested-With': 'XMLHttpRequest',
-        Cookie: cookie,
-      },
-      body: new URLSearchParams({ cisloVlaku: train }).toString(),
-    });
-    const html = await response.text();
-    const looksLikeErrorPage =
-      html.trim().startsWith('<!DOCTYPE') && !html.includes('timeline__list');
-    if (!response.ok || !html || looksLikeErrorPage) {
-      logMessage(`Train detail failed for ${train}: HTTP ${response.status}`);
-      sendJson(res, 502, { error: `Train detail HTTP ${response.status}`, train, stops: [] });
-      return;
-    }
-    const stops = parseTrainDetail(html);
-    detailCache.set(train, { at: Date.now(), stops });
-    logMessage(`Fetched train detail ${train}, ${stops.length} stops`);
-    sendJson(res, 200, {
-      source: 'proxy',
-      train,
-      status: 'fetched',
-      stops,
-    });
+    const { stops, status } = await fetchTrainDetailStops(train);
+    sendJson(res, 200, { source: 'proxy', train, status, stops });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logMessage(`Train detail failed for ${train}: ${message}`);
@@ -1409,6 +1441,10 @@ const server = http.createServer(async (req, res) => {
       await handleDetail(reqUrl, res);
       return;
     }
+    if (mode === 'journeys') {
+      handleJourneys(res);
+      return;
+    }
     if (mode === 'stations') {
       handleStations(res);
       return;
@@ -1437,4 +1473,5 @@ server.listen(port, '0.0.0.0', () => {
   console.log(`3D Railmap proxy listening on http://0.0.0.0:${port}`);
   warmupNetworkPack();
   setTimeout(warmupRouteGraph, 2_000);
+  scheduleJourneySync();
 });

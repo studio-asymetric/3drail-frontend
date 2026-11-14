@@ -23,7 +23,8 @@ interface MapaZsrTrain {
   Popis?: string;
   Position: [number, number]; // [lat, lng]
   PositionNext?: [number, number] | null;
-  Trasa: Array<{ Key: string; Value: [number, number][] }>;
+  /** Ordered coordinates of every point the train passes (stations, junctions), in groups; sometimes sent as a JSON string. */
+  Trasa?: Array<{ Key: string; Value: [number, number][] }> | string | null;
   Meska: number;
   MeskaSkutocne: number;
   MeskaColor: string;
@@ -110,6 +111,8 @@ export interface TrainRenderState {
   rosterOrderCurrentStation?: number;
   liveRoute?: Coordinate[];
   routeSegments?: RouteSegment[];
+  /** Every point mapa.zsr.sk lists for the journey, junctions included, in order. */
+  stopPath?: Coordinate[];
   summary?: string;
   operator?: string;
   delayText?: string;
@@ -560,6 +563,44 @@ export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainR
   }
 }
 
+/** Flatten mapa.zsr.sk `Trasa` groups into one ordered list of journey points. */
+export function parseTrasa(trasa: MapaZsrTrain['Trasa']): Coordinate[] {
+  let groups: unknown = trasa;
+  if (typeof groups === 'string') {
+    try {
+      groups = JSON.parse(groups);
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(groups)) {
+    return [];
+  }
+  const points: Coordinate[] = [];
+  groups.forEach((group) => {
+    const values = (group as { Value?: unknown })?.Value;
+    if (!Array.isArray(values)) {
+      return;
+    }
+    values.forEach((value) => {
+      if (!Array.isArray(value) || value.length < 2) {
+        return;
+      }
+      const lat = Number(value[0]);
+      const lng = Number(value[1]);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return;
+      }
+      const last = points[points.length - 1];
+      if (last && Math.abs(last.lat - lat) < 1e-6 && Math.abs(last.lng - lng) < 1e-6) {
+        return;
+      }
+      points.push({ lat, lng, sequence: points.length });
+    });
+  });
+  return points;
+}
+
 function convertTrainsToRosterItems(trains: MapaZsrTrain[]): TrainRosterItem[] {
   // Convert mapa.zsr.sk format to our TrainRosterItem format
   const rosterItems: TrainRosterItem[] = trains.map((train) => {
@@ -582,6 +623,7 @@ function convertTrainsToRosterItems(trains: MapaZsrTrain[]): TrainRosterItem[] {
         timestamp: Date.now(),
       },
       timestamp: Date.now(),
+      route: parseTrasa(train.Trasa),
       position: train.Position
         ? {
             lat: train.Position[0],
@@ -699,6 +741,7 @@ export function buildTrainRenderState(
       replacementFrom: roster.replacementFrom,
       replacementTo: roster.replacementTo,
       note: roster.note,
+      stopPath: roster.route && roster.route.length >= 2 ? roster.route : undefined,
     };
   }
 

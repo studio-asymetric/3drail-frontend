@@ -51,7 +51,8 @@ import {
   type OsmPathResult,
 } from '../data/trainOsmMapper';
 import { closeRailGaps } from '../data/railStitch';
-import { fetchTrainRoute } from '../data/routeService';
+import { decodePolyline, encodePolyline, fetchTrainRoute } from '../data/routeService';
+import { fetchJourneys, JourneyAnimator } from '../data/journeyService';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
 import {
   clipWaysToOutline,
@@ -263,6 +264,9 @@ type TrainPillPoint = {
   radius?: number;
 };
 
+/** Zoom from which timetable-driven trains move smoothly (below it they update every few seconds). */
+const JOURNEY_SMOOTH_ZOOM = 9;
+
 type TrainMarkerEntry = {
   marker: Marker;
   attached: boolean;
@@ -282,6 +286,8 @@ type TrainMarkerEntry = {
     durationMs: number;
   };
   motionRequestId?: string;
+  /** Position comes from the timetable model (journeyService), not the reported point. */
+  journeyActive?: boolean;
   lastArrowKey: string;
   lastColor: string;
   lastSelected: boolean;
@@ -1159,6 +1165,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const trainNodeStampRef = useRef<Map<string, string>>(new Map());
   const lastScheduledPositionRef = useRef<{ lat: number; lng: number } | null>(null);
   const trainMotionRafRef = useRef(0);
+  const journeyAnimatorRef = useRef(new JourneyAnimator());
+  const [journeysVersion, setJourneysVersion] = useState(0);
   const startTrainMotionLoopRef = useRef<() => void>(() => undefined);
 
   const appendLoadingMessage = useCallback((_message: string) => {}, []);
@@ -1717,7 +1725,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         entry.motionRequestId = undefined;
       }
       entry.motion = undefined;
-      if (!nodeStep) {
+      if (!nodeStep || entry.journeyActive) {
         return;
       }
       entry.trackLat = position.lat;
@@ -1923,13 +1931,13 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         entry.targetLat = point.lat;
         entry.targetLng = point.lng;
         lastTrainPositionsRef.current.set(point.id, { lat: point.lat, lng: point.lng });
-      } else if (!entry.motion) {
+      } else if (!entry.motion && !entry.journeyActive) {
         entry.trackLat = point.lat;
         entry.trackLng = point.lng;
       }
       const trackLat = entry.trackLat;
       const trackLng = entry.trackLng;
-      entry.heading = entry.motion ? entry.heading : point.heading;
+      entry.heading = entry.motion || entry.journeyActive ? entry.heading : point.heading;
       if (!entry.attached) {
         entry.marker.setLngLat([trackLng, trackLat]);
         entry.lastLng = trackLng;
@@ -2053,8 +2061,27 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     );
   }, [focusedStationId, terrainLoaded, overlayEpoch]);
 
-  useEffect(() => {
-    setNetworkRoute(null);
+  // Waypoints for the traced route. Prefer the points mapa.zsr.sk lists for the
+  // train (stations and junctions, exact coordinates); fall back to matching the
+  // journey's station names against the station list.
+  const focusedStopPath = useMemo(
+    () => trains.find((train) => train.trainNumber === focusedTrainNumber)?.stopPath ?? null,
+    [trains, focusedTrainNumber]
+  );
+  const focusedStopPathKey = useMemo(
+    () => (focusedStopPath && focusedStopPath.length >= 2 ? encodePolyline(focusedStopPath) : ''),
+    [focusedStopPath]
+  );
+  const traceKey = useMemo(() => {
+    if (!focusedTrainNumber) {
+      return '';
+    }
+    if (focusedStopPathKey) {
+      return focusedStopPathKey;
+    }
+    if (journeyStatus !== 'ready') {
+      return '';
+    }
     const waypoints = (focusedStations ?? [])
       .map((point, index) => {
         if (!point) {
@@ -2078,7 +2105,13 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         return point;
       })
       .filter((point): point is Coordinate => point != null);
-    if (journeyStatus !== 'ready' || !focusedTrainNumber || waypoints.length < 2) {
+    return waypoints.length >= 2 ? encodePolyline(waypoints) : '';
+  }, [focusedTrainNumber, focusedStopPathKey, focusedStations, journeyStops, journeyStatus]);
+
+  useEffect(() => {
+    setNetworkRoute(null);
+    const waypoints = traceKey ? decodePolyline(traceKey) : [];
+    if (!focusedTrainNumber || waypoints.length < 2) {
       return;
     }
     let cancelled = false;
@@ -2121,6 +2154,18 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         })
         .catch(() => undefined);
     };
+    const stored = journeyAnimatorRef.current.journey(focusedTrainNumber);
+    if (stored && stored.ok) {
+      const line: Coordinate[] = [];
+      for (let index = 0; index < stored.lat.length; index += 1) {
+        line.push({ lat: stored.lat[index], lng: stored.lng[index], sequence: index + 1 });
+      }
+      applyPath([line]);
+      return () => {
+        cancelled = true;
+        routeAbort.abort();
+      };
+    }
     fetchTrainRoute(waypoints, routeAbort.signal)
       .then((route) => {
         if (cancelled) {
@@ -2142,13 +2187,87 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       pathfinderResolversRef.current.delete(requestId);
       pathfinderRejectorsRef.current.delete(requestId);
     };
-  }, [
-    focusedTrainNumber,
-    focusedStations,
-    journeyStops,
-    journeyStatus,
-    ensureWorkerGraph,
-  ]);
+  }, [focusedTrainNumber, traceKey, ensureWorkerGraph, journeysVersion]);
+
+  // --- Timetable-driven positions -------------------------------------------
+  // Load every running train's route + timetable from the proxy, then move the
+  // pills along the rails between ZSR's position reports.
+  useEffect(() => {
+    let cancelled = false;
+    let controller: AbortController | null = null;
+    const load = async () => {
+      controller?.abort();
+      controller = new AbortController();
+      try {
+        const journeys = await fetchJourneys(controller.signal);
+        if (cancelled) {
+          return;
+        }
+        journeyAnimatorRef.current.setJourneys(journeys);
+        journeyAnimatorRef.current.update(trainsRef.current);
+        setJourneysVersion((value) => value + 1);
+      } catch {
+        // keep showing reported positions
+      }
+    };
+    load();
+    const timer = window.setInterval(load, 2 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    journeyAnimatorRef.current.update(trains);
+  }, [trains, journeysVersion]);
+
+  useEffect(() => {
+    let raf = 0;
+    let lastRun = 0;
+    const tick = (frameMs: number) => {
+      raf = window.requestAnimationFrame(tick);
+      const map = mapRef.current;
+      if (!mapReadyRef.current || !map) {
+        return;
+      }
+      const zoom = map.getZoom();
+      // Smooth motion only when zoomed in; far out, refresh positions every few seconds.
+      const interval = zoom >= 11 ? 40 : zoom >= JOURNEY_SMOOTH_ZOOM ? 200 : 4000;
+      if (frameMs - lastRun < interval) {
+        return;
+      }
+      lastRun = frameMs;
+      const animator = journeyAnimatorRef.current;
+      const now = Date.now();
+      const followed = followingRef.current ? focusedTrainRef.current : null;
+      let changed = false;
+      trainMarkersRef.current.forEach((entry, id) => {
+        const position = id === followed ? null : animator.position(id, now);
+        if (position) {
+          entry.trackLat = position.lat;
+          entry.trackLng = position.lng;
+          if (position.heading != null) {
+            entry.heading = position.heading;
+          }
+          entry.motion = undefined;
+          entry.journeyActive = true;
+          changed = true;
+        } else if (entry.journeyActive) {
+          entry.journeyActive = false;
+          entry.trackLat = entry.targetLat;
+          entry.trackLng = entry.targetLng;
+          changed = true;
+        }
+      });
+      if (changed) {
+        publishTrainMarkersRef.current();
+      }
+    };
+    raf = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, []);
 
   useEffect(() => {
     const map = mapRef.current;
