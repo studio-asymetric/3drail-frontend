@@ -2027,7 +2027,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           lat: stop.lat,
           lng: stop.lng,
           color: railPalette(themeRef.current).fill,
-          rank: stationLabelRank(stop.name, tripCountByStop.get(stop.stopId) ?? 0),
+          rank: stationLabelRank(
+            stop.name,
+            stop.tripCount ?? tripCountByStop.get(stop.stopId) ?? 0
+          ),
         }))
       )
     );

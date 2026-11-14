@@ -439,6 +439,115 @@ async function handleRoute(reqUrl, res) {
   });
 }
 
+// --- Station list ---------------------------------------------------------
+// The page only needs station names, coordinates and how busy each station is.
+// Built once from the bundled GTFS so the browser no longer downloads ~3.8 MB of
+// timetable text to get them.
+let stationsBody = null;
+
+function gtfsDir() {
+  const candidates = [
+    staticRoot ? path.join(staticRoot, 'gtfs') : '',
+    path.join(__dirname, '..', 'public', 'gtfs'),
+    path.join(__dirname, '..', 'dist', 'gtfs'),
+  ].filter(Boolean);
+  return candidates.find((dir) => fs.existsSync(path.join(dir, 'stops.txt'))) ?? null;
+}
+
+function parseCsvRows(text) {
+  const lines = String(text).replace(/^\uFEFF/, '').split(/\r?\n/).filter((line) => line.trim());
+  const split = (line) => {
+    const cells = [];
+    let current = '';
+    let quoted = false;
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index];
+      if (char === '"') {
+        if (quoted && line[index + 1] === '"') {
+          current += '"';
+          index += 1;
+        } else {
+          quoted = !quoted;
+        }
+      } else if (char === ',' && !quoted) {
+        cells.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    cells.push(current);
+    return cells;
+  };
+  const headers = split(lines[0] ?? '').map((cell) => cell.trim());
+  return { headers, rows: lines.slice(1).map(split) };
+}
+
+function buildStationsBody() {
+  const dir = gtfsDir();
+  if (!dir) {
+    throw new Error('GTFS stops.txt not found');
+  }
+  const stops = parseCsvRows(fs.readFileSync(path.join(dir, 'stops.txt'), 'utf8'));
+  const col = (name) => stops.headers.indexOf(name);
+  const [idIdx, nameIdx, latIdx, lonIdx, codeIdx, uicIdx] = [
+    'stop_id',
+    'stop_name',
+    'stop_lat',
+    'stop_lon',
+    'stop_code',
+    'stop_uic_code',
+  ].map(col);
+  const trips = new Map();
+  const stopTimesPath = path.join(dir, 'stop_times.txt');
+  if (fs.existsSync(stopTimesPath)) {
+    const stopTimes = parseCsvRows(fs.readFileSync(stopTimesPath, 'utf8'));
+    const stopIdx = stopTimes.headers.indexOf('stop_id');
+    stopTimes.rows.forEach((row) => {
+      const id = row[stopIdx];
+      trips.set(id, (trips.get(id) ?? 0) + 1);
+    });
+  }
+  const stations = [];
+  stops.rows.forEach((row) => {
+    const lat = Number.parseFloat(row[latIdx]);
+    const lng = Number.parseFloat(row[lonIdx]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return;
+    }
+    const id = row[idIdx];
+    stations.push([
+      id,
+      row[nameIdx],
+      Math.round(lat * 1e5) / 1e5,
+      Math.round(lng * 1e5) / 1e5,
+      trips.get(id) ?? 0,
+      codeIdx >= 0 ? row[codeIdx] || '' : '',
+      uicIdx >= 0 ? row[uicIdx] || '' : '',
+    ]);
+  });
+  return JSON.stringify({
+    v: 1,
+    fields: ['id', 'name', 'lat', 'lng', 'trips', 'code', 'uic'],
+    stations,
+  });
+}
+
+function handleStations(res) {
+  try {
+    if (!stationsBody) {
+      stationsBody = buildStationsBody();
+    }
+    sendCompressed(res, 200, stationsBody, 'application/json; charset=utf-8', {
+      'Cache-Control': 'public, max-age=3600',
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logMessage(`Stations failed: ${message}`);
+    sendJson(res, 500, { error: message });
+  }
+}
+
 const ZSR_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
@@ -792,20 +901,22 @@ async function handleOsm(reqUrl, res) {
   if (level === 'network') {
     try {
       const packPath = await ensureNetworkPack();
-      const gzipped = fs.readFileSync(packPath);
-      let body = gzipped;
-      try {
-        body = zlib.gunzipSync(gzipped);
-      } catch {
-        // Serve the file as stored if it is already raw.
-      }
+      const stored = fs.readFileSync(packPath);
+      const storedIsGzip = stored[0] === 0x1f && stored[1] === 0x8b;
+      // The pack is kept gzipped on disk; send those bytes as they are (about half
+      // the size of the raw pack) and only unzip for a client that cannot take gzip.
+      const sendGzip = storedIsGzip && acceptsGzip(res);
+      const body = storedIsGzip && !sendGzip ? zlib.gunzipSync(stored) : stored;
       res.writeHead(200, {
         'Content-Type': 'application/octet-stream',
+        'Content-Length': String(body.length),
         'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'public, max-age=86400',
+        Vary: 'Accept-Encoding',
+        ...(sendGzip ? { 'Content-Encoding': 'gzip' } : {}),
       });
       res.end(body);
-      logMessage(`Serving packed simplified network ${gzipped.length} bytes`);
+      logMessage(`Serving packed simplified network ${body.length} bytes${sendGzip ? " (gzip)" : ""}`);
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1296,6 +1407,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (mode === 'detail') {
       await handleDetail(reqUrl, res);
+      return;
+    }
+    if (mode === 'stations') {
+      handleStations(res);
       return;
     }
     if (mode === 'route') {

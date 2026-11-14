@@ -284,7 +284,42 @@ const EMPTY_DATASET: GtfsDataset = {
   stopTimes: {},
 };
 
+/**
+ * Stations only: names, coordinates and trip counts from the proxy (a few KB).
+ * Live trains carry their own GPS positions, so the full timetable is not needed.
+ */
+async function loadStationDataset(): Promise<GtfsDataset> {
+  const response = await fetch('/proxy/stations?mode=stations&v=1');
+  if (!response.ok) {
+    throw new Error(`Stations HTTP ${response.status}`);
+  }
+  const payload = (await response.json()) as {
+    stations?: Array<[string, string, number, number, number, string?, string?]>;
+  };
+  const stops: GtfsDataset['stops'] = {};
+  (payload.stations ?? []).forEach(([stopId, name, lat, lng, tripCount, code, uicCode]) => {
+    stops[stopId] = {
+      stopId,
+      name,
+      lat,
+      lng,
+      tripCount,
+      code: code || undefined,
+      uicCode: uicCode || undefined,
+    };
+  });
+  if (Object.keys(stops).length === 0) {
+    throw new Error('Empty station list');
+  }
+  return { ...EMPTY_DATASET, stops };
+}
+
 async function loadGtfsDataset(): Promise<GtfsDataset> {
+  try {
+    return await loadStationDataset();
+  } catch (error) {
+    console.warn('Station list unavailable, loading full GTFS:', error);
+  }
   const [shapesRes, tripsRes, stopsRes, stopTimesRes] = await Promise.all([
     fetch('/gtfs/shapes.txt'),
     fetch('/gtfs/trips.txt'),

@@ -25,6 +25,8 @@ export interface GtfsStop {
   lat: number;
   lng: number;
   uicCode?: string;
+  /** Number of timetable trips calling here (from the proxy station list). */
+  tripCount?: number;
 }
 
 export interface GtfsStopTime {
