@@ -18,6 +18,8 @@ export type Copy = {
   searchCloseAria: string;
   searchNoResults: string;
   searchMobileHint: string;
+  searchRecent: string;
+  searchClearRecent: string;
   station: string;
   zoomIn: string;
   zoomOut: string;
@@ -78,6 +80,8 @@ const sk: Copy = {
   searchCloseAria: 'Zavrieť vyhľadávanie',
   searchNoResults: 'Nič sa nenašlo',
   searchMobileHint: 'Zadajte číslo vlaku alebo názov stanice',
+  searchRecent: 'Nedávne vyhľadávania',
+  searchClearRecent: 'Vymazať',
   station: 'Stanica',
   zoomIn: 'Priblížiť mapu',
   zoomOut: 'Oddialiť mapu',
@@ -140,6 +144,8 @@ const en: Copy = {
   searchCloseAria: 'Close search',
   searchNoResults: 'No results',
   searchMobileHint: 'Enter a train number or station name',
+  searchRecent: 'Recent searches',
+  searchClearRecent: 'Clear',
   station: 'Station',
   zoomIn: 'Zoom in',
   zoomOut: 'Zoom out',

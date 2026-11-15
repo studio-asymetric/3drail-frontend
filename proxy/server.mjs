@@ -4,6 +4,7 @@ import http from 'node:http';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { classifyStops, isNonStopName, normalizeStationName, parseTrainDetail } from './trainDetail.mjs';
+import { withForeignStops } from './foreignStops.mjs';
 import { simplifyOsmPayload } from './simplifyRail.mjs';
 import {
   fetchMaptilerRails,
@@ -546,11 +547,14 @@ function gtfsDir() {
 
 /** trainNumber -> normalized names of the stations it calls at, from GTFS (null = not loaded). */
 let gtfsCalls = null;
+/** trainNumber -> its GTFS trips, each with the stops in order: [{ name, arr, dep }]. */
+let gtfsTrips = null;
 
 /** Stations the train calls at per the GTFS timetable, or null when it is not in the feed. */
 function gtfsCallsFor(train) {
   if (!gtfsCalls) {
     gtfsCalls = new Map();
+    gtfsTrips = new Map();
     try {
       const dir = gtfsDir();
       if (dir) {
@@ -571,6 +575,10 @@ function gtfsCallsFor(train) {
         const times = read('stop_times.txt');
         const tripIdx = times.headers.indexOf('trip_id');
         const stopIdx = times.headers.indexOf('stop_id');
+        const arrIdx = times.headers.indexOf('arrival_time');
+        const depIdx = times.headers.indexOf('departure_time');
+        const seqIdx = times.headers.indexOf('stop_sequence');
+        const byTrip = new Map();
         times.rows.forEach((row) => {
           const number = tripTrain.get(row[tripIdx]);
           const name = stopName.get(row[stopIdx]);
@@ -581,6 +589,17 @@ function gtfsCallsFor(train) {
             gtfsCalls.set(number, new Set());
           }
           gtfsCalls.get(number).add(normalizeStationName(name));
+          const list = byTrip.get(row[tripIdx]) ?? [];
+          list.push({ seq: Number(row[seqIdx]) || 0, name, arr: row[arrIdx], dep: row[depIdx] });
+          byTrip.set(row[tripIdx], list);
+        });
+        byTrip.forEach((list, tripId) => {
+          const number = tripTrain.get(tripId);
+          list.sort((a, b) => a.seq - b.seq);
+          if (!gtfsTrips.has(number)) {
+            gtfsTrips.set(number, []);
+          }
+          gtfsTrips.get(number).push({ stops: list });
         });
       }
     } catch (error) {
@@ -588,6 +607,12 @@ function gtfsCallsFor(train) {
     }
   }
   return gtfsCalls.get(String(train)) ?? null;
+}
+
+/** The ZSR rows plus the stops abroad (Budapest, Brno, ...) that only the GTFS timetable knows. */
+function withForeignStopsFor(train, rows) {
+  gtfsCallsFor(train); // makes sure the GTFS index is built
+  return withForeignStops(rows, gtfsTrips?.get(String(train)) ?? []);
 }
 
 function parseCsvRows(text) {
@@ -1429,7 +1454,9 @@ async function handleDetail(reqUrl, res) {
   }
   try {
     const { stops, status } = await fetchTrainDetailStops(train);
-    sendJson(res, 200, { source: 'proxy', train, status, stops });
+    // Only the browser's list gets the foreign stops: the journey store keeps the rows
+    // ZSR sent, because they line up one to one with the traced route.
+    sendJson(res, 200, { source: 'proxy', train, status, stops: withForeignStopsFor(train, stops) });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logMessage(`Train detail failed for ${train}: ${message}`);

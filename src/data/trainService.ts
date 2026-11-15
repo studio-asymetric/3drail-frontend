@@ -65,11 +65,16 @@ export interface JourneyStop {
   index?: number;
   /** Served by a replacement bus (náhradná autobusová doprava). */
   bus?: boolean;
+  /** A stop abroad, from the GTFS timetable: planned times only, nothing to open or follow. */
+  foreign?: boolean;
 }
 
 /** Remember each row's place in the full list: the timetable model is indexed by it. */
 export function indexJourneyRows(stops: JourneyStop[]): JourneyStop[] {
-  return stops.map((stop, index) => ({ ...stop, index }));
+  // Foreign rows are not in ZSR's list, so they take no number: the numbers must keep
+  // matching the rows of the traced route.
+  let next = 0;
+  return stops.map((stop) => (stop.foreign ? stop : { ...stop, index: next++ }));
 }
 
 /** Whether passengers can board here; rows from an older proxy count as stops. */

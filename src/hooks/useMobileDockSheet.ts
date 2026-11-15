@@ -50,6 +50,8 @@ export function useMobileDockSheet(
   const settleRafRef = useRef(0);
   const skipExpandedSyncRef = useRef(false);
   const suppressPeekClickRef = useRef(false);
+  /** A press that began on the grab handle: a short, still one is a tap that toggles the sheet. */
+  const handleTapRef = useRef<{ y: number; t: number; from: number } | null>(null);
   const captureElRef = useRef<HTMLElement | null>(null);
   const pendingListRef = useRef<{ startY: number; pointerId: number } | null>(null);
   const [progress, setProgress] = useState(expanded ? 1 : 0);
@@ -369,6 +371,10 @@ export function useMobileDockSheet(
           return;
         }
         event.currentTarget.setPointerCapture(event.pointerId);
+        handleTapRef.current =
+          target instanceof Element && target.closest('.dock__sheet-handle')
+            ? { y: event.clientY, t: performance.now(), from: progressRef.current }
+            : null;
         beginDrag(event.clientY, event.currentTarget);
       },
       onPointerMove: (event) => {
@@ -382,10 +388,17 @@ export function useMobileDockSheet(
         if (!dragRef.current) {
           return;
         }
+        const tap = handleTapRef.current;
+        handleTapRef.current = null;
         releaseCapture(event);
         endDrag();
+        // Tapping the handle (rather than dragging it) flips the sheet.
+        if (tap && Math.abs(event.clientY - tap.y) < 8 && performance.now() - tap.t < 500) {
+          animateTo(tap.from >= 0.5 ? 0 : 1);
+        }
       },
       onPointerCancel: (event) => {
+        handleTapRef.current = null;
         if (!dragRef.current) {
           return;
         }
@@ -393,7 +406,7 @@ export function useMobileDockSheet(
         endDrag();
       },
     };
-  }, [beginDrag, enabled, endDrag, listViewport, measure, moveDrag, releaseCapture]);
+  }, [animateTo, beginDrag, enabled, endDrag, listViewport, measure, moveDrag, releaseCapture]);
 
   const listAtScrollTop = enabled && progress >= SHEET_CONTENT_REVEAL && listAtTop;
   const sheetContentRevealed = enabled && progress >= SHEET_CONTENT_REVEAL;

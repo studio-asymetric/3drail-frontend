@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error plain ESM module from the proxy, no type declarations
 import { classifyStops, isNonStopName, normalizeStationName, parseTrainDetail } from '../../proxy/trainDetail.mjs';
+// @ts-expect-error plain ESM module from the proxy, no type declarations
+import { withForeignStops } from '../../proxy/foreignStops.mjs';
+import { indexJourneyRows } from '../data/trainService';
 import { alongAtTime, buildJourney, JourneyAnimator } from '../data/journeyService';
 import { encodePolyline } from '../data/routeService';
 
@@ -214,5 +217,60 @@ describe('replacement bus rows', () => {
     // Not in the train's GTFS call list, but the bus still stops there.
     const kinds = classifyStops(stops, new Set(['zelene'])).map((stop: { kind: string }) => stop.kind);
     expect(kinds).toEqual(['stop', 'stop', 'stop', 'stop']);
+  });
+});
+
+describe('stops abroad', () => {
+  const zsrRows = [
+    { name: 'Štúrovo št. hr.', scheduledArrival: '', scheduledDeparture: '18:24', state: 'passed' },
+    { name: 'Štúrovo', scheduledArrival: '18:33', scheduledDeparture: '18:36', state: 'passed' },
+    { name: 'Bratislava hlavná stanica', scheduledArrival: '19:55', scheduledDeparture: '19:58', state: 'ahead' },
+    { name: 'Kúty', scheduledArrival: '20:47', scheduledDeparture: '20:49', state: 'ahead' },
+    { name: 'Kúty št. hr.', scheduledArrival: '20:52', scheduledDeparture: '', state: 'ahead' },
+  ];
+  const trip = {
+    stops: [
+      { name: 'Budapest-Nyugati pu', arr: '17:30:00', dep: '17:30:00' },
+      { name: 'Szob', arr: '18:22:00', dep: '18:23:00' },
+      { name: 'Štúrovo', arr: '18:33:00', dep: '18:36:00' },
+      { name: 'Bratislava hlavná stanica', arr: '19:55:00', dep: '19:58:00' },
+      { name: 'Kúty', arr: '20:47:00', dep: '20:49:00' },
+      { name: 'Břeclav', arr: '21:04:00', dep: '21:07:00' },
+      { name: 'Praha hl.n.', arr: '24:18:00', dep: '24:18:00' },
+    ],
+  };
+
+  it('puts the stops before and after ZSR\'s list around it, marked foreign', () => {
+    const rows = withForeignStops(zsrRows, [trip]) as Array<{ name: string; foreign?: boolean; state: string; scheduledArrival: string; scheduledDeparture: string }>;
+    expect(rows.map((row) => row.name)).toEqual([
+      'Budapest-Nyugati pu',
+      'Szob',
+      ...zsrRows.map((row) => row.name),
+      'Břeclav',
+      'Praha hl.n.',
+    ]);
+    expect(rows.filter((row) => row.foreign).map((row) => row.name)).toEqual([
+      'Budapest-Nyugati pu',
+      'Szob',
+      'Břeclav',
+      'Praha hl.n.',
+    ]);
+    expect(rows[0]).toMatchObject({ state: 'passed', scheduledArrival: '', scheduledDeparture: '17:30' });
+    expect(rows[rows.length - 1]).toMatchObject({ state: 'ahead', scheduledArrival: '00:18', scheduledDeparture: '' });
+  });
+
+  it('leaves domestic trains and unknown trains alone', () => {
+    expect(withForeignStops(zsrRows, [])).toBe(zsrRows);
+    expect(withForeignStops(zsrRows, [{ stops: [{ name: 'Wien Hbf', arr: '10:00:00', dep: '10:00:00' }] }])).toBe(zsrRows);
+  });
+
+  it('numbers only the rows ZSR sent, so they keep lining up with the route', () => {
+    const rows = indexJourneyRows([
+      { name: 'Szob', foreign: true },
+      { name: 'Štúrovo' },
+      { name: 'Kúty' },
+      { name: 'Břeclav', foreign: true },
+    ] as never);
+    expect(rows.map((row) => row.index)).toEqual([undefined, 0, 1, undefined]);
   });
 });

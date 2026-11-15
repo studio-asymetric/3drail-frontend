@@ -2517,13 +2517,28 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     };
     map.on('dblclick', handleDoubleClick);
 
+    // jumpTo() stops any gesture in progress, so while a finger or mouse button is down
+    // the camera must be left alone, or the user could never steer away from the train.
+    const surface = map.getCanvasContainer();
+    let pointerDown = false;
+    const onPointerDown = () => {
+      pointerDown = true;
+    };
+    const onPointerUp = () => {
+      pointerDown = false;
+    };
+    surface.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerUp, true);
+    window.addEventListener('blur', onPointerUp);
+
     let raf = 0;
     let lastFrame = performance.now();
     const step = (frameMs: number) => {
       raf = window.requestAnimationFrame(step);
       const dt = Math.min(0.1, Math.max(0, (frameMs - lastFrame) / 1000));
       lastFrame = frameMs;
-      if (!mapReadyRef.current || userDraggingRef.current || map.isMoving()) {
+      if (!mapReadyRef.current || userDraggingRef.current || pointerDown || map.isMoving()) {
         return;
       }
       const padding = dockPadding(map);
@@ -2573,6 +2588,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     return () => {
       window.cancelAnimationFrame(raf);
       map.off('dblclick', handleDoubleClick);
+      surface.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerUp, true);
+      window.removeEventListener('blur', onPointerUp);
       try {
         map.scrollZoom.disable();
         map.scrollZoom.enable();

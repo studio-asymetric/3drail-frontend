@@ -50,6 +50,29 @@ type SearchHit =
   | { kind: 'train'; id: string; score: number; train: TrainRenderState }
   | { kind: 'station'; id: string; score: number; station: FocusedStation };
 
+/** What a past search picked: enough to show it again and to open it. */
+type SearchRef =
+  | { kind: 'train'; trainNumber: string }
+  | { kind: 'station'; station: FocusedStation };
+
+const SEARCH_HISTORY_KEY = 'railatlas-search-history';
+const SEARCH_HISTORY_LIMIT = 6;
+
+/** Recent picks live in sessionStorage: this tab only, gone when it closes, no cookies. */
+function readSearchHistory(): SearchRef[] {
+  try {
+    const raw = window.sessionStorage.getItem(SEARCH_HISTORY_KEY);
+    const parsed = raw ? (JSON.parse(raw) as SearchRef[]) : [];
+    return Array.isArray(parsed) ? parsed.slice(0, SEARCH_HISTORY_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
+
+function searchRefId(ref: SearchRef): string {
+  return ref.kind === 'train' ? `train:${ref.trainNumber}` : `station:${ref.station.id}`;
+}
+
 function foldName(value: string): string {
   return value
     .normalize('NFD')
@@ -382,6 +405,19 @@ const App: React.FC = () => {
   const bootPanelLoadRef = useRef(false);
   const [clock, setClock] = useState(() => new Date());
   const [following, setFollowing] = useState(false);
+  const [searchHistory, setSearchHistory] = useState<SearchRef[]>(readSearchHistory);
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(searchHistory));
+    } catch {
+      // storage can be blocked; the history then lasts until reload
+    }
+  }, [searchHistory]);
+  const rememberSearch = useCallback((ref: SearchRef) => {
+    setSearchHistory((current) =>
+      [ref, ...current.filter((item) => searchRefId(item) !== searchRefId(ref))].slice(0, SEARCH_HISTORY_LIMIT)
+    );
+  }, []);
   const [toasts, setToasts] = useState<Array<{ id: number; text: string }>>([]);
   const toastSeqRef = useRef(0);
   const toastKeysRef = useRef(new Map<string, number>());
@@ -510,14 +546,17 @@ const App: React.FC = () => {
     if (!dataset || journeyStops.length === 0) {
       return [] as Array<Coordinate | null>;
     }
-    return stationPoints(journeyStops, Object.values(dataset.stops));
+    const points = stationPoints(journeyStops, Object.values(dataset.stops));
+    // Stops abroad have no place on our map.
+    return points.map((point, index) => (journeyStops[index]?.foreign ? null : point));
   }, [dataset, journeyStops]);
   /** Every listed point, passing points included: route waypoints for the map. */
   const routeStations = useMemo(() => {
     if (!dataset || journeyRows.length === 0) {
       return [] as Array<Coordinate | null>;
     }
-    return stationPoints(journeyRows, Object.values(dataset.stops));
+    const points = stationPoints(journeyRows, Object.values(dataset.stops));
+    return points.map((point, index) => (journeyRows[index]?.foreign ? null : point));
   }, [dataset, journeyRows]);
 
   const cursor = useMemo(() => {
@@ -1188,6 +1227,16 @@ const App: React.FC = () => {
     }
     return `${stops[0].name} → ${stops[stops.length - 1].name}`;
   }, [displayStops]);
+  /** Where ZSR last heard from the train; tapping it centres the map there. */
+  const lastPositionLink = displayTrain?.currentStation ? (
+    focusedTrain ? (
+      <button type="button" className="dock__fact-link" onClick={centerOnTrainPosition}>
+        {displayTrain.currentStation}
+      </button>
+    ) : (
+      displayTrain.currentStation
+    )
+  ) : null;
   const followButton = focusedTrain ? (
     <button
       type="button"
@@ -1268,6 +1317,22 @@ const App: React.FC = () => {
       .slice(0, 8);
   }, [dataset, searchQuery, trains]);
 
+  // With nothing typed, the search offers what was picked earlier in this session
+  // (trains that have since left the feed are left out).
+  const historyHits = useMemo(
+    () =>
+      searchHistory.flatMap((ref): SearchHit[] => {
+        if (ref.kind === 'station') {
+          return [{ kind: 'station', id: `station:${ref.station.id}`, score: 0, station: ref.station }];
+        }
+        const train = trains.find((item) => item.trainNumber === ref.trainNumber);
+        return train ? [{ kind: 'train', id: `train:${ref.trainNumber}`, score: 0, train }] : [];
+      }),
+    [searchHistory, trains]
+  );
+  const showingHistory = !searchQuery.trim() && historyHits.length > 0;
+  const shownHits = showingHistory ? historyHits : searchHits;
+
   return (
     <div
       className={`shell ${panelOpen ? 'is-panel-open' : ''} ${bootLocked ? 'shell--booting' : ''}`}
@@ -1341,7 +1406,7 @@ const App: React.FC = () => {
           />
         )}
         <div
-          className={`chrome__search${searchOpen && searchHits.length > 0 ? ' is-open' : ''}${
+          className={`chrome__search${searchOpen && shownHits.length > 0 ? ' is-open' : ''}${
             searchMobileOpen ? ' is-mobile-open' : ''
           }`}
           role={searchMobileOpen ? 'dialog' : undefined}
@@ -1394,15 +1459,28 @@ const App: React.FC = () => {
               </button>
             )}
           </div>
-          {searchMobileOpen && !searchQuery.trim() && (
+          {searchMobileOpen && !searchQuery.trim() && !showingHistory && (
             <p className="chrome__search-mobile-hint">{t.searchMobileHint}</p>
           )}
           {searchMobileOpen && Boolean(searchQuery.trim()) && searchHits.length === 0 && (
             <p className="chrome__search-empty">{t.searchNoResults}</p>
           )}
-          {searchOpen && searchHits.length > 0 && (
+          {searchOpen && shownHits.length > 0 && (
             <ul className="chrome__hits">
-              {searchHits.map((hit) => (
+              {showingHistory && (
+                <li className="chrome__hits-head">
+                  <span>{t.searchRecent}</span>
+                  <button
+                    type="button"
+                    className="chrome__hits-clear"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => setSearchHistory([])}
+                  >
+                    {t.searchClearRecent}
+                  </button>
+                </li>
+              )}
+              {shownHits.map((hit) => (
                 <li key={hit.id}>
                   <button
                     type="button"
@@ -1418,8 +1496,10 @@ const App: React.FC = () => {
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => {
                       if (hit.kind === 'train') {
+                        rememberSearch({ kind: 'train', trainNumber: hit.train.trainNumber });
                         handleTrainClick(hit.train.trainNumber);
                       } else {
+                        rememberSearch({ kind: 'station', station: hit.station });
                         handleStationClick(hit.station);
                       }
                       setSearchQuery('');
@@ -1608,6 +1688,7 @@ const App: React.FC = () => {
                 <DockSheetHandle
                   expanded={mobileSheetOpen}
                   expandLabel={t.dockExpandSheet}
+                  onToggle={() => setMobileDockExpanded(!mobileSheetOpen)}
                 />
                 <button
                   type="button"
@@ -1681,7 +1762,17 @@ const App: React.FC = () => {
                 </div>
               )}
               {isMobile && (
-                <div className="dock__meta dock__meta--follow">{followButton}</div>
+                <div className="dock__meta dock__meta--follow">
+                  {lastPositionLink ? (
+                    <p className="dock__last-position">
+                      <span>{t.lastPosition}</span>
+                      {lastPositionLink}
+                    </p>
+                  ) : (
+                    <span />
+                  )}
+                  {followButton}
+                </div>
               )}
               {busNotice && (
                 <p className="dock__note dock__bus-notice">
@@ -1698,6 +1789,7 @@ const App: React.FC = () => {
               error={displayJourneyStatus === 'error' ? t.stationListUnavailable : null}
               label={t.loadingStations}
               contentKey={displayTrain.trainNumber}
+              revealKey={isMobile ? `${displayTrain.trainNumber}:${mobileSheetOpen ? 'open' : 'closed'}` : undefined}
               listPointerHandoff={mobileSheet.listPointerHandoff}
               listAtScrollTop={mobileSheet.listAtScrollTop}
               loadingVisible={!isMobile || mobileSheetRevealed}
@@ -1748,7 +1840,7 @@ const App: React.FC = () => {
                   );
                   const point = focusedStations[index] ?? coordFromDataset(stop.name, dataset);
                   const stationMatch = stationFromDataset(stop.name, dataset);
-                  const stopInteractive = Boolean(stationMatch || point);
+                  const stopInteractive = !stop.foreign && Boolean(stationMatch || point);
                   return (
                     <li
                       key={`${stop.name}-${index}`}
@@ -1791,22 +1883,10 @@ const App: React.FC = () => {
                     <dd>{displayTrain.operator}</dd>
                   </div>
                 )}
-                {displayTrain.currentStation && (
+                {displayTrain.currentStation && !isMobile && (
                   <div>
                     <dt>{t.lastPosition}</dt>
-                    <dd>
-                      {focusedTrain ? (
-                        <button
-                          type="button"
-                          className="dock__fact-link"
-                          onClick={centerOnTrainPosition}
-                        >
-                          {displayTrain.currentStation}
-                        </button>
-                      ) : (
-                        displayTrain.currentStation
-                      )}
-                    </dd>
+                    <dd>{lastPositionLink}</dd>
                   </div>
                 )}
               </dl>
@@ -1824,6 +1904,7 @@ const App: React.FC = () => {
                 <DockSheetHandle
                   expanded={mobileSheetOpen}
                   expandLabel={t.dockExpandSheet}
+                  onToggle={() => setMobileDockExpanded(!mobileSheetOpen)}
                 />
                 <button
                   type="button"

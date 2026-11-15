@@ -14,6 +14,11 @@ interface DockScrollerProps {
   /** Milliseconds loading must persist before showing UI (0 = immediate). */
   loadingDelayMs?: number;
   loadingVariant?: 'spinner' | 'bar';
+  /**
+   * When this changes the list scrolls to where the train is again and follows the
+   * layout settling for a moment (a mobile sheet opening), until the user touches it.
+   */
+  revealKey?: string;
 }
 
 export const DockScroller: React.FC<DockScrollerProps> = ({
@@ -27,6 +32,7 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
   loadingVisible = true,
   loadingDelayMs = 0,
   loadingVariant = 'spinner',
+  revealKey,
 }) => {
   const [showLoadingUi, setShowLoadingUi] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -82,21 +88,32 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
       thumb.style.transform = `translateY(${progress * room}px)`;
     };
 
+    // Scroll so the train (the dot on the rail, else the bold stop) sits a little above the middle.
     const scrollToNext = () => {
-      const liveStop =
-        (content.querySelector('.is-live-segment') as HTMLElement | null) ??
-        (content.querySelector('.is-trail') as HTMLElement | null);
-      if (!liveStop) {
+      const marker =
+        (content.querySelector('.dock__stop-train') as HTMLElement | null) ??
+        (content.querySelector('.is-focus') as HTMLElement | null);
+      if (!marker || wrapper.clientHeight < 1) {
         return;
       }
+      const rect = marker.getBoundingClientRect();
+      const center = rect.top + rect.height / 2;
       const target =
-        liveStop.getBoundingClientRect().top -
-        wrapper.getBoundingClientRect().top +
-        wrapper.scrollTop -
-        wrapper.clientHeight * 0.38;
+        center - wrapper.getBoundingClientRect().top + wrapper.scrollTop - wrapper.clientHeight * 0.38;
       wrapper.scrollTop = Math.max(0, target);
       updateThumb();
     };
+
+    // While the sheet opens the list changes size for a few frames; keep the train in
+    // view through that, and stop as soon as the user takes over or the layout is still.
+    let following = true;
+    const stopFollowing = () => {
+      following = false;
+    };
+    const settleTimer = window.setTimeout(stopFollowing, 1400);
+    wrapper.addEventListener('pointerdown', stopFollowing, { passive: true });
+    wrapper.addEventListener('wheel', stopFollowing, { passive: true });
+    wrapper.addEventListener('touchstart', stopFollowing, { passive: true });
 
     const scrollFromClientY = (clientY: number) => {
       const limit = scrollLimit();
@@ -148,6 +165,9 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
 
     const resize = () => {
       updateThumb();
+      if (following) {
+        scrollToNext();
+      }
     };
     const observer = new ResizeObserver(resize);
     observer.observe(wrapper);
@@ -159,12 +179,16 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
     });
 
     return () => {
+      window.clearTimeout(settleTimer);
+      wrapper.removeEventListener('pointerdown', stopFollowing);
+      wrapper.removeEventListener('wheel', stopFollowing);
+      wrapper.removeEventListener('touchstart', stopFollowing);
       wrapper.removeEventListener('scroll', onScroll);
       stopDrag();
       track.removeEventListener('pointerdown', onPointerDown);
       observer.disconnect();
     };
-  }, [loading, error, contentKey]);
+  }, [loading, error, contentKey, revealKey]);
 
   return (
     <div className="dock__pane">

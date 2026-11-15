@@ -335,7 +335,9 @@ export function timelineProgress(
   }
   const end = located[located.length - 1];
   if (along >= end.at - slack) {
-    return { from: end.k, fraction: 1 };
+    // Past the last stop we can place: the journey is over only if the list ends there too
+    // (stops abroad follow otherwise, and the train is just leaving for them).
+    return { from: end.k, fraction: end.k >= stops.length - 1 ? 1 : 0 };
   }
   for (let index = 0; index < located.length - 1; index += 1) {
     const a = located[index];

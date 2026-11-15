@@ -3053,8 +3053,33 @@ body,
 
 
 .dock__meta--follow {
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   flex: 0 0 auto;
+}
+
+/* Mobile: the last reported position shares the follow button's row. */
+.dock__last-position {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.dock__last-position > span {
+  color: var(--ui-muted);
+  font-size: 11px;
+}
+
+.dock__last-position .dock__fact-link {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
 }
 
 /* Replacement bus (náhradná autobusová doprava) */
@@ -3079,4 +3104,31 @@ body,
 .dock__stops li.is-bus-leg:not(:first-child)::after {
   -webkit-mask-image: repeating-linear-gradient(to bottom, #000 0 4px, transparent 4px 8px);
   mask-image: repeating-linear-gradient(to bottom, #000 0 4px, transparent 4px 8px);
+}
+
+/* Recent searches (this session only) */
+.chrome__hits-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 14px 6px;
+  color: var(--ui-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chrome__hits .chrome__hits-clear {
+  width: auto;
+  padding: 2px 6px;
+  margin: 0 -6px 0 0;
+  border-radius: 4px;
+  color: var(--ui-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.chrome__hits .chrome__hits-clear:hover {
+  color: inherit;
 }
