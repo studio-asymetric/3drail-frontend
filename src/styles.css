@@ -3132,3 +3132,67 @@ body,
 .chrome__hits .chrome__hits-clear:hover {
   color: inherit;
 }
+
+/* When the list scrolls, the first and last stop stay put and the rest scrolls between them. */
+.dock__stops li:first-child,
+.dock__stops li:last-child {
+  position: sticky;
+  z-index: 2;
+  background: var(--ui-card);
+}
+
+.dock__stops li:first-child {
+  top: 0;
+}
+
+.dock__stops li:last-child {
+  bottom: 0;
+}
+
+.dock__stops li:first-child:hover,
+.dock__stops li:last-child:hover {
+  background: color-mix(in srgb, #fff 6%, var(--ui-card));
+}
+
+.shell[data-theme='light'] .dock__stops li:first-child:hover,
+.shell[data-theme='light'] .dock__stops li:last-child:hover {
+  background: var(--ui-hover);
+}
+
+/* A short dotted stretch of rail under the pinned first stop and over the pinned last one:
+   more stops are hidden that way, scroll to see them. */
+.dock__pane-viewport[data-more-top] .dock__stops li:first-child::after,
+.dock__pane-viewport[data-more-bottom] .dock__stops li:last-child:not(:first-child)::after {
+  content: '';
+  position: absolute;
+  left: calc(var(--dock-rail-offset) - 4px);
+  width: 8px;
+  height: 18px;
+  border-radius: 0;
+  background:
+    repeating-linear-gradient(to bottom, var(--tl-edge, var(--tl-todo)) 0 2px, transparent 2px 5px) center / 2px 100%
+      no-repeat,
+    var(--ui-card);
+  -webkit-mask-image: none;
+  mask-image: none;
+  transition: none;
+  pointer-events: none;
+}
+
+.dock__pane-viewport[data-more-top] .dock__stops li:first-child::after {
+  top: calc(50% + 3px);
+}
+
+.dock__pane-viewport[data-more-bottom] .dock__stops li:last-child:not(:first-child)::after {
+  top: auto;
+  bottom: calc(50% + 3px);
+}
+
+/* Rows sliding under a pinned stop fade out instead of being cut off mid-line. */
+.dock__pane-viewport[data-more-top] .dock__stops li:first-child {
+  box-shadow: 0 7px 7px 0 var(--ui-card);
+}
+
+.dock__pane-viewport[data-more-bottom] .dock__stops li:last-child:not(:first-child) {
+  box-shadow: 0 -7px 7px 0 var(--ui-card);
+}

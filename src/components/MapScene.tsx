@@ -54,6 +54,7 @@ import {
 import { closeRailGaps } from '../data/railStitch';
 import { decodePolyline, encodePolyline, fetchTrainRoute } from '../data/routeService';
 import { fetchJourneys, isOnBus, JourneyAnimator, timelineProgress } from '../data/journeyService';
+import { STATION_FOCUS_ZOOM } from '../data/viewConstants';
 import { TrainCanvasLayer } from './trainCanvas';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
 import {
@@ -522,6 +523,8 @@ function setPaddingKeepView(
 }
 
 const NO_PADDING = { top: 0, bottom: 0, left: 0, right: 0 };
+/** A single pointer dragged this far (px) while following means the user is steering away. */
+const FOLLOW_BREAK_SLOP_PX = 12;
 /** Seconds the follow camera takes to close most of a small gap to the train. */
 const FOLLOW_TAU_SECONDS = 0.22;
 
@@ -713,6 +716,9 @@ function applyStationSelection(
   return nextId ?? null;
 }
 
+/** The basemap style's text layers; the rails we add would otherwise be drawn over them. */
+const BASEMAP_LABEL_LAYERS = ['label_water', 'label_place_names'];
+
 function placeRailsHighlightAboveTracks(map: MapLibreMap) {
   if (!map.getLayer('rails-highlight')) {
     return;
@@ -736,6 +742,12 @@ function placeRailsHighlightAboveTracks(map: MapLibreMap) {
     map.moveLayer('rails-highlight', beforeId);
     if (map.getLayer('rails-highlight-bus')) {
       map.moveLayer('rails-highlight-bus', beforeId);
+    }
+    // Place and water names read on top of every rail line, the highlighted route included.
+    for (const id of BASEMAP_LABEL_LAYERS) {
+      if (map.getLayer(id)) {
+        map.moveLayer(id, beforeId);
+      }
     }
   } catch {
     // Style may be mid-reload.
@@ -1285,8 +1297,6 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const followingRef = useRef(following);
   followingRef.current = following;
   const followPositionRef = useRef<Coordinate | null>(null);
-  const userDraggingRef = useRef(false);
-  const followDragStartRef = useRef<{ lat: number; lng: number } | null>(null);
   const publishTrainMarkersRef = useRef<() => void>(() => undefined);
   const trainMarkersRef = useRef<Map<string, TrainMarkerEntry>>(new Map());
   const trainCanvasRef = useRef<TrainCanvasLayer | null>(null);
@@ -1652,37 +1662,13 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       const node = map.getContainer();
       return Math.max(72, Math.min(node.clientWidth, node.clientHeight) * 0.18);
     };
+    // A drag the user starts ends following right away (the camera is then free).
     const handleDragStart = (event: { originalEvent?: Event }) => {
-      if (!followingRef.current || !event.originalEvent) {
-          return;
-        }
-      userDraggingRef.current = true;
-      const origin = map.getCenter();
-      followDragStartRef.current = { lat: origin.lat, lng: origin.lng };
-      map.stop();
-    };
-    const handleDragEnd = () => {
-      if (!userDraggingRef.current) {
-          return;
-        }
-      userDraggingRef.current = false;
-      if (!followingRef.current) {
-        followDragStartRef.current = null;
-          return;
-        }
-      const start = followDragStartRef.current;
-      followDragStartRef.current = null;
-      const end = map.project(map.getCenter());
-      const origin = start ? map.project([start.lng, start.lat]) : end;
-      const dragged = Math.hypot(end.x - origin.x, end.y - origin.y);
-      if (dragged >= breakDistancePx()) {
+      if (followingRef.current && event.originalEvent) {
         onFollowBreakRef.current?.();
-        return;
       }
-      // The follow loop eases the camera back onto the train.
     };
     map.on('dragstart', handleDragStart);
-    map.on('dragend', handleDragEnd);
     return () => {
       cancelled = true;
       if (trainPublishRafRef.current) {
@@ -2520,17 +2506,39 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     // jumpTo() stops any gesture in progress, so while a finger or mouse button is down
     // the camera must be left alone, or the user could never steer away from the train.
     const surface = map.getCanvasContainer();
+    // Pressed pointers and where each went down. One pointer that travels past the slop is
+    // the user steering away: following ends at once (two fingers are a pinch, which keeps it).
+    const pressed = new Map<number, { x: number; y: number }>();
     let pointerDown = false;
-    const onPointerDown = () => {
+    let broke = false;
+    const onPointerDown = (event: PointerEvent) => {
+      pressed.set(event.pointerId, { x: event.clientX, y: event.clientY });
       pointerDown = true;
     };
-    const onPointerUp = () => {
-      pointerDown = false;
+    const onPointerMove = (event: PointerEvent) => {
+      const start = pressed.get(event.pointerId);
+      if (!start || pressed.size !== 1 || broke) {
+        return;
+      }
+      if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > FOLLOW_BREAK_SLOP_PX) {
+        broke = true;
+        onFollowBreakRef.current?.();
+      }
+    };
+    const onPointerUp = (event?: PointerEvent) => {
+      if (event && 'pointerId' in event) {
+        pressed.delete(event.pointerId);
+      } else {
+        pressed.clear();
+      }
+      pointerDown = pressed.size > 0;
     };
     surface.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('pointermove', onPointerMove, true);
     window.addEventListener('pointerup', onPointerUp, true);
     window.addEventListener('pointercancel', onPointerUp, true);
-    window.addEventListener('blur', onPointerUp);
+    const onBlur = () => onPointerUp();
+    window.addEventListener('blur', onBlur);
 
     let raf = 0;
     let lastFrame = performance.now();
@@ -2538,7 +2546,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       raf = window.requestAnimationFrame(step);
       const dt = Math.min(0.1, Math.max(0, (frameMs - lastFrame) / 1000));
       lastFrame = frameMs;
-      if (!mapReadyRef.current || userDraggingRef.current || pointerDown || map.isMoving()) {
+      if (!mapReadyRef.current || pointerDown || map.isMoving()) {
         return;
       }
       const padding = dockPadding(map);
@@ -2589,9 +2597,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       window.cancelAnimationFrame(raf);
       map.off('dblclick', handleDoubleClick);
       surface.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('pointermove', onPointerMove, true);
       window.removeEventListener('pointerup', onPointerUp, true);
       window.removeEventListener('pointercancel', onPointerUp, true);
-      window.removeEventListener('blur', onPointerUp);
+      window.removeEventListener('blur', onBlur);
       try {
         map.scrollZoom.disable();
         map.scrollZoom.enable();
@@ -2599,12 +2608,38 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         map.touchZoomRotate.enable();
         map.touchZoomRotate.disableRotation();
         map.doubleClickZoom.enable();
-        const left = map.getPadding();
-        if ((left.top ?? 0) || (left.bottom ?? 0) || (left.left ?? 0) || (left.right ?? 0)) {
-          setPaddingKeepView(map, NO_PADDING);
-        }
       } catch {
         // the map was already removed
+      }
+      // Give the map its own centre back without moving the picture. jumpTo cancels a
+      // drag in progress, so when the user is steering away it waits for the release
+      // (and for the drag's coasting to finish).
+      const resetPadding = () => {
+        try {
+          const padding = map.getPadding();
+          if ((padding.top ?? 0) || (padding.bottom ?? 0) || (padding.left ?? 0) || (padding.right ?? 0)) {
+            setPaddingKeepView(map, NO_PADDING);
+          }
+        } catch {
+          // the map was already removed
+        }
+      };
+      if (pointerDown) {
+        const afterRelease = () => {
+          window.removeEventListener('pointerup', afterRelease, true);
+          window.removeEventListener('pointercancel', afterRelease, true);
+          window.setTimeout(() => {
+            if (map.isMoving()) {
+              map.once('moveend', resetPadding);
+            } else {
+              resetPadding();
+            }
+          }, 60);
+        };
+        window.addEventListener('pointerup', afterRelease, true);
+        window.addEventListener('pointercancel', afterRelease, true);
+      } else {
+        resetPadding();
       }
     };
   }, [following, focusedTrainNumber]);
@@ -2632,10 +2667,14 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       return;
     }
     lastFlownStationRef.current = focusedStationId;
+    const offset = visibleOffset(map);
     map.easeTo({
       center: [stop.lng, stop.lat],
-      zoom: Math.max(map.getZoom(), 11),
-      duration: 600,
+      // Close enough to see side tracks and the station's layout.
+      zoom: Math.max(map.getZoom(), STATION_FOCUS_ZOOM),
+      // Centre it in the part of the map the dock leaves free.
+      offset: [offset.x, offset.y],
+      duration: 700,
     });
   }, [dataset, focusedStation, focusedStationId]);
 
@@ -2668,9 +2707,11 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           return;
         }
         map.stop();
+        const offset = visibleOffset(map);
         map.easeTo({
           center: [lng, lat],
           zoom: Math.max(map.getZoom(), options?.minZoom ?? 10),
+          offset: [offset.x, offset.y],
           duration: 650,
         });
       },

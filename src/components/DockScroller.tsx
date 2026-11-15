@@ -71,6 +71,10 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
       const limit = scrollLimit();
       const view = wrapper.clientHeight;
       const overflow = limit > 1;
+      // The first and last row stay pinned while the list scrolls; these tell the rail
+      // whether there is more hidden above or below them.
+      wrapper.toggleAttribute('data-more-top', overflow && wrapper.scrollTop > 2);
+      wrapper.toggleAttribute('data-more-bottom', overflow && wrapper.scrollTop < limit - 2);
       track.classList.toggle('is-visible', overflow);
       if (!overflow) {
         thumb.style.height = '0px';

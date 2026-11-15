@@ -4,6 +4,7 @@ import { DockScroller } from './components/DockScroller';
 import { DockPanelControls } from './components/DockPanelControls';
 import { DockSheetHandle } from './components/DockSheetHandle';
 import { AboutPanel } from './components/AboutPanel';
+import { STATION_FOCUS_ZOOM } from './data/viewConstants';
 import { useMobileLayout } from './hooks/useMobileLayout';
 import { useMobileDockSheet } from './hooks/useMobileDockSheet';
 import {
@@ -897,7 +898,8 @@ const App: React.FC = () => {
       }
       const point = focusedStations[index] ?? coordFromDataset(stop.name, dataset);
       if (point) {
-        centerMapOn(point.lng, point.lat, 11);
+        // A stop that is not a known station still gets a close look at its surroundings.
+        centerMapOn(point.lng, point.lat, STATION_FOCUS_ZOOM - 0.5);
       }
     },
     [centerMapOn, cursor, currentStopIndex, dataset, focusedStations, focusedTrain, journeyStops]
@@ -948,7 +950,7 @@ const App: React.FC = () => {
       setFocusedStation(station);
       refreshStationBoard(station, 'departures');
       setDockLeaving(false);
-      centerMapOn(station.lng, station.lat, 11);
+      centerMapOn(station.lng, station.lat, STATION_FOCUS_ZOOM);
     },
     [centerMapOn, refreshStationBoard, stopJourneyLoad]
   );
@@ -1853,7 +1855,23 @@ const App: React.FC = () => {
                       ]
                         .filter(Boolean)
                         .join(' ')}
-                      style={{ '--tl-fill': segmentFill } as React.CSSProperties}
+                      style={
+                        {
+                          '--tl-fill': segmentFill,
+                          // Colour of the dotted rail leading into the pinned first / last stop.
+                          ...(index === 0
+                            ? { '--tl-edge': railProgress && railProgress.from >= 1 ? 'var(--tl-done)' : 'var(--tl-todo)' }
+                            : {}),
+                          ...(index === displayStops.length - 1
+                            ? {
+                                '--tl-edge':
+                                  railProgress && railProgress.from >= displayStops.length - 1
+                                    ? 'var(--tl-done)'
+                                    : 'var(--tl-todo)',
+                              }
+                            : {}),
+                        } as React.CSSProperties
+                      }
                     >
                       {isHeadRow && <span className="dock__stop-train" aria-hidden="true" />}
                       {stopInteractive ? (
