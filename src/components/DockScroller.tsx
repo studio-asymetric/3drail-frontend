@@ -67,6 +67,50 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
     const scrollLimit = () =>
       Math.max(0, wrapper.scrollHeight - wrapper.clientHeight);
 
+    // Rows sliding under the pinned first/last stop fade out (names, times and studs, not the
+    // rail): each gets --edge = 0..1 from how far it is clear of the pinned row.
+    const EDGE_FADE_PX = 40;
+    // A row is gone by the time its text (about 12 px in from the row's edge) reaches the pinned stop.
+    const EDGE_LEAD_PX = 12;
+    const DOT_LEAD_PX = 2;
+    const fadeEdgeRows = () => {
+      const rows = content.querySelectorAll<HTMLElement>('.dock__stops > li');
+      if (rows.length < 3) {
+        return;
+      }
+      const moreTop = wrapper.hasAttribute('data-more-top');
+      const moreBottom = wrapper.hasAttribute('data-more-bottom');
+      const pinBottom = moreTop ? rows[0].getBoundingClientRect().bottom : -Infinity;
+      const pinTop = moreBottom ? rows[rows.length - 1].getBoundingClientRect().top : Infinity;
+      for (let index = 1; index < rows.length - 1; index += 1) {
+        const rect = rows[index].getBoundingClientRect();
+        let edge = 1;
+        if (moreTop) {
+          edge = Math.min(edge, (rect.top - pinBottom + EDGE_LEAD_PX) / EDGE_FADE_PX);
+        }
+        if (moreBottom) {
+          edge = Math.min(edge, (pinTop - rect.bottom + EDGE_LEAD_PX) / EDGE_FADE_PX);
+        }
+        const value = Math.max(0, Math.min(1, edge)).toFixed(2);
+        if (rows[index].style.getPropertyValue('--edge') !== value) {
+          rows[index].style.setProperty('--edge', value);
+        }
+      }
+      // The train's dot rides the rail between two rows, so it fades by its own position.
+      const dot = content.querySelector<HTMLElement>('.dock__stop-train');
+      if (dot) {
+        const rect = dot.getBoundingClientRect();
+        let edge = 1;
+        if (moreTop) {
+          edge = Math.min(edge, (rect.top - pinBottom + DOT_LEAD_PX) / EDGE_FADE_PX);
+        }
+        if (moreBottom) {
+          edge = Math.min(edge, (pinTop - rect.bottom + DOT_LEAD_PX) / EDGE_FADE_PX);
+        }
+        dot.style.setProperty('--edge', Math.max(0, Math.min(1, edge)).toFixed(2));
+      }
+    };
+
     const updateThumb = () => {
       const limit = scrollLimit();
       const view = wrapper.clientHeight;
@@ -76,6 +120,7 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
       wrapper.toggleAttribute('data-more-top', overflow && wrapper.scrollTop > 2);
       wrapper.toggleAttribute('data-more-bottom', overflow && wrapper.scrollTop < limit - 2);
       track.classList.toggle('is-visible', overflow);
+      fadeEdgeRows();
       if (!overflow) {
         thumb.style.height = '0px';
         thumb.style.transform = 'translateY(0px)';

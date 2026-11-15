@@ -89,6 +89,7 @@ const SLOVAKIA_BOUNDS = {
   maxLng: 22.5657103,
 };
 /** Extra pan room beyond Slovakia (degrees). */
+/** The least the view may pan past Slovakia; zoomed out it grows with the screen (fitViewBounds). */
 const MAP_VIEW_BOUNDS_PAD = { lng: 1.5, lat: 1.1 };
 const CENTER_LAT = (SLOVAKIA_BOUNDS.minLat + SLOVAKIA_BOUNDS.maxLat) / 2;
 const CENTER_LNG = (SLOVAKIA_BOUNDS.minLng + SLOVAKIA_BOUNDS.maxLng) / 2;
@@ -1516,6 +1517,26 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       (window as unknown as { __railMap?: MapLibreMap }).__railMap = map;
     }
     lockMapNorthUp(map);
+    // The further out the map is, the wider the screen is compared to the country: let the
+    // view slide far enough to bring any train out from behind the side panel / mobile sheet.
+    const fitViewBounds = () => {
+      const { clientWidth: width, clientHeight: height } = node;
+      if (!width || !height) {
+        return;
+      }
+      const spanLng = Math.abs(map.unproject([width, height / 2]).lng - map.unproject([0, height / 2]).lng);
+      const spanLat = Math.abs(map.unproject([width / 2, 0]).lat - map.unproject([width / 2, height]).lat);
+      const padWest = Math.max(MAP_VIEW_BOUNDS_PAD.lng, spanLng * 0.45);
+      const padEast = Math.max(MAP_VIEW_BOUNDS_PAD.lng, spanLng * 0.8);
+      const padLat = Math.max(MAP_VIEW_BOUNDS_PAD.lat, spanLat * 0.55);
+      map.setMaxBounds([
+        [SLOVAKIA_BOUNDS.minLng - padWest, SLOVAKIA_BOUNDS.minLat - padLat],
+        [SLOVAKIA_BOUNDS.maxLng + padEast, SLOVAKIA_BOUNDS.maxLat + padLat],
+      ]);
+    };
+    map.on('zoom', fitViewBounds);
+    map.on('resize', fitViewBounds);
+    map.once('load', fitViewBounds);
     const hydrateOverlay = () => {
       try {
         emphasizeRelief(map, themeRef.current);
