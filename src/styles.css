@@ -2832,6 +2832,12 @@ body,
     display: none;
   }
 
+  /* About is not a pull-up sheet, so nothing sets its height; with height: auto its scrolling
+     article collapsed to zero and only the header row showed. Give it the open-sheet height. */
+  .dock--about {
+    height: min(72svh, calc(100svh - var(--chrome-control-height) - 16px));
+  }
+
   .dock__body {
     padding: 10px 16px calc(12px + env(safe-area-inset-bottom, 0px));
     gap: 0;
@@ -3189,10 +3195,19 @@ body,
 }
 
 /* Rows sliding under a pinned stop fade out instead of being cut off mid-line. */
+/* The rail runs in the gutter to the left of the row, outside the row's own background, so a
+   pinned row also paints over that gutter (first shadow); otherwise the rail of the rows
+   scrolling underneath shows through beside the pinned stud and the dotted stretch. */
 .dock__pane-viewport[data-more-top] .dock__stops li:first-child {
-  box-shadow: 0 7px 7px 0 var(--ui-card);
+  box-shadow:
+    -24px 0 0 0 var(--ui-card),
+    0 7px 7px 0 var(--ui-card),
+    -24px 7px 7px 0 var(--ui-card);
 }
 
 .dock__pane-viewport[data-more-bottom] .dock__stops li:last-child:not(:first-child) {
-  box-shadow: 0 -7px 7px 0 var(--ui-card);
+  box-shadow:
+    -24px 0 0 0 var(--ui-card),
+    0 -7px 7px 0 var(--ui-card),
+    -24px -7px 7px 0 var(--ui-card);
 }
