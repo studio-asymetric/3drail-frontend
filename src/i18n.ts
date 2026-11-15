@@ -29,6 +29,11 @@ export type Copy = {
   langSwitchAria: string;
   follow: string;
   following: string;
+  toastPositionCorrected: (km: string, back: boolean) => string;
+  toastTrainEnded: (trainNumber: string) => string;
+  toastFeedLost: string;
+  toastFeedBack: string;
+  replacementBus: string;
   operator: string;
   lastPosition: string;
   train: string;
@@ -84,6 +89,12 @@ const sk: Copy = {
   langSwitchAria: 'Prepnúť jazyk na angličtinu',
   follow: 'Sledovať',
   following: 'Sledujem',
+  toastPositionCorrected: (km, back) =>
+    `Poloha vlaku upravená podľa nového hlásenia ŽSR (${km} km ${back ? 'späť' : 'dopredu'})`,
+  toastTrainEnded: (trainNumber) => `Vlak ${trainNumber} dokončil jazdu, sledovanie skončilo`,
+  toastFeedLost: 'Živé dáta nie sú dostupné. Zobrazujú sa posledné známe polohy.',
+  toastFeedBack: 'Živé dáta sú späť.',
+  replacementBus: 'Náhradná autobusová doprava ',
   operator: 'Dopravca',
   lastPosition: 'Posledná poloha',
   train: 'Vlak',
@@ -140,6 +151,12 @@ const en: Copy = {
   langSwitchAria: 'Switch language to Slovak',
   follow: 'Follow',
   following: 'Following',
+  toastPositionCorrected: (km, back) =>
+    `Train position corrected after a new ŽSR report (${km} km ${back ? 'back' : 'ahead'})`,
+  toastTrainEnded: (trainNumber) => `Train ${trainNumber} finished its journey. Following stopped.`,
+  toastFeedLost: 'Live data unavailable. Showing the last known positions.',
+  toastFeedBack: 'Live data is back.',
+  replacementBus: 'Replacement bus service ',
   operator: 'Operator',
   lastPosition: 'Last reported position',
   train: 'Train',

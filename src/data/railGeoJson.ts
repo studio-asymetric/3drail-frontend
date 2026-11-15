@@ -645,3 +645,47 @@ export function pointsToCollection(
     })),
   };
 }
+
+
+/**
+ * Stations that are one place in the real world but two stops in the timetable
+ * (Bratislava-Vinohrady / Vinohrady2, Sanok / Sanok Miasto, ...) would each get a
+ * dot and a label, drawn on top of one another. Keep the busier one of each pair:
+ * within 30 m regardless of name, or within 150 m when one name starts with the other.
+ */
+export function mergeNearbyStations<T extends { name: string; lat: number; lng: number }>(
+  stations: T[],
+  weight: (station: T) => number
+): T[] {
+  const fold = (name: string) =>
+    name
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  const folded = stations.map((station) => fold(station.name));
+  const dropped = new Set<number>();
+  const order = stations.map((_, index) => index).sort((a, b) => stations[a].lat - stations[b].lat);
+  for (let i = 0; i < order.length; i += 1) {
+    const a = order[i];
+    for (let j = i + 1; j < order.length; j += 1) {
+      const b = order[j];
+      if ((stations[b].lat - stations[a].lat) * 111_320 > 150) {
+        break;
+      }
+      if (dropped.has(a) || dropped.has(b)) {
+        continue;
+      }
+      const dy = (stations[b].lat - stations[a].lat) * 111_320;
+      const dx =
+        (stations[b].lng - stations[a].lng) * 111_320 * Math.cos((stations[a].lat * Math.PI) / 180);
+      const meters = Math.hypot(dx, dy);
+      const related = folded[a].startsWith(folded[b]) || folded[b].startsWith(folded[a]);
+      if (meters < 30 || (meters < 150 && related)) {
+        dropped.add(weight(stations[a]) >= weight(stations[b]) ? b : a);
+      }
+    }
+  }
+  return stations.filter((_, index) => !dropped.has(index));
+}

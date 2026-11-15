@@ -888,6 +888,51 @@ body,
   pointer-events: none;
 }
 
+/* Small corner notices (position corrected, train finished, live data lost). */
+.toasts {
+  position: absolute;
+  z-index: 60;
+  right: var(--chrome-inset);
+  bottom: 34px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: min(340px, calc(100vw - var(--chrome-inset) * 2));
+  pointer-events: none;
+}
+
+.toast {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--ui-radius);
+  background: var(--ui-card);
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+  animation: toast-in 240ms var(--ease) both, toast-out 360ms var(--ease) 4800ms forwards;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
 .map-loading-card {
   width: min(320px, calc(100vw - 48px));
   padding: 22px 24px 20px;
@@ -1029,8 +1074,6 @@ body,
   --press-dur: 120ms;
   --enter-dur: 280ms;
   --dock-width: 383px;
-  --dock-rail-future: #5f5f5f;
-  --dock-rail-on-time: #ffffff;
   --chrome-inset: 19px;
   --dock-stack-gap: 8px;
   --chrome-control-height: 47px;
@@ -1048,8 +1091,6 @@ body,
   --ui-border: rgba(17, 17, 17, 0.18);
   --ui-hover: #ebebeb;
   --ui-press: #d4d4d4;
-  --dock-rail-future: #757575;
-  --dock-rail-on-time: #111111;
 }
 
 .shell__map {
@@ -1997,7 +2038,9 @@ body,
   position: relative;
   margin: 0;
   --dock-rail-gutter: 31px;
-  --dock-rail-center: 3px;
+  /* The vertical line runs down the middle of the studs: its x from the list's left edge. */
+  --dock-rail-center: 13px;
+  --dock-rail-stud: 14px;
   --dock-rail-outdent: 8px;
   --dock-rail-offset: calc(
     var(--dock-rail-center) - var(--dock-rail-gutter) + var(--dock-rail-outdent)
@@ -2007,35 +2050,21 @@ body,
   --dock-stop-row: 40px;
 }
 
-.dock__stops::before {
-  content: '';
-  position: absolute;
-  left: calc(var(--dock-rail-center) - 0.5px);
-  top: 22px;
-  bottom: 18px;
-  width: 1px;
-  background: #5f5f5f;
+/* Timeline: dark where the train has been, grey where it has not; the segment it is in fills partway. */
+@property --tl-fill {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 0;
 }
 
-/* Delay-colored segments replace the grey spine (no double tint at 55% opacity). */
-.dock__stops.has-delay::before {
-  display: none;
+.dock__stops {
+  --tl-done: #f4f4f4;
+  --tl-todo: #444444;
 }
 
-.dock__stops.has-delay li:not(:first-child):not(.is-upcoming-leg)::after {
-  width: 2px;
-  left: calc(var(--dock-rail-offset) - 1px);
-  opacity: 1;
-  background: var(--segment, #5f5f5f);
-}
-
-.dock__stops li.is-upcoming-leg:not(:first-child)::after {
-  width: 2px;
-  left: calc(var(--dock-rail-offset) - 1px);
-  opacity: 1;
-  background: var(--dock-rail-future);
-  animation: none;
-  box-shadow: none;
+.shell[data-theme='light'] .dock__stops {
+  --tl-done: #111111;
+  --tl-todo: #cdcdcd;
 }
 
 .dock__stops li {
@@ -2065,17 +2094,44 @@ body,
   background: color-mix(in srgb, #fff 6%, transparent);
 }
 
+/* Station stud: dark once the train has reached the stop, grey before. */
 .dock__stops li::before {
   content: '';
   position: absolute;
-  left: var(--dock-rail-offset);
+  left: calc(var(--dock-rail-offset) - var(--dock-rail-stud) / 2);
   top: 50%;
-  width: calc(var(--dock-rail-gutter) - var(--dock-rail-outdent) - var(--dock-rail-center));
+  width: var(--dock-rail-stud);
   height: 2px;
   transform: translateY(-50%);
-  background: var(--stop-delay, #5f5f5f);
+  border-radius: 99px;
+  background: var(--tl-todo);
+  transition: background-color 600ms var(--ease);
 }
 
+.dock__stops li.is-reached::before {
+  background: var(--tl-done);
+}
+
+/* Head of the live segment: a small dot where the train is between two stops. */
+.dock__stop-train {
+  position: absolute;
+  left: var(--dock-rail-offset);
+  top: calc(-1 * var(--dock-stop-row) + 50% + var(--tl-fill) * var(--dock-stop-row));
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 2px solid var(--ui-card);
+  border-radius: 50%;
+  /* The dock's --accent is the train's own colour (on time green, late orange, ...). */
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 1;
+  transition: --tl-fill 1.4s linear;
+}
+
+/* Segment from the previous stop to this one, filled from the top by --tl-fill. */
 .dock__stops li:not(:first-child)::after {
   content: '';
   position: absolute;
@@ -2083,10 +2139,16 @@ body,
   top: calc(-1 * var(--dock-stop-row) + 50%);
   width: 2px;
   height: var(--dock-stop-row);
-  background: var(--segment, transparent);
+  background: linear-gradient(
+    to bottom,
+    var(--tl-done) 0,
+    var(--tl-done) calc(var(--tl-fill) * 100%),
+    var(--tl-todo) calc(var(--tl-fill) * 100%),
+    var(--tl-todo) 100%
+  );
   border-radius: 99px;
-  opacity: 0.55;
   pointer-events: none;
+  transition: --tl-fill 1.4s linear;
 }
 
 .dock__stops time {
@@ -2095,8 +2157,8 @@ body,
 }
 
 .dock__stops .dock__stop-actual,
-.dock__stops .is-ahead .dock__stop-actual {
-  color: var(--stop-delay, var(--accent));
+.dock__stops .is-passed .dock__stop-actual {
+  color: inherit;
 }
 
 .dock__stop-times {
@@ -2115,7 +2177,7 @@ body,
 }
 
 .dock__stops time.dock__stop-planned.is-late,
-.dock__stops .is-ahead .dock__stop-planned.is-late {
+.dock__stops .is-passed .dock__stop-planned.is-late {
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--ui-passed) 50%, transparent);
   color: var(--ui-passed);
@@ -2137,41 +2199,13 @@ body,
   visibility: hidden;
 }
 
-.dock__stops .is-ahead {
+/* Stops the train has left are dimmed; only the one it is at (or heading for) is bold. */
+.dock__stops .is-passed {
   color: var(--ui-passed);
 }
 
-.dock__stops .is-trail {
-  color: #fff;
-  font-weight: 540;
-}
-
-.dock__stops .is-trail:not(.is-upcoming-leg):not(:first-child)::after {
-  width: 2px;
-  opacity: 1;
-}
-
-.dock__stops .is-live-segment:not(:first-child)::after {
-  width: 2px;
-  opacity: 1;
-  background: var(--segment, var(--accent));
-  box-shadow: 0 0 7px color-mix(in srgb, var(--segment, var(--accent)) 70%, transparent);
-  animation: dock-live 2.4s ease-in-out infinite;
-}
-
-.dock__stops .is-live-segment::before {
-  background: var(--segment, var(--accent));
-  opacity: 1;
-}
-
-@keyframes dock-live {
-  0%,
-  100% {
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 1;
-  }
+.dock__stops .is-focus {
+  font-weight: 600;
 }
 
 .dock__stop-label {
@@ -2232,7 +2266,7 @@ body,
 
 .dock__stops li:hover .dock__stop-actual,
 .shell[data-theme='light'] .dock__stops li:hover .dock__stop-actual {
-  color: var(--stop-delay, var(--accent));
+  color: inherit;
 }
 
 .dock__stop-row:active {
@@ -2488,41 +2522,8 @@ body,
   margin: 0;
 }
 
-@media (max-width: 800px) {
-  .shell {
-    --chrome-inset: 8px;
-    --dock-stack-gap: 8px;
-    --chrome-control-height: 44px;
-  }
-
-  .chrome {
-    inset: var(--chrome-inset) var(--chrome-inset) auto;
-    flex-direction: row;
-    align-items: flex-start;
-    gap: 8px;
-  }
-
-  .chrome__brand {
-    align-self: start;
-    width: auto;
-    min-width: 0;
-    max-width: none;
-    padding: 0 14px;
-  }
-
-  .chrome__brand-meta {
-    display: none;
-  }
-
-  .chrome__tools {
-    position: absolute;
-    top: 0;
-    right: 0;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 6px;
-  }
-
+/* Tablet and narrower: the search collapses into an icon so it never sits over the side panel. */
+@media (max-width: 1100px) {
   .chrome__tool--search {
     display: flex;
     margin-top: 2px;
@@ -2641,6 +2642,51 @@ body,
     background: rgba(0, 0, 0, 0.42);
     cursor: default;
     animation: settle var(--dur) var(--ease) both;
+  }
+}
+
+@media (max-width: 800px) {
+  .shell {
+    --chrome-inset: 8px;
+    --dock-stack-gap: 8px;
+    --chrome-control-height: 44px;
+  }
+
+  .chrome {
+    inset: var(--chrome-inset) var(--chrome-inset) auto;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .chrome__brand {
+    align-self: start;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    padding: 0 14px;
+  }
+
+  .chrome__brand-meta {
+    display: none;
+  }
+
+  .chrome__tools {
+    position: absolute;
+    top: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+
+  .toasts {
+    right: var(--chrome-inset);
+    left: var(--chrome-inset);
+    bottom: auto;
+    top: calc(var(--chrome-inset) + var(--chrome-control-height) + 8px);
+    align-items: stretch;
+    max-width: none;
   }
 
   .dock {
@@ -2924,25 +2970,6 @@ body,
   color: #111111;
 }
 
-.shell[data-theme='light'] .dock__stops .is-trail {
-  color: #111111;
-  font-weight: 600;
-}
-
-.shell[data-theme='light'] .dock__stops .is-trail .dock__stop-actual,
-.shell[data-theme='light'] .dock__stops .is-trail time {
-  color: inherit;
-}
-
-.shell[data-theme='light'] .dock__stops.has-delay li:not(.is-upcoming-leg)::after,
-.shell[data-theme='light'] .dock__stops.has-delay li::before {
-  opacity: 1;
-}
-
-.shell[data-theme='light'] .dock__stops::before {
-  background: var(--dock-rail-future);
-}
-
 .shell[data-theme='light'] .dock__follow {
   border-color: var(--ui-border);
 }
@@ -3022,10 +3049,34 @@ body,
     animation-delay: 0ms !important;
     transition-duration: 0.01ms !important;
   }
-
-  .dock__stops .is-live-segment:not(:first-child)::after {
-    animation: none !important;
-    opacity: 1;
-  }
 }
 
+
+.dock__meta--follow {
+  justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+/* Replacement bus (náhradná autobusová doprava) */
+.dock__bus-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.dock__bus-notice strong {
+  font-weight: 600;
+}
+
+.dock__bus-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+/* A leg run by bus is dashed on the timeline. */
+.dock__stops li.is-bus-leg:not(:first-child)::after {
+  -webkit-mask-image: repeating-linear-gradient(to bottom, #000 0 4px, transparent 4px 8px);
+  mask-image: repeating-linear-gradient(to bottom, #000 0 4px, transparent 4px 8px);
+}

@@ -13,6 +13,7 @@ import {
   contrastInk,
   getDelayColor,
   filterTimedJourneyStops,
+  indexJourneyRows,
   isPassengerStop,
   mergeTrainList,
   routeCursor,
@@ -199,11 +200,16 @@ function stopTimesView(stop: JourneyStop): {
   return { planned, actual: late ? actual : null, delayMinutes: late ? delayMinutes : 0 };
 }
 
-function dockStopRailColor(
-  delayColor: string | null,
-  onTimeRail: string
-): string {
-  return delayColor ?? onTimeRail;
+function BusIcon() {
+  return (
+    <svg className="dock__bus-icon" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="2" y="2" width="12" height="9.5" rx="2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2 7h12" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="5" cy="9.2" r="0.9" fill="currentColor" />
+      <circle cx="11" cy="9.2" r="0.9" fill="currentColor" />
+      <path d="M4.5 11.5v2M11.5 11.5v2" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 function isProperTrainName(name?: string): boolean {
@@ -289,7 +295,18 @@ const EMPTY_DATASET: GtfsDataset = {
  * Stations only: names, coordinates and trip counts from the proxy (a few KB).
  * Live trains carry their own GPS positions, so the full timetable is not needed.
  */
-async function loadStationDataset(): Promise<GtfsDataset> {
+let stationDatasetPromise: Promise<GtfsDataset> | null = null;
+
+function loadStationDataset(): Promise<GtfsDataset> {
+  // One download per page load, even when effects run twice.
+  stationDatasetPromise ??= fetchStationDataset().catch((error) => {
+    stationDatasetPromise = null;
+    throw error;
+  });
+  return stationDatasetPromise;
+}
+
+async function fetchStationDataset(): Promise<GtfsDataset> {
   const response = await fetch('/proxy/stations?mode=stations&v=1');
   if (!response.ok) {
     throw new Error(`Stations HTTP ${response.status}`);
@@ -365,6 +382,27 @@ const App: React.FC = () => {
   const bootPanelLoadRef = useRef(false);
   const [clock, setClock] = useState(() => new Date());
   const [following, setFollowing] = useState(false);
+  const [toasts, setToasts] = useState<Array<{ id: number; text: string }>>([]);
+  const toastSeqRef = useRef(0);
+  const toastKeysRef = useRef(new Map<string, number>());
+  /** Small corner notice; `key` stops the same event from stacking up. */
+  const pushToast = useCallback((text: string, key = text, quietMs = 20_000) => {
+    const now = Date.now();
+    if (now - (toastKeysRef.current.get(key) ?? 0) < quietMs) {
+      return;
+    }
+    toastKeysRef.current.set(key, now);
+    const id = (toastSeqRef.current += 1);
+    setToasts((current) => [...current.slice(-2), { id, text }]);
+    window.setTimeout(() => {
+      setToasts((current) => current.filter((item) => item.id !== id));
+    }, 5200);
+  }, []);
+  const [timelineProgress, setTimelineProgress] = useState<{
+    train: string;
+    from: number;
+    fraction: number;
+  } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchMobileOpen, setSearchMobileOpen] = useState(false);
@@ -458,6 +496,16 @@ const App: React.FC = () => {
     () => trains.find((train) => train.trainNumber === focusedTrainNumber) ?? null,
     [trains, focusedTrainNumber]
   );
+  // Following a train that left the feed (journey over): stop and say so.
+  useEffect(() => {
+    if (!following || !focusedTrainNumber || loading || trains.length === 0) {
+      return;
+    }
+    if (!trains.some((train) => train.trainNumber === focusedTrainNumber)) {
+      setFollowing(false);
+      pushToast(t.toastTrainEnded(focusedTrainNumber), `ended:${focusedTrainNumber}`, 60_000);
+    }
+  }, [following, focusedTrainNumber, loading, pushToast, t, trains]);
   const focusedStations = useMemo(() => {
     if (!dataset || journeyStops.length === 0) {
       return [] as Array<Coordinate | null>;
@@ -522,6 +570,7 @@ const App: React.FC = () => {
     let mounted = true;
     let requestId = 0;
     let haveTrains = false;
+    let feedDown = false;
     const refresh = async () => {
       const id = ++requestId;
       if (!haveTrains) {
@@ -536,6 +585,10 @@ const App: React.FC = () => {
           }
           if (live.length > 0) {
             haveTrains = true;
+            if (feedDown) {
+              feedDown = false;
+              pushToast(t.toastFeedBack, 'feed-back', 10_000);
+            }
             setTrains((current) => mergeTrainList(current, live));
             setStatusMessage(t.trainsCount(live.length));
             setStatusKind('success');
@@ -555,6 +608,10 @@ const App: React.FC = () => {
       setLoading(false);
       if (haveTrains) {
         setStatusKind('success');
+        if (!feedDown) {
+          feedDown = true;
+          pushToast(t.toastFeedLost, 'feed-lost', 60_000);
+        }
         return;
       }
       setStatusKind('error');
@@ -566,7 +623,7 @@ const App: React.FC = () => {
       mounted = false;
       clearInterval(interval);
     };
-  }, [service, t, useLiveApi]);
+  }, [service, t, useLiveApi, pushToast]);
 
   const stopJourneyLoad = useCallback(() => {
     journeyAbortRef.current?.abort();
@@ -600,7 +657,7 @@ const App: React.FC = () => {
           const body = (await response.json()) as { stops?: JourneyStop[] };
           if (!controller.signal.aborted) {
             setJourneyRows(
-              filterTimedJourneyStops(Array.isArray(body.stops) ? body.stops : [])
+              filterTimedJourneyStops(indexJourneyRows(Array.isArray(body.stops) ? body.stops : []))
             );
             setJourneyStatus('ready');
           }
@@ -624,7 +681,7 @@ const App: React.FC = () => {
             }
             const body = (await response.json()) as { stops?: JourneyStop[] };
             if (!controller.signal.aborted && Array.isArray(body.stops) && body.stops.length > 0) {
-              setJourneyRows(filterTimedJourneyStops(body.stops));
+              setJourneyRows(filterTimedJourneyStops(indexJourneyRows(body.stops)));
               setJourneyStatus('ready');
             }
           })
@@ -823,6 +880,11 @@ const App: React.FC = () => {
       setStationBoard([]);
       setStationBoardStatus('idle');
       const next = trainNumber || null;
+      // Following belongs to one train: picking another ends it, and the map
+      // flies to the new train (MapScene) instead of drifting off.
+      if (next !== focusedTrainNumberRef.current) {
+        setFollowing(false);
+      }
       setFocusedTrainNumber(next);
       if (next) {
         refreshJourney(next);
@@ -832,13 +894,8 @@ const App: React.FC = () => {
         setJourneyStatus('idle');
       }
       setDockLeaving(false);
-      const train = trains.find((item) => item.trainNumber === trainNumber);
-      const position = train?.position;
-      if (position) {
-        centerMapOn(position.lng, position.lat, 10);
-      }
     },
-    [centerMapOn, refreshJourney, stopJourneyLoad, stopStationBoardLoad, trains]
+    [refreshJourney, stopJourneyLoad, stopStationBoardLoad]
   );
   const handleStationClick = useCallback(
     (station: FocusedStation) => {
@@ -1106,16 +1163,41 @@ const App: React.FC = () => {
     }
     return nextStopIndex;
   }, [currentStopIndex, cursor, displayStops, nextStopIndex]);
-  const liveSegmentRowIndex = useMemo(() => {
-    if (!displayTrain || !cursor || displayStops.length < 2) {
-      return -1;
+  /** Where the train is on the list: the last stop it reached and how far it is toward the next. */
+  const railProgress = useMemo(() => {
+    if (!displayTrain || displayStops.length < 2) {
+      return null;
     }
-    const from = cursor.stopIndex;
-    if (from < 0 || from >= displayStops.length - 1) {
-      return -1;
+    if (
+      timelineProgress &&
+      timelineProgress.train === displayTrain.trainNumber &&
+      timelineProgress.from < displayStops.length
+    ) {
+      return { from: timelineProgress.from, fraction: timelineProgress.fraction };
     }
-    return from + 1;
-  }, [cursor, displayStops.length, displayTrain]);
+    if (cursor && cursor.stopIndex >= 0 && cursor.stopIndex < displayStops.length) {
+      return { from: cursor.stopIndex, fraction: cursor.fraction };
+    }
+    return null;
+  }, [cursor, displayStops.length, displayTrain, timelineProgress]);
+  /** "Poltár → Utekáč" when part of the journey runs by replacement bus. */
+  const busNotice = useMemo(() => {
+    const stops = displayStops.filter((stop) => stop.bus);
+    if (stops.length < 2) {
+      return '';
+    }
+    return `${stops[0].name} → ${stops[stops.length - 1].name}`;
+  }, [displayStops]);
+  const followButton = focusedTrain ? (
+    <button
+      type="button"
+      className={`dock__follow ${following ? 'is-active' : ''}`}
+      aria-pressed={following}
+      onClick={() => setFollowing((value) => !value)}
+    >
+      {following ? t.following : t.follow}
+    </button>
+  ) : null;
   const stopsHaveDelay = displayStops.some((stop) => stopTimesView(stop).actual != null);
   const properTrainName = isProperTrainName(displayTrain?.trainName)
     ? displayTrain?.trainName?.trim() ?? ''
@@ -1199,6 +1281,14 @@ const App: React.FC = () => {
           journeyStatus={journeyStatus}
           following={following}
           onFollowBreak={() => setFollowing(false)}
+          onTimelineProgress={setTimelineProgress}
+          onFollowCorrection={({ train, meters }) => {
+            pushToast(
+              t.toastPositionCorrected((Math.abs(meters) / 1000).toFixed(1).replace('.', locale === 'sk' ? ',' : '.'), meters < 0),
+              `correct:${train}`,
+              25_000
+            );
+          }}
           focusedTrainNumber={focusedTrainNumber}
           focusedRouteCursor={focusedTrain ? cursor : null}
           onTrainClick={handleTrainClick}
@@ -1460,6 +1550,15 @@ const App: React.FC = () => {
           </button>
         </div>
       </header>
+      {toasts.length > 0 && (
+        <div className="toasts" role="status" aria-live="polite">
+          {toasts.map((toast) => (
+            <p className="toast" key={toast.id}>
+              {toast.text}
+            </p>
+          ))}
+        </div>
+      )}
       {statusKind === 'error' && !panelOpen && (
         <p className="shell__toast">{statusMessage}</p>
       )}
@@ -1577,8 +1676,21 @@ const App: React.FC = () => {
                   </p>
                   <div className="dock__meta">
                     <p className="dock__delay">{displayDelayText}</p>
+                    {followButton}
                   </div>
                 </div>
+              )}
+              {isMobile && (
+                <div className="dock__meta dock__meta--follow">{followButton}</div>
+              )}
+              {busNotice && (
+                <p className="dock__note dock__bus-notice">
+                  <BusIcon />
+                  <span>
+                    {t.replacementBus}
+                    <strong>{busNotice}</strong>
+                  </span>
+                </p>
               )}
               {displayTrain.note && <p className="dock__note">{displayTrain.note}</p>}
               <DockScroller
@@ -1594,19 +1706,34 @@ const App: React.FC = () => {
             >
               <ol className={`dock__stops${stopsHaveDelay ? ' has-delay' : ''}`}>
                 {displayStops.map((stop, index) => {
-                  const isTrailStop = trailheadIndex >= 0 && index >= trailheadIndex;
-                  const isPassedStop = trailheadIndex >= 0 && index < trailheadIndex;
-                  const isUpcomingLeg =
-                    liveSegmentRowIndex >= 0 && index > liveSegmentRowIndex;
-                  const isLiveSegment = index === liveSegmentRowIndex;
-                  const { planned, actual, delayMinutes } = stopTimesView(stop);
-                  const delayColor = delayMinutes > 0 ? getDelayColor(delayMinutes) : null;
-                  const onTimeRail = 'var(--dock-rail-on-time)';
-                  const trackColor = isUpcomingLeg
-                    ? null
-                    : dockStopRailColor(delayColor, onTimeRail);
-                  const segmentColor = isUpcomingLeg ? null : trackColor;
-                  const tickColor = isTrailStop ? trackColor : isPassedStop ? trackColor : null;
+                  // One source for the whole row: where the train really is on the list.
+                  // Rail: dark where it has been, grey where it has not; the segment it is in
+                  // fills partway and a dot marks the head. Text: stops it has left are dimmed
+                  // and only one stays bold: the stop it stands at, or the next one between stops.
+                  const focusIndex = railProgress
+                    ? railProgress.fraction <= 0.02 || railProgress.from >= displayStops.length - 1
+                      ? railProgress.from
+                      : railProgress.from + 1
+                    : trailheadIndex;
+                  const isPassedStop = focusIndex >= 0 && index < focusIndex;
+                  const isFocusStop = focusIndex >= 0 && index === focusIndex;
+                  const isReached = railProgress != null && index <= railProgress.from;
+                  // The dot rides in the row below the stop the train last reached, so it sits on
+                  // that stop's stud while the train stands there; after the last stop it rests on it.
+                  const isHeadRow =
+                    railProgress != null &&
+                    (index === railProgress.from + 1 ||
+                      (railProgress.from >= displayStops.length - 1 && index === displayStops.length - 1));
+                  const segmentFill =
+                    railProgress == null || index === 0
+                      ? 0
+                      : index - 1 < railProgress.from
+                        ? 1
+                        : index - 1 === railProgress.from
+                          ? railProgress.fraction
+                          : 0;
+                  const { planned, actual } = stopTimesView(stop);
+                  const isBusLeg = Boolean(stop.bus && displayStops[index - 1]?.bus);
                   const times = (
                     <span className="dock__stop-times">
                       <time className={`dock__stop-planned${actual ? ' is-late' : ''}`}>
@@ -1626,20 +1753,17 @@ const App: React.FC = () => {
                     <li
                       key={`${stop.name}-${index}`}
                       className={[
-                        isTrailStop ? 'is-trail' : 'is-ahead',
-                        isUpcomingLeg ? 'is-upcoming-leg' : '',
-                        isLiveSegment ? 'is-live-segment' : '',
+                        isPassedStop ? 'is-passed' : '',
+                        isFocusStop ? 'is-focus' : '',
+                        isReached ? 'is-reached' : '',
+                        isBusLeg ? 'is-bus-leg' : '',
                         stopInteractive ? 'is-interactive' : '',
                       ]
                         .filter(Boolean)
                         .join(' ')}
-                      style={
-                        {
-                          ...(tickColor ? { '--stop-delay': tickColor } : {}),
-                          ...(segmentColor ? { '--segment': segmentColor } : {}),
-                        } as React.CSSProperties
-                      }
+                      style={{ '--tl-fill': segmentFill } as React.CSSProperties}
                     >
+                      {isHeadRow && <span className="dock__stop-train" aria-hidden="true" />}
                       {stopInteractive ? (
                         <button
                           type="button"

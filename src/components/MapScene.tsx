@@ -16,6 +16,7 @@ import type { Coordinate, GtfsDataset } from '../data/gtfsParser';
 import {
   contrastInk,
   getDelayColor,
+  isPassengerStop,
   motionPathToward,
   placeOnPath,
   routeLegPath,
@@ -52,7 +53,7 @@ import {
 } from '../data/trainOsmMapper';
 import { closeRailGaps } from '../data/railStitch';
 import { decodePolyline, encodePolyline, fetchTrainRoute } from '../data/routeService';
-import { fetchJourneys, JourneyAnimator } from '../data/journeyService';
+import { fetchJourneys, isOnBus, JourneyAnimator, timelineProgress } from '../data/journeyService';
 import { TrainCanvasLayer } from './trainCanvas';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
 import {
@@ -66,6 +67,7 @@ import {
   EMPTY_COLLECTION,
   pathsToLineCollection,
   classifyDisplayRails,
+  mergeNearbyStations,
   pointsToCollection,
   railKind,
   spreadOverlappingTrainPoints,
@@ -145,7 +147,7 @@ const BASEMAP_RAIL_FADE: ExpressionSpecification = [
   'interpolate',
   ['linear'],
   ['zoom'],
-  12.8,
+  12.3,
   0,
   13.3,
   1,
@@ -288,6 +290,8 @@ type TrainMarkerEntry = {
   motionRequestId?: string;
   /** Position comes from the timetable model (journeyService), not the reported point. */
   journeyActive?: boolean;
+  /** The train is on a replacement-bus stretch right now. */
+  onBus?: boolean;
   lastSelected: boolean;
   lastType: string;
   width: number;
@@ -327,6 +331,71 @@ function createTrainEntry(): TrainMarkerEntry {
     lastType: '',
     width: 26,
   };
+}
+
+/**
+ * Cut the highlighted route where replacement buses take over: rail stretches
+ * stay solid, bus stretches go to their own dashed layer. `cum` is the metres
+ * along the line at each vertex of `path`.
+ */
+function splitRouteAtBus(
+  path: Coordinate[],
+  cum: ArrayLike<number>,
+  ranges: Array<[number, number]>
+): { solid: Coordinate[][]; bus: Coordinate[][] } {
+  if (ranges.length === 0 || path.length !== cum.length || path.length < 2) {
+    return { solid: [path], bus: [] };
+  }
+  const total = cum[cum.length - 1];
+  const pointAt = (along: number): Coordinate => {
+    let low = 0;
+    let high = cum.length - 1;
+    while (high - low > 1) {
+      const mid = (low + high) >> 1;
+      if (cum[mid] <= along) {
+        low = mid;
+      } else {
+        high = mid;
+      }
+    }
+    const span = cum[high] - cum[low];
+    const t = span > 0 ? Math.min(1, Math.max(0, (along - cum[low]) / span)) : 0;
+    return {
+      lat: path[low].lat + (path[high].lat - path[low].lat) * t,
+      lng: path[low].lng + (path[high].lng - path[low].lng) * t,
+      sequence: 0,
+    };
+  };
+  const slice = (from: number, to: number): Coordinate[] => {
+    const points: Coordinate[] = [pointAt(from)];
+    for (let index = 0; index < path.length; index += 1) {
+      if (cum[index] > from && cum[index] < to) {
+        points.push(path[index]);
+      }
+    }
+    points.push(pointAt(to));
+    return points.map((point, index) => ({ ...point, sequence: index + 1 }));
+  };
+  const solid: Coordinate[][] = [];
+  const bus: Coordinate[][] = [];
+  let cursor = 0;
+  [...ranges]
+    .sort((a, b) => a[0] - b[0])
+    .forEach(([from, to]) => {
+      const start = Math.max(cursor, Math.min(from, total));
+      const end = Math.min(total, Math.max(to, start));
+      if (start - cursor > 1) {
+        solid.push(slice(cursor, start));
+      }
+      if (end - start > 1) {
+        bus.push(slice(start, end));
+      }
+      cursor = end;
+    });
+  if (total - cursor > 1) {
+    solid.push(slice(cursor, total));
+  }
+  return { solid, bus };
 }
 
 function absoluteAppUrl(url: string): string {
@@ -386,6 +455,75 @@ const STATION_HIT_LAYERS = [
   'stations-selected',
 ];
 const STATION_DOT_MIN_ZOOM = 10.6;
+/** Dots and labels go from invisible to full over this many zoom levels. */
+const STATION_FADE_ZOOM = 0.8;
+
+/** `opacity` once the map is past the dots' minzoom, ramping up from zero. */
+function stationFade(opacity: number | ExpressionSpecification): ExpressionSpecification {
+  return ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 0, STATION_DOT_MIN_ZOOM + STATION_FADE_ZOOM, opacity] as ExpressionSpecification;
+}
+
+/**
+ * Pixel offset from the map's centre to the centre of the part of the map the
+ * dock does not cover: to the right of the side panel on desktop, above the
+ * push-up sheet on mobile. Aim the camera with it so a followed train sits in
+ * the middle of what the user can actually see.
+ */
+function visibleOffset(map: MapLibreMap): { x: number; y: number } {
+  const box = map.getContainer().getBoundingClientRect();
+  const dock = document.querySelector<HTMLElement>('aside.dock:not(.is-leave)');
+  if (!dock || box.width === 0 || box.height === 0) {
+    return { x: 0, y: 0 };
+  }
+  const rect = dock.getBoundingClientRect();
+  let left = 0;
+  let top = 0;
+  let right = box.width;
+  let bottom = box.height;
+  if (rect.width >= box.width * 0.85) {
+    // Bottom sheet spanning the screen.
+    bottom = Math.min(bottom, Math.max(top, rect.top - box.top));
+  } else if (rect.right > box.left) {
+    left = Math.min(right, Math.max(left, rect.right - box.left));
+  }
+  return { x: (left + right) / 2 - box.width / 2, y: (top + bottom) / 2 - box.height / 2 };
+}
+
+/**
+ * Part of the map the dock covers, as map padding: the side panel on desktop,
+ * the push-up sheet on mobile. With this padding the map's own centre (and so
+ * every zoom around the centre) is the middle of what the user can see.
+ */
+function dockPadding(map: MapLibreMap): { top: number; bottom: number; left: number; right: number } {
+  const padding = { top: 0, bottom: 0, left: 0, right: 0 };
+  const box = map.getContainer().getBoundingClientRect();
+  const dock = document.querySelector<HTMLElement>('aside.dock:not(.is-leave)');
+  if (!dock || box.width === 0 || box.height === 0) {
+    return padding;
+  }
+  const rect = dock.getBoundingClientRect();
+  if (rect.width >= box.width * 0.85) {
+    padding.bottom = Math.min(box.height * 0.9, Math.max(0, box.bottom - rect.top));
+  } else if (rect.right > box.left) {
+    padding.left = Math.min(box.width * 0.9, Math.max(0, rect.right - box.left));
+  }
+  return padding;
+}
+
+/** Apply map padding without moving the picture: the same ground stays under the same pixels. */
+function setPaddingKeepView(
+  map: MapLibreMap,
+  padding: { top: number; bottom: number; left: number; right: number }
+) {
+  const box = map.getContainer();
+  const cx = padding.left + (box.clientWidth - padding.left - padding.right) / 2;
+  const cy = padding.top + (box.clientHeight - padding.top - padding.bottom) / 2;
+  map.jumpTo({ center: map.unproject([cx, cy]), padding });
+}
+
+const NO_PADDING = { top: 0, bottom: 0, left: 0, right: 0 };
+/** Seconds the follow camera takes to close most of a small gap to the train. */
+const FOLLOW_TAU_SECONDS = 0.22;
 
 function stationLabelFont(map: MapLibreMap): string[] {
   for (const layer of map.getStyle()?.layers ?? []) {
@@ -577,16 +715,16 @@ function applyStationSelection(
 
 function placeRailsHighlightAboveTracks(map: MapLibreMap) {
   if (!map.getLayer('rails-highlight')) {
-      return;
-    }
-  const style = map.getStyle();
-  const layers = style?.layers;
+    return;
+  }
+  const layers = map.getStyle()?.layers;
   if (!layers?.length) {
-      return;
-    }
+    return;
+  }
+  const isHighlight = (id: string) => id === 'rails-highlight' || id === 'rails-highlight-bus';
   let beforeId: string | undefined;
   for (const layer of layers) {
-    if (layer.id === 'rails-highlight') {
+    if (isHighlight(layer.id)) {
       continue;
     }
     if (layer.id === 'stations-halo' || layer.id.startsWith('stations-')) {
@@ -596,6 +734,9 @@ function placeRailsHighlightAboveTracks(map: MapLibreMap) {
   }
   try {
     map.moveLayer('rails-highlight', beforeId);
+    if (map.getLayer('rails-highlight-bus')) {
+      map.moveLayer('rails-highlight-bus', beforeId);
+    }
   } catch {
     // Style may be mid-reload.
   }
@@ -768,7 +909,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
         type: 'line',
         source: 'basemap',
         'source-layer': 'transportation',
-        minzoom: 12.8,
+        minzoom: 12.3,
         filter,
         layout,
         paint: {
@@ -783,7 +924,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
         type: 'line',
         source: 'basemap',
         'source-layer': 'transportation',
-        minzoom: 12.8,
+        minzoom: 12.3,
         filter,
         layout,
         paint: {
@@ -816,6 +957,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   ensureSource('stations', { maxzoom: 14, tolerance: 0, buffer: 16, promoteId: 'id' });
   ensureSource('stations-hover', { maxzoom: 16, tolerance: 0, buffer: 64 });
   ensureSource('rails-highlight', { maxzoom: 16, tolerance: 0.35 });
+  ensureSource('rails-highlight-bus', { maxzoom: 16, tolerance: 0.35 });
   ensureSource('rails-simplified-main', { maxzoom: 14, tolerance: 0 });
   ensureSource('rails-simplified-branch', { maxzoom: 14, tolerance: 0 });
   ensureSource('rails-simplified-side', { maxzoom: 14, tolerance: 0 });
@@ -849,6 +991,11 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     }
     map.addLayer(layer);
   };
+  for (const legacy of ['stations-label-selected', 'stations-label-hover']) {
+    if (map.getLayer(legacy)) {
+      map.removeLayer(legacy);
+    }
+  }
   const labelFont = stationLabelFont(map);
   const labelLayout = {
     'text-font': labelFont,
@@ -890,14 +1037,14 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     paint: {
       'circle-radius': stationCircleRadius([6.4, 8.4, 12, 1.35]),
       'circle-color': fillColor,
-      'circle-opacity': [
+      'circle-opacity': stationFade([
         'case',
         ['boolean', ['feature-state', 'hover'], false],
         0.42,
         ['boolean', ['feature-state', 'selected'], false],
         0.3,
         0.13,
-      ],
+      ]),
       'circle-blur': 0.18,
       'circle-pitch-alignment': 'map',
     },
@@ -910,6 +1057,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     paint: {
       'circle-radius': stationCircleRadius([3.2, 3.6, 4.8, 1.18]),
       'circle-color': casingColor,
+      'circle-opacity': stationFade(1),
       'circle-pitch-alignment': 'map',
     },
   });
@@ -921,6 +1069,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     paint: {
       'circle-radius': stationCircleRadius([2.2, 2.5, 3.35, 1.18]),
       'circle-color': fillColor,
+      'circle-opacity': stationFade(1),
       'circle-pitch-alignment': 'map',
     },
   });
@@ -938,63 +1087,61 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       'circle-pitch-alignment': 'map',
     },
   });
-  upsertLayer({
-    id: 'stations-label-major',
-    type: 'symbol',
-    source: 'stations',
-    minzoom: STATION_DOT_MIN_ZOOM,
-    filter: ['==', ['get', 'rank'], 3],
-    layout: {
-      ...labelLayout,
-      'text-size': ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 10.5, 13, 11, 14, 13, 16, 14],
-    },
-    paint: { ...labelPaint, 'text-opacity': hideLabelWhenHovered },
+  // One size per rank, shared by the resting, selected and hover labels, so a label
+  // that swaps to its hover copy never changes size or reveals another one behind it.
+  const rankTextSize: Record<1 | 2 | 3, ExpressionSpecification> = {
+    3: ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 10.5, 13, 11, 14, 13, 16, 14],
+    2: ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 10, 12.8, 10.5, 14, 12, 16, 13],
+    1: ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 9.5, 13, 10.5, 15, 12],
+  };
+  const labelRanks: Array<[1 | 2 | 3, string]> = [
+    [3, 'major'],
+    [2, 'mid'],
+    [1, 'minor'],
+  ];
+  labelRanks.forEach(([rank, name]) => {
+    upsertLayer({
+      id: `stations-label-${name}`,
+      type: 'symbol',
+      source: 'stations',
+      minzoom: STATION_DOT_MIN_ZOOM,
+      filter: ['==', ['get', 'rank'], rank],
+      layout: { ...labelLayout, 'text-size': rankTextSize[rank] },
+      paint: { ...labelPaint, 'text-opacity': stationFade(hideLabelWhenHovered) },
+    });
   });
-  upsertLayer({
-    id: 'stations-label-mid',
-    type: 'symbol',
-    source: 'stations',
-    minzoom: STATION_DOT_MIN_ZOOM,
-    filter: ['==', ['get', 'rank'], 2],
-    layout: labelLayout,
-    paint: { ...labelPaint, 'text-opacity': hideLabelWhenHovered },
+  labelRanks.forEach(([rank, name]) => {
+    upsertLayer({
+      id: `stations-label-selected-${name}`,
+      type: 'symbol',
+      source: 'stations',
+      minzoom: STATION_DOT_MIN_ZOOM,
+      filter: ['==', ['get', 'rank'], rank],
+      layout: {
+        ...labelLayout,
+        'text-size': rankTextSize[rank],
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+      },
+      paint: { ...labelPaint, 'text-opacity': showSelectedUnlessHovered },
+    });
   });
-  upsertLayer({
-    id: 'stations-label-minor',
-    type: 'symbol',
-    source: 'stations',
-    minzoom: STATION_DOT_MIN_ZOOM,
-    filter: ['==', ['get', 'rank'], 1],
-    layout: {
-      ...labelLayout,
-      'text-size': ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 9.5, 13, 10.5, 15, 12],
-    },
-    paint: { ...labelPaint, 'text-opacity': hideLabelWhenHovered },
-  });
-  upsertLayer({
-    id: 'stations-label-selected',
-    type: 'symbol',
-    source: 'stations',
-    minzoom: STATION_DOT_MIN_ZOOM,
-    layout: {
-      ...labelLayout,
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
-    },
-    paint: { ...labelPaint, 'text-opacity': showSelectedUnlessHovered },
-  });
-  upsertLayer({
-    id: 'stations-label-hover',
-    type: 'symbol',
-    source: 'stations-hover',
-    minzoom: STATION_DOT_MIN_ZOOM,
-    layout: {
-      ...labelLayout,
-      'text-allow-overlap': true,
-      'text-ignore-placement': true,
-      'text-optional': false,
-    },
-    paint: labelPaint,
+  labelRanks.forEach(([rank, name]) => {
+    upsertLayer({
+      id: `stations-label-hover-${name}`,
+      type: 'symbol',
+      source: 'stations-hover',
+      minzoom: STATION_DOT_MIN_ZOOM,
+      filter: ['==', ['get', 'rank'], rank],
+      layout: {
+        ...labelLayout,
+        'text-size': rankTextSize[rank],
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+        'text-optional': false,
+      },
+      paint: labelPaint,
+    });
   });
 
   upsertLayer({
@@ -1006,6 +1153,19 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       'line-color': ['coalesce', ['get', 'color'], '#ffffff'],
       'line-width': HIGHLIGHT_LINE_WIDTH,
       'line-opacity': 0.95,
+    },
+  });
+  // Replacement-bus stretches of the highlighted route: dashed, same colour.
+  upsertLayer({
+    id: 'rails-highlight-bus',
+    type: 'line',
+    source: 'rails-highlight-bus',
+    layout: { 'line-cap': 'butt', 'line-join': 'round' },
+    paint: {
+      'line-color': ['coalesce', ['get', 'color'], '#ffffff'],
+      'line-width': HIGHLIGHT_LINE_WIDTH,
+      'line-opacity': 0.95,
+      'line-dasharray': [1.1, 1.3],
     },
   });
   placeRailsHighlightAboveTracks(map);
@@ -1020,6 +1180,10 @@ interface MapSceneProps {
   journeyStatus?: 'idle' | 'loading' | 'ready' | 'error';
   following?: boolean;
   onFollowBreak?: () => void;
+  /** Where the focused train is on the stop list (passenger stops), for the timeline. */
+  onTimelineProgress?: (progress: { train: string; from: number; fraction: number } | null) => void;
+  /** A report moved the followed train far from where it was shown. */
+  onFollowCorrection?: (correction: { train: string; meters: number }) => void;
   onTrainClick?: (trainNumber: string) => void;
   onStationClick?: (station: { id: string; name: string; lat: number; lng: number }) => void;
   onBackgroundClick?: () => void;
@@ -1043,6 +1207,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   journeyStatus = 'idle',
   following = false,
   onFollowBreak,
+  onTimelineProgress,
+  onFollowCorrection,
   onTrainClick,
   onStationClick,
   onBackgroundClick,
@@ -1109,6 +1275,13 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   onBackgroundClickRef.current = onBackgroundClick;
   const onFollowBreakRef = useRef(onFollowBreak);
   onFollowBreakRef.current = onFollowBreak;
+  const onTimelineProgressRef = useRef(onTimelineProgress);
+  onTimelineProgressRef.current = onTimelineProgress;
+  const onFollowCorrectionRef = useRef(onFollowCorrection);
+  onFollowCorrectionRef.current = onFollowCorrection;
+  const journeyStopsRef = useRef(journeyStops);
+  journeyStopsRef.current = journeyStops;
+  const lastTimelineRef = useRef('');
   const followingRef = useRef(following);
   followingRef.current = following;
   const followPositionRef = useRef<Coordinate | null>(null);
@@ -1506,13 +1679,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         onFollowBreakRef.current?.();
         return;
       }
-      const position = followPositionRef.current;
-      if (position) {
-        map.easeTo({
-          center: [position.lng, position.lat],
-          duration: 450,
-        });
-      }
+      // The follow loop eases the camera back onto the train.
     };
     map.on('dragstart', handleDragStart);
     map.on('dragend', handleDragEnd);
@@ -1942,15 +2109,17 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           entry.lastLng = point.lng;
           entry.lastLat = point.lat;
         }
+        // A train running by replacement bus shows BUS on its pill.
+        const shownType = entry?.onBus ? 'BUS' : point.type;
         return {
           id: point.id,
           lng: point.lng,
           lat: point.lat,
-          type: point.type,
+          type: shownType,
           color: point.color,
           selected: point.selected,
           heading: point.heading ?? null,
-          label: `${point.type} ${point.number}`,
+          label: `${shownType} ${point.number}`,
         };
       })
     );
@@ -1991,8 +2160,11 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         tripCountByStop.set(entry.stopId, (tripCountByStop.get(entry.stopId) ?? 0) + 1);
       });
     });
-    const stops = Object.values(dataset.stops).filter((stop) =>
-      isCoordinateInsideOutline({ lat: stop.lat, lng: stop.lng }, svgOutlinePolygons)
+    const stops = mergeNearbyStations(
+      Object.values(dataset.stops).filter((stop) =>
+        isCoordinateInsideOutline({ lat: stop.lat, lng: stop.lng }, svgOutlinePolygons)
+      ),
+      (stop) => stop.tripCount ?? tripCountByStop.get(stop.stopId) ?? 0
     );
     setSourceData(
       map,
@@ -2203,7 +2375,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       }
       const zoom = map.getZoom();
       // Smooth motion only when zoomed in; far out, refresh positions every few seconds.
-      const interval = zoom >= 11 ? 40 : zoom >= JOURNEY_SMOOTH_ZOOM ? 200 : 4000;
+      // Every frame while following, so the pill and the camera move together.
+      const interval = followingRef.current ? 0 : zoom >= 11 ? 40 : zoom >= JOURNEY_SMOOTH_ZOOM ? 200 : 4000;
       if (frameMs - lastRun < interval) {
         return;
       }
@@ -2212,18 +2385,26 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       const now = Date.now();
       const followed = followingRef.current ? focusedTrainRef.current : null;
       let changed = false;
+      const focusedId = focusedTrainRef.current;
       trainMarkersRef.current.forEach((entry, id) => {
         const position = animator.position(id, now);
         if (position && id === followed) {
           followPositionRef.current = { lat: position.lat, lng: position.lng, sequence: 0 };
-          if (!userDraggingRef.current && !map.isMoving()) {
-            const center = map.getCenter();
-            if (Math.hypot(center.lat - position.lat, center.lng - position.lng) > 0.000005) {
-              map.jumpTo({ center: [position.lng, position.lat] });
-            }
+        }
+        if (position && id === focusedId) {
+          const journey = animator.journey(id);
+          const rows = (journeyStopsRef.current ?? []).filter(isPassengerStop);
+          const progress = journey ? timelineProgress(journey, rows, position.along) : null;
+          // Quantised, so the panel only re-renders when the line visibly moves.
+          const key = progress ? `${id}:${progress.from}:${Math.round(progress.fraction * 200)}` : `${id}:none`;
+          if (key !== lastTimelineRef.current) {
+            lastTimelineRef.current = key;
+            onTimelineProgressRef.current?.(progress ? { train: id, ...progress } : null);
           }
         }
         if (position) {
+          const ownJourney = animator.journey(id);
+          entry.onBus = ownJourney ? isOnBus(ownJourney, position.along) : false;
           entry.trackLat = position.lat;
           entry.trackLng = position.lng;
           if (position.heading != null) {
@@ -2242,6 +2423,11 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       if (changed) {
         publishTrainMarkersRef.current();
       }
+      for (const correction of animator.takeCorrections()) {
+        if (correction.train === followed && Math.abs(correction.meters) > 1500) {
+          onFollowCorrectionRef.current?.(correction);
+        }
+      }
     };
     raf = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(raf);
@@ -2252,15 +2438,26 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     if (!mapReadyRef.current || !map) {
       return;
     }
-    const routed = (networkRoute ?? []).filter((path) => path.length > 1);
-    const collection = routed.length > 0 ? pathsToLineCollection(routed) : EMPTY_COLLECTION;
+    let routed = (networkRoute ?? []).filter((path) => path.length > 1);
+    let busPaths: Coordinate[][] = [];
+    const stored = focusedTrainNumber ? journeyAnimatorRef.current.journey(focusedTrainNumber) : undefined;
+    if (stored && stored.bus.length > 0 && routed.length === 1) {
+      const split = splitRouteAtBus(routed[0], stored.cum, stored.bus);
+      routed = split.solid.filter((path) => path.length > 1);
+      busPaths = split.bus;
+    }
     const color = trains.find((train) => train.trainNumber === focusedTrainNumber)?.color ?? '#ffffff';
-    collection.features.forEach((feature) => {
-      feature.properties = { ...(feature.properties ?? {}), color };
-    });
-    setSourceData(map, 'rails-highlight', collection);
+    const painted = (paths: Coordinate[][]) => {
+      const collection = paths.length > 0 ? pathsToLineCollection(paths) : EMPTY_COLLECTION;
+      collection.features.forEach((feature) => {
+        feature.properties = { ...(feature.properties ?? {}), color };
+      });
+      return collection;
+    };
+    setSourceData(map, 'rails-highlight', painted(routed));
+    setSourceData(map, 'rails-highlight-bus', painted(busPaths));
     placeRailsHighlightAboveTracks(map);
-  }, [networkRoute, focusedTrainNumber, trains, terrainLoaded, overlayEpoch]);
+  }, [networkRoute, focusedTrainNumber, trains, terrainLoaded, overlayEpoch, journeysVersion]);
 
   const lastFlownTrainRef = useRef<string | null>(null);
   useEffect(() => {
@@ -2282,36 +2479,116 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     lastFlownTrainRef.current = focusedTrainNumber;
     const duration = 700;
     // Aim where the train will be when the camera arrives.
-    const ahead = modelled ? journeyAnimatorRef.current.peek(focusedTrainNumber, Date.now() + duration) : null;
+    const ahead = modelled ? journeyAnimatorRef.current.lookahead(focusedTrainNumber, duration / 1000) : null;
     const target = ahead ?? position;
+    const offset = visibleOffset(map);
     map.easeTo({
       center: [target.lng, target.lat],
       zoom: Math.max(map.getZoom(), TRAIN_FOCUS_ZOOM),
+      // Land the train in the middle of the area the dock leaves free.
+      offset: [offset.x, offset.y],
       duration,
     });
   }, [focusedTrainNumber, following, trains, focusedInterpolatedPosition]);
 
+  // Follow camera. Every frame the camera eases a little closer to the train, so
+  // it glides back after a drag or when following starts far from the train
+  // instead of snapping. The map is padded by what the dock covers, so its centre
+  // (and every zoom around the centre) is the middle of the visible area.
   useEffect(() => {
     if (!following || !focusedTrainNumber) {
       return;
     }
     const map = mapRef.current;
-    const position = followPosition;
-    if (!mapReadyRef.current || !map || !position || userDraggingRef.current) {
+    if (!map) {
       return;
     }
-    if (journeyAnimatorRef.current.isActive(focusedTrainNumber)) {
-      return; // the journey loop keeps the camera on the moving train
-    }
-    const center = map.getCenter();
-    if (Math.hypot(center.lat - position.lat, center.lng - position.lng) < 0.00012) {
-      return;
-    }
-    map.easeTo({
-      center: [position.lng, position.lat],
-      duration: 500,
-    });
-  }, [following, focusedTrainNumber, followPosition]);
+    const trainId = focusedTrainNumber;
+    // Scroll, pinch, keyboard and buttons zoom around the train, not the pointer.
+    map.scrollZoom.disable();
+    map.scrollZoom.enable({ around: 'center' });
+    map.touchZoomRotate.disable();
+    map.touchZoomRotate.enable({ around: 'center' });
+    map.touchZoomRotate.disableRotation();
+    map.doubleClickZoom.disable();
+    const handleDoubleClick = (event: { preventDefault: () => void }) => {
+      event.preventDefault();
+      map.zoomIn({ duration: 300 });
+    };
+    map.on('dblclick', handleDoubleClick);
+
+    let raf = 0;
+    let lastFrame = performance.now();
+    const step = (frameMs: number) => {
+      raf = window.requestAnimationFrame(step);
+      const dt = Math.min(0.1, Math.max(0, (frameMs - lastFrame) / 1000));
+      lastFrame = frameMs;
+      if (!mapReadyRef.current || userDraggingRef.current || map.isMoving()) {
+        return;
+      }
+      const padding = dockPadding(map);
+      const current = map.getPadding();
+      const paddingChanged =
+        Math.abs(padding.top - (current.top ?? 0)) > 0.5 ||
+        Math.abs(padding.bottom - (current.bottom ?? 0)) > 0.5 ||
+        Math.abs(padding.left - (current.left ?? 0)) > 0.5 ||
+        Math.abs(padding.right - (current.right ?? 0)) > 0.5;
+      const box = map.getContainer();
+      // Where the camera looks now; a padding change keeps the picture where it is.
+      const here = paddingChanged
+        ? map.unproject([
+            padding.left + (box.clientWidth - padding.left - padding.right) / 2,
+            padding.top + (box.clientHeight - padding.top - padding.bottom) / 2,
+          ])
+        : map.getCenter();
+      const animator = journeyAnimatorRef.current;
+      // Aim a moment ahead: the smoothing lags by about that long, so the pill stays centred.
+      const target = animator.isActive(trainId)
+        ? animator.lookahead(trainId, FOLLOW_TAU_SECONDS)
+        : followPositionRef.current;
+      if (!target) {
+        if (paddingChanged) {
+          map.jumpTo({ center: here, padding });
+        }
+        return;
+      }
+      const gap = Math.hypot(
+        map.project([target.lng, target.lat]).x - map.project(here).x,
+        map.project([target.lng, target.lat]).y - map.project(here).y
+      );
+      if (gap < 0.15) {
+        map.jumpTo({ center: [target.lng, target.lat], padding });
+        return;
+      }
+      // Far away: a longer, softer glide. Close: tight enough to track at speed.
+      const tau = FOLLOW_TAU_SECONDS + Math.min(0.7, gap / 2500);
+      const k = 1 - Math.exp(-dt / tau);
+      map.jumpTo({
+        center: [here.lng + (target.lng - here.lng) * k, here.lat + (target.lat - here.lat) * k],
+        padding,
+      });
+    };
+    raf = window.requestAnimationFrame(step);
+
+    return () => {
+      window.cancelAnimationFrame(raf);
+      map.off('dblclick', handleDoubleClick);
+      try {
+        map.scrollZoom.disable();
+        map.scrollZoom.enable();
+        map.touchZoomRotate.disable();
+        map.touchZoomRotate.enable();
+        map.touchZoomRotate.disableRotation();
+        map.doubleClickZoom.enable();
+        const left = map.getPadding();
+        if ((left.top ?? 0) || (left.bottom ?? 0) || (left.left ?? 0) || (left.right ?? 0)) {
+          setPaddingKeepView(map, NO_PADDING);
+        }
+      } catch {
+        // the map was already removed
+      }
+    };
+  }, [following, focusedTrainNumber]);
 
   const lastFlownStationRef = useRef<string | null>(null);
   useEffect(() => {

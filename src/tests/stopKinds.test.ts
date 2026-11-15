@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error plain ESM module from the proxy, no type declarations
-import { classifyStops, isNonStopName, normalizeStationName } from '../../proxy/trainDetail.mjs';
+import { classifyStops, isNonStopName, normalizeStationName, parseTrainDetail } from '../../proxy/trainDetail.mjs';
 import { alongAtTime, buildJourney, JourneyAnimator } from '../data/journeyService';
 import { encodePolyline } from '../data/routeService';
 
@@ -187,5 +187,32 @@ describe('JourneyAnimator glitches', () => {
     const shown = animator.peek('7', later + 2000)!.along;
     expect(shown).toBeLessThan(before - 1000);
     expect(shown).toBeGreaterThan(target + 1000);
+  });
+});
+
+describe('replacement bus rows', () => {
+  const rowHtml = (name: string, bus: boolean, arr: string, dep: string) => `
+    <div class="row row__after afterNext" style="display:flex">
+      <div class="timeline__marker timeline__marker__${bus ? 'nad' : 'after'}"></div>
+      <div class="bold col-lg-4"><span class="futureName">${name}</span></div>
+      <div class="col-lg-2">${bus ? '<span lang-title-key="nadKey"><img src="/images/nad.svg" /></span>' : ''}</div>
+      <div class="col-lg-2">
+        <span lang-title-key="arrivalEst"> ${arr} </span><span> - </span><span lang-title-key="departEst"> ${dep} </span>
+      </div>
+      <div class="col-lg-3"><span><span lang-title-key="arrivalGvd">(${arr}</span><span> - </span><span lang-title-key="departGvd">${dep}</span><span>)</span></span></div>
+    </div>`;
+
+  it('flags the stops the bus serves and counts them as passenger stops', () => {
+    const html = [
+      rowHtml('Zelené', false, '09:24', '09:25'),
+      rowHtml('Poltár', true, '09:29', '09:30'),
+      rowHtml('Zlatno', true, '09:43', '09:45'),
+      rowHtml('Utekáč', true, '10:13', ''),
+    ].join('');
+    const stops = parseTrainDetail(html) as Array<{ name: string; bus?: boolean }>;
+    expect(stops.map((stop) => Boolean(stop.bus))).toEqual([false, true, true, true]);
+    // Not in the train's GTFS call list, but the bus still stops there.
+    const kinds = classifyStops(stops, new Set(['zelene'])).map((stop: { kind: string }) => stop.kind);
+    expect(kinds).toEqual(['stop', 'stop', 'stop', 'stop']);
   });
 });

@@ -1,3 +1,4 @@
+import { slimTerrariumPng } from './demSlim.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -5,7 +6,8 @@ const OPENFREEMAP_PLANET = 'https://tiles.openfreemap.org/planet';
 const OPENFREEMAP_FONTS = 'https://tiles.openfreemap.org/fonts';
 const TERRARIUM_ORIGIN = 'https://s3.amazonaws.com/elevation-tiles-prod/terrarium';
 const VECTOR_MAX_ZOOM = 14;
-const HILLSHADE_MAX_ZOOM = 12;
+// The shading is soft: tiles past zoom 11 are stretched from this level, not downloaded.
+const HILLSHADE_MAX_ZOOM = 11;
 const BASEMAP_DETAIL_ZOOM = 14;
 const MAP_VIEW_MAX_ZOOM = 16;
 const PLANET_JSON_TTL_MS = 24 * 60 * 60 * 1000;
@@ -167,7 +169,83 @@ function streetWidth(scale) {
   ];
 }
 
+// Layers with a minzoom would pop into view; ramp their opacity up over this many zoom levels instead.
+const FADE_IN_ZOOM = 0.7;
+const FADE_OPACITY_PROPS = {
+  line: ['line-opacity'],
+  fill: ['fill-opacity'],
+  circle: ['circle-opacity', 'circle-stroke-opacity'],
+  symbol: ['text-opacity', 'icon-opacity'],
+};
+
+function zoomStops(expression) {
+  if (!Array.isArray(expression) || expression[0] !== 'interpolate' || expression[2]?.[0] !== 'zoom') {
+    return null;
+  }
+  const stops = [];
+  for (let index = 3; index < expression.length - 1; index += 2) {
+    if (typeof expression[index] !== 'number' || typeof expression[index + 1] !== 'number') {
+      return null;
+    }
+    stops.push([expression[index], expression[index + 1]]);
+  }
+  return stops.length > 0 ? stops : null;
+}
+
+function sampleStops(stops, zoom) {
+  if (zoom <= stops[0][0]) {
+    return stops[0][1];
+  }
+  for (let index = 1; index < stops.length; index += 1) {
+    if (zoom <= stops[index][0]) {
+      const [z0, v0] = stops[index - 1];
+      const [z1, v1] = stops[index];
+      return z1 <= z0 ? v1 : v0 + ((v1 - v0) * (zoom - z0)) / (z1 - z0);
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+/** `opacity` (a number, a zoom curve, or unset) times a 0 -> 1 ramp that starts at `minzoom`. */
+function fadedOpacity(opacity, minzoom) {
+  const end = minzoom + FADE_IN_ZOOM;
+  const ramp = (zoom) => Math.min(1, Math.max(0, (zoom - minzoom) / FADE_IN_ZOOM));
+  if (opacity === undefined || typeof opacity === 'number') {
+    return ['interpolate', ['linear'], ['zoom'], minzoom, 0, end, opacity ?? 1];
+  }
+  const stops = zoomStops(opacity);
+  if (!stops) {
+    return opacity; // data-driven: leave as it was
+  }
+  const zooms = [...new Set([minzoom, end, ...stops.map(([zoom]) => zoom).filter((zoom) => zoom > minzoom)])].sort(
+    (a, b) => a - b
+  );
+  const out = ['interpolate', ['linear'], ['zoom']];
+  zooms.forEach((zoom) => {
+    out.push(zoom, +(ramp(zoom) * sampleStops(stops, zoom)).toFixed(4));
+  });
+  return out;
+}
+
+function withFadeIns(style) {
+  style.layers.forEach((layer) => {
+    const props = FADE_OPACITY_PROPS[layer.type];
+    if (!props || !(layer.minzoom > 2)) {
+      return;
+    }
+    layer.paint = layer.paint ?? {};
+    props.forEach((prop) => {
+      layer.paint[prop] = fadedOpacity(layer.paint[prop], layer.minzoom);
+    });
+  });
+  return style;
+}
+
 export function railatlasStyle(theme = 'light') {
+  return withFadeIns(buildRailatlasStyle(theme));
+}
+
+function buildRailatlasStyle(theme = 'light') {
   const night = theme === 'dark';
   const p = PALETTES[night ? 'dark' : 'light'];
   return {
@@ -644,8 +722,28 @@ export async function fetchMaptilerAsset(cacheDir, _apiKey, rawPath) {
     return null;
   }
   const file = cacheFileForPath(cacheDir, pathname);
+  // Elevation tiles are served with their sub-metre noise removed (see demSlim.mjs):
+  // same shading, a fraction of the bytes. The slim copy is cached next to the original.
+  const isRelief = /^\/tiles\/hillshade\//.test(pathname);
+  const slimFile = isRelief ? file.replace(/\.png$/, '.q2.png') : null;
+  if (slimFile && fs.existsSync(slimFile) && fs.statSync(slimFile).size > 0) {
+    return { buffer: fs.readFileSync(slimFile), contentType: 'image/png' };
+  }
+  const slimmed = (buffer) => {
+    if (!slimFile) {
+      return buffer;
+    }
+    const slim = slimTerrariumPng(buffer, { keepBits: 2 });
+    try {
+      fs.writeFileSync(slimFile, slim);
+    } catch {
+      // serving still works without the cache copy
+    }
+    return slim;
+  };
   if (fs.existsSync(file) && fs.statSync(file).size > 0) {
-    return { buffer: fs.readFileSync(file), contentType: contentTypeFor(pathname) };
+    const raw = fs.readFileSync(file);
+    return { buffer: slimmed(raw), contentType: contentTypeFor(pathname) };
   }
   let url;
   try {
@@ -667,7 +765,7 @@ export async function fetchMaptilerAsset(cacheDir, _apiKey, rawPath) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, buffer);
   return {
-    buffer,
+    buffer: slimmed(buffer),
     contentType: contentTypeFor(pathname, response.headers.get('content-type')),
   };
 }

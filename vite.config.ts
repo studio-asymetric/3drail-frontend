@@ -4,6 +4,10 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   server: {
+    // The proxy rewrites these every few seconds; watching them keeps Vite busy.
+    watch: {
+      ignored: ['**/proxy/*.json', '**/proxy/*.log', '**/proxy/osm-cache/**', '**/dist/**', '**/.claude/**'],
+    },
     proxy: {
       '/api': {
         target: 'https://mapa.zsr.sk',
@@ -35,7 +39,8 @@ export default defineConfig({
         rewrite: (path) => path,
       },
       '/proxy': {
-        target: 'http://127.0.0.1:3001',
+        // PROXY_TARGET lets a second dev server talk to a second proxy (testing a new proxy build).
+        target: process.env.PROXY_TARGET ?? 'http://127.0.0.1:3001',
         changeOrigin: true,
         secure: false,
         timeout: 0,

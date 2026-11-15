@@ -34,6 +34,8 @@ export interface Journey {
   runs: Array<[number, number]>;
   /** Metres along the line for every point ZSR lists (null when off the line). */
   at: Array<number | null>;
+  /** Stretches run by replacement bus: metres along the line, start to end. */
+  bus: Array<[number, number]>;
   ok: boolean;
 }
 
@@ -92,12 +94,44 @@ function bearing(latA: number, lngA: number, latB: number, lngB: number): number
 type RawJourney = {
   n: string;
   sig: string;
+  /** Seconds the stop times are counted from (payload v2). */
+  t0?: number;
+  /** Replacement-bus stretches, metres along the line. */
+  bus?: Array<[number, number]>;
   line: string;
   /** [metres along, arrival, departure, index in ZSR's list, kind code (0 pass, 1 stop, 2 wait)] */
   stops: Array<[number, number | null, number | null, number, number?]>;
   at?: Array<number | null>;
   ok: boolean;
 };
+
+type RawRoute = { line: string; at?: Array<number | null>; ok: boolean };
+
+/** Turn a payload entry (shared route, times relative to t0) into the plain shape `buildJourney` reads. */
+export function expandJourney(
+  entry: Omit<RawJourney, 'line' | 'ok'> & Partial<Pick<RawJourney, 'line' | 'ok'>>,
+  routes: Record<string, RawRoute> | undefined
+): RawJourney | null {
+  const route = routes?.[entry.sig];
+  const line = entry.line ?? route?.line;
+  if (!line) {
+    return null;
+  }
+  const base = entry.t0 ?? 0;
+  return {
+    ...entry,
+    line,
+    at: entry.at ?? route?.at,
+    ok: entry.ok ?? route?.ok ?? true,
+    stops: (entry.stops ?? []).map(([along, arr, dep, index, kind]) => [
+      along,
+      arr == null ? null : arr + base,
+      dep == null ? null : dep + base,
+      index,
+      kind,
+    ]),
+  };
+}
 
 export function buildJourney(raw: RawJourney): Journey | null {
   const points = decodePolyline(raw.line);
@@ -159,7 +193,7 @@ export function buildJourney(raw: RawJourney): Journey | null {
       runStart = stop.dep;
     }
   }
-  return { train: raw.n, sig: raw.sig, lat, lng, cum, stops, runs, at: raw.at ?? [], ok: raw.ok };
+  return { train: raw.n, sig: raw.sig, lat, lng, cum, stops, runs, at: raw.at ?? [], bus: raw.bus ?? [], ok: raw.ok };
 }
 
 /**
@@ -196,7 +230,7 @@ let lastJourneysEtag = '';
 /** All running trains' journeys, or null when the list has not changed since the last call. */
 export async function fetchJourneys(signal?: AbortSignal): Promise<Map<string, Journey> | null> {
   // no-cache: the browser revalidates with the ETag and gets a 304 when nothing changed.
-  const response = await fetch('/proxy/journeys?mode=journeys&v=1', { signal, cache: 'no-cache' });
+  const response = await fetch('/proxy/journeys?mode=journeys&v=2', { signal, cache: 'no-cache' });
   if (!response.ok) {
     throw new Error(`Journeys HTTP ${response.status}`);
   }
@@ -204,10 +238,14 @@ export async function fetchJourneys(signal?: AbortSignal): Promise<Map<string, J
   if (etag && etag === lastJourneysEtag) {
     return null;
   }
-  const payload = (await response.json()) as { journeys?: RawJourney[] };
+  const payload = (await response.json()) as {
+    routes?: Record<string, RawRoute>;
+    journeys?: Array<Parameters<typeof expandJourney>[0]>;
+  };
   const out = new Map<string, Journey>();
-  (payload.journeys ?? []).forEach((raw) => {
-    const journey = buildJourney(raw);
+  (payload.journeys ?? []).forEach((entry) => {
+    const raw = expandJourney(entry, payload.routes);
+    const journey = raw ? buildJourney(raw) : null;
     if (journey) {
       out.set(journey.train, journey);
     }
@@ -269,6 +307,50 @@ export function timeAtAlong(journey: Journey, along: number, hint: number): numb
     }
   }
   return null;
+}
+
+/**
+ * Where a train is on the stop list: the stop it last reached and how far it
+ * is toward the next one (0..1). `stops` is the passenger-stop list the panel
+ * shows; each carries `index`, its place in the full list the journey's `at` uses.
+ */
+export function timelineProgress(
+  journey: Journey,
+  stops: Array<{ index?: number }>,
+  along: number
+): { from: number; fraction: number } | null {
+  const located: Array<{ k: number; at: number }> = [];
+  stops.forEach((stop, k) => {
+    const at = stop.index != null ? journey.at[stop.index] : null;
+    if (at != null && (located.length === 0 || at >= located[located.length - 1].at - 50)) {
+      located.push({ k, at });
+    }
+  });
+  if (located.length < 2) {
+    return null;
+  }
+  const slack = 40;
+  if (along <= located[0].at + slack) {
+    return { from: located[0].k, fraction: 0 };
+  }
+  const end = located[located.length - 1];
+  if (along >= end.at - slack) {
+    return { from: end.k, fraction: 1 };
+  }
+  for (let index = 0; index < located.length - 1; index += 1) {
+    const a = located[index];
+    const b = located[index + 1];
+    if (along >= a.at - slack && along < b.at - slack) {
+      const span = Math.max(1, b.at - a.at);
+      return { from: a.k, fraction: Math.min(1, Math.max(0, (along - a.at) / span)) };
+    }
+  }
+  return null;
+}
+
+/** Whether a point `along` the line is on a replacement-bus stretch. */
+export function isOnBus(journey: Journey, along: number): boolean {
+  return journey.bus.some(([from, to]) => along >= from - 30 && along <= to + 30);
 }
 
 export function pointAtAlong(journey: Journey, along: number): JourneyPosition {
@@ -481,6 +563,41 @@ export class JourneyAnimator {
     return pointAtAlong(journey, state.shownAlong ?? target);
   }
 
+  private corrections: Array<{ train: string; meters: number }> = [];
+  private lastCorrection = new Map<string, number>();
+
+  /** A report moved the train far from where it was shown (once per jump, not per frame). */
+  private noteCorrection(train: string, gap: number) {
+    const now = Date.now();
+    if (now - (this.lastCorrection.get(train) ?? 0) < 20_000) {
+      return;
+    }
+    this.lastCorrection.set(train, now);
+    this.corrections.push({ train, meters: gap });
+  }
+
+  /** Corrections since the last call: positive metres = the train jumped ahead, negative = back. */
+  takeCorrections(): Array<{ train: string; meters: number }> {
+    if (this.corrections.length === 0) {
+      return this.corrections;
+    }
+    const out = this.corrections;
+    this.corrections = [];
+    return out;
+  }
+
+  /** Where the drawn train will be in `seconds`, without advancing the animation. */
+  lookahead(train: string, seconds: number, nowMs = Date.now()): JourneyPosition | null {
+    const journey = this.journeys.get(train);
+    const state = this.states.get(train);
+    const target = this.target(train, nowMs);
+    if (!journey || !state || target == null) {
+      return null;
+    }
+    const ahead = this.target(train, nowMs + seconds * 1000) ?? target;
+    return pointAtAlong(journey, (state.shownAlong ?? target) + Math.max(0, ahead - target));
+  }
+
   /** Position on the rails for this frame, or null when the reported point should be shown instead. */
   position(train: string, nowMs = Date.now()): JourneyPosition | null {
     const journey = this.journeys.get(train);
@@ -497,8 +614,10 @@ export class JourneyAnimator {
       // The train was shown further on than ZSR says it can be: slide it back
       // instead of teleporting it.
       shown += gap * Math.min(1, dt / EASE_BACK_SECONDS);
+      this.noteCorrection(train, gap);
     } else if (gap > SNAP_METERS) {
       shown = target;
+      this.noteCorrection(train, gap);
     } else if (gap > 0) {
       shown += gap * Math.min(1, dt / EASE_SECONDS);
     }

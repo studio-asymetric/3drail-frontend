@@ -172,22 +172,60 @@ const SLOVAKIA_NETWORK_BOUNDS = {
   maxLng: 22.5657103,
 };
 let networkPackBuild = null;
+let networkPackBrotli = null;
 
 function acceptsGzip(res) {
   const accept = res.req?.headers?.['accept-encoding'] ?? '';
   return String(accept).includes('gzip');
 }
 
-function sendCompressed(res, statusCode, buffer, contentType, extraHeaders = {}) {
+function acceptsBrotli(res) {
+  const accept = String(res.req?.headers?.['accept-encoding'] ?? '');
+  return accept.split(',').some((part) => part.trim().split(';')[0] === 'br');
+}
+
+// Compressed copies of payloads that change rarely (journeys, stations), so a
+// burst of clients costs one compression, not one each.
+const compressedCache = new Map();
+const COMPRESSED_CACHE_LIMIT = 12;
+
+function brotli(payload, quality) {
+  return zlib.brotliCompressSync(payload, {
+    params: {
+      [zlib.constants.BROTLI_PARAM_QUALITY]: quality,
+      [zlib.constants.BROTLI_PARAM_SIZE_HINT]: payload.length,
+    },
+  });
+}
+
+/** Brotli when the client takes it (about a third smaller than gzip on our JSON), else gzip. */
+function sendCompressed(res, statusCode, buffer, contentType, extraHeaders = {}, cacheKey = '') {
   const payload = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-  const canGzip = acceptsGzip(res) && payload.length > 256;
-  const compressed = canGzip ? zlib.gzipSync(payload, { level: 6 }) : payload;
-  const useGzip = canGzip && compressed.length < payload.length;
-  const body = useGzip ? compressed : payload;
+  const encoding = payload.length > 256 ? (acceptsBrotli(res) ? 'br' : acceptsGzip(res) ? 'gzip' : null) : null;
+  let body = payload;
+  let used = null;
+  if (encoding) {
+    const key = cacheKey ? `${encoding}:${cacheKey}` : '';
+    let compressed = key ? compressedCache.get(key) : undefined;
+    if (!compressed) {
+      compressed = encoding === 'br' ? brotli(payload, key ? 9 : 5) : zlib.gzipSync(payload, { level: 6 });
+      if (key) {
+        if (compressedCache.size >= COMPRESSED_CACHE_LIMIT) {
+          compressedCache.delete(compressedCache.keys().next().value);
+        }
+        compressedCache.set(key, compressed);
+      }
+    }
+    if (compressed.length < payload.length) {
+      body = compressed;
+      used = encoding;
+    }
+  }
   res.writeHead(statusCode, {
     'Content-Type': contentType,
     'Access-Control-Allow-Origin': '*',
-    ...(useGzip ? { 'Content-Encoding': 'gzip', Vary: 'Accept-Encoding' } : {}),
+    ...(used ? { 'Content-Encoding': used } : {}),
+    Vary: 'Accept-Encoding',
     ...extraHeaders,
   });
   res.end(body);
@@ -413,10 +451,17 @@ function handleJourneys(req, res) {
     res.end();
     return;
   }
-  sendCompressed(res, 200, body, 'application/json; charset=utf-8', {
-    'Cache-Control': 'no-cache',
-    ETag: etag,
-  });
+  sendCompressed(
+    res,
+    200,
+    body,
+    'application/json; charset=utf-8',
+    {
+      'Cache-Control': 'no-cache',
+      ETag: etag,
+    },
+    `journeys${etag}`
+  );
 }
 
 function warmupRouteGraph() {
@@ -632,9 +677,14 @@ function handleStations(res) {
     if (!stationsBody) {
       stationsBody = buildStationsBody();
     }
-    sendCompressed(res, 200, stationsBody, 'application/json; charset=utf-8', {
-      'Cache-Control': 'public, max-age=3600',
-    });
+    sendCompressed(
+      res,
+      200,
+      stationsBody,
+      'application/json; charset=utf-8',
+      { 'Cache-Control': 'public, max-age=3600' },
+      'stations'
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logMessage(`Stations failed: ${message}`);
@@ -1009,20 +1059,33 @@ async function handleOsm(reqUrl, res) {
       const packPath = await ensureNetworkPack();
       const stored = fs.readFileSync(packPath);
       const storedIsGzip = stored[0] === 0x1f && stored[1] === 0x8b;
-      // The pack is kept gzipped on disk; send those bytes as they are (about half
-      // the size of the raw pack) and only unzip for a client that cannot take gzip.
-      const sendGzip = storedIsGzip && acceptsGzip(res);
-      const body = storedIsGzip && !sendGzip ? zlib.gunzipSync(stored) : stored;
+      // Kept gzipped on disk. Brotli clients get a brotli copy (about 10% smaller,
+      // made once per pack file), gzip clients the stored bytes as they are.
+      let body = stored;
+      let encoding = null;
+      if (acceptsBrotli(res)) {
+        const stamp = `${packPath}:${fs.statSync(packPath).mtimeMs}`;
+        if (networkPackBrotli?.stamp !== stamp) {
+          const raw = storedIsGzip ? zlib.gunzipSync(stored) : stored;
+          networkPackBrotli = { stamp, buffer: brotli(raw, 10) };
+        }
+        body = networkPackBrotli.buffer;
+        encoding = 'br';
+      } else if (storedIsGzip && acceptsGzip(res)) {
+        encoding = 'gzip';
+      } else if (storedIsGzip) {
+        body = zlib.gunzipSync(stored);
+      }
       res.writeHead(200, {
         'Content-Type': 'application/octet-stream',
         'Content-Length': String(body.length),
         'Access-Control-Allow-Origin': '*',
         'Cache-Control': 'public, max-age=86400',
         Vary: 'Accept-Encoding',
-        ...(sendGzip ? { 'Content-Encoding': 'gzip' } : {}),
+        ...(encoding ? { 'Content-Encoding': encoding } : {}),
       });
       res.end(body);
-      logMessage(`Serving packed simplified network ${body.length} bytes${sendGzip ? " (gzip)" : ""}`);
+      logMessage(`Serving packed simplified network ${body.length} bytes${encoding ? ` (${encoding})` : ''}`);
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

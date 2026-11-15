@@ -19,6 +19,9 @@ import { classifyStops } from './trainDetail.mjs';
 /** Stop kind codes sent to browsers: 0 runs through, 1 passenger stop, 2 operational wait (crossing). */
 const KIND_CODE = { pass: 0, stop: 1, wait: 2 };
 
+/** Bumped when the stored timetable rows gain fields (the bus flag), so old ones are fetched again. */
+const TIMETABLE_PARSE_VERSION = 2;
+
 const LAT_METERS = 110_574;
 const LNG_METERS_AT_EQUATOR = 111_320;
 const STOP_LOCATE_METERS = 1200;
@@ -29,6 +32,8 @@ const SAVE_DELAY_MS = 5000;
 const TIME_ZONE = 'Europe/Bratislava';
 
 export const JOURNEY_FORMAT_VERSION = 1;
+/** Shape of the payload sent to browsers (the stored file keeps its own version). */
+export const JOURNEY_PAYLOAD_VERSION = 2;
 
 function distanceMeters(latA, lngA, latB, lngB) {
   const dy = (latB - latA) * LAT_METERS;
@@ -365,7 +370,13 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail, c
             if (stops.length !== current.points.length) {
               log(`Timetable ${train}: ${stops.length} stops vs ${current.points.length} route points`);
             }
-            timetables.set(train, { train, sig: current.sig, stops, fetchedAt: Date.now() });
+            timetables.set(train, {
+              train,
+              sig: current.sig,
+              stops,
+              fetchedAt: Date.now(),
+              parse: TIMETABLE_PARSE_VERSION,
+            });
             payloadCache = null;
             save();
           }
@@ -379,7 +390,12 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail, c
 
   const needsTimetable = (train, sig) => {
     const entry = timetables.get(train);
-    return !entry || entry.sig !== sig || Date.now() - entry.fetchedAt > TIMETABLE_MAX_AGE_MS;
+    return (
+      !entry ||
+      entry.sig !== sig ||
+      entry.parse !== TIMETABLE_PARSE_VERSION ||
+      Date.now() - entry.fetchedAt > TIMETABLE_MAX_AGE_MS
+    );
   };
 
   return {
@@ -462,6 +478,8 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail, c
         return payloadCache.body;
       }
       const journeys = [];
+      // Trains on the same route share one line and one `at` list.
+      const routesOut = {};
       live.forEach((entry, train) => {
         if (!current.has(train)) {
           return; // finished or not running right now
@@ -473,13 +491,33 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail, c
         const timetable = timetables.get(train);
         const usable = timetable && timetable.sig === entry.sig;
         let stops = [];
+        let t0 = 0;
+        const bus = [];
         if (usable) {
+          // Stretches run by replacement bus: metres along the line from the first to the last bus stop of each run.
+          let runStart = null;
+          let runEnd = null;
+          timetable.stops.forEach((stop, index) => {
+            if (stop.bus) {
+              const along = route.located[index];
+              if (along != null) {
+                runStart ??= along;
+                runEnd = along;
+              }
+            } else if (runStart != null) {
+              bus.push([Math.round(runStart), Math.round(runEnd)]);
+              runStart = null;
+            }
+          });
+          if (runStart != null) {
+            bus.push([Math.round(runStart), Math.round(runEnd)]);
+          }
           const epochs = scheduleEpochs(timetable.stops, entry.anchorIndex, entry.anchorText, nowMs);
           // Timetables saved before stops were classified get a name/time-based pass.
           const kinds = timetable.stops.every((stop) => stop.kind)
             ? timetable.stops
             : classify(train, timetable.stops);
-          stops = timetable.stops
+          const timed = timetable.stops
             .map((stop, index) => [
               route.located[index],
               epochs[index].arr,
@@ -488,23 +526,42 @@ export function createJourneyStore({ file, log = () => undefined, fetchDetail, c
               KIND_CODE[kinds[index].kind] ?? 1,
             ])
             .filter(([along, arr, dep]) => along != null && (arr != null || dep != null));
+          // Times as seconds after the first one: five digits instead of ten.
+          t0 = timed.reduce((min, [, arr, dep]) => Math.min(min, arr ?? Infinity, dep ?? Infinity), Infinity);
+          if (!Number.isFinite(t0)) {
+            t0 = 0;
+          }
+          stops = timed.map(([along, arr, dep, index, kind]) => [
+            along,
+            arr == null ? null : arr - t0,
+            dep == null ? null : dep - t0,
+            index,
+            kind,
+          ]);
+        }
+        if (!routesOut[entry.sig]) {
+          routesOut[entry.sig] = {
+            line: route.encoded,
+            // Metres along the line for every listed point (null when off it); the
+            // train's reported checkpoint (OrderCurrentStation) indexes this list.
+            at: route.located,
+            ok: route.hops.every((hop) => hop === 1),
+          };
         }
         journeys.push({
           n: train,
           sig: entry.sig,
-          line: route.encoded,
-          // [metres along line, scheduled arrival (epoch s), scheduled departure, stop index, kind code]
+          t0,
+          ...(bus.length > 0 ? { bus } : {}),
+          // [metres along line, scheduled arrival (s after t0), scheduled departure, stop index, kind code]
           stops,
-          // Metres along the line for every listed point (null when off it); the
-          // train's reported checkpoint (OrderCurrentStation) indexes this list.
-          at: route.located,
-          ok: route.hops.every((hop) => hop === 1),
         });
       });
       journeys.sort((left, right) => (left.n < right.n ? -1 : left.n > right.n ? 1 : 0));
       const list = JSON.stringify(journeys);
-      const etag = `"${crypto.createHash('sha1').update(list).digest('hex').slice(0, 20)}"`;
-      const body = `{"v":${JOURNEY_FORMAT_VERSION},"journeys":${list}}`;
+      const routeList = JSON.stringify(routesOut);
+      const etag = `"${crypto.createHash('sha1').update(routeList).update(list).digest('hex').slice(0, 20)}"`;
+      const body = `{"v":${JOURNEY_PAYLOAD_VERSION},"routes":${routeList},"journeys":${list}}`;
       payloadCache = { at: nowMs, body, etag };
       return body;
     },

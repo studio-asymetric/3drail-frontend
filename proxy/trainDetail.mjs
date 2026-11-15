@@ -51,6 +51,8 @@ export function parseTrainDetail(html) {
       scheduledArrival: titled(chunk, 'arrivalGvd'),
       scheduledDeparture: titled(chunk, 'departGvd'),
       state,
+      // mapa.zsr.sk marks stops served by replacement buses (náhradná autobusová doprava).
+      ...(/lang-title-key="nadKey"|timeline__marker__nad/.test(chunk) ? { bus: true } : {}),
     });
   }
 
@@ -101,6 +103,10 @@ export function classifyStops(stops, gtfsStops = null) {
       return { ...stop, kind: 'pass' };
     }
     const dwells = hasTime(arr) && hasTime(dep) && arr !== dep;
+    // A replacement bus calls at every stop it lists, whatever the train timetable says.
+    if (stop.bus) {
+      return { ...stop, kind: 'stop' };
+    }
     if (isNonStopName(stop.name)) {
       return { ...stop, kind: dwells ? 'wait' : 'pass' };
     }

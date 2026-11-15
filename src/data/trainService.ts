@@ -61,6 +61,15 @@ export interface JourneyStop {
   state: 'passed' | 'current' | 'ahead';
   /** From the proxy: 'stop' serves passengers; 'pass' and 'wait' (crossings) do not. */
   kind?: 'stop' | 'pass' | 'wait';
+  /** Position in the full list the proxy sent (before untimed rows were dropped). */
+  index?: number;
+  /** Served by a replacement bus (náhradná autobusová doprava). */
+  bus?: boolean;
+}
+
+/** Remember each row's place in the full list: the timetable model is indexed by it. */
+export function indexJourneyRows(stops: JourneyStop[]): JourneyStop[] {
+  return stops.map((stop, index) => ({ ...stop, index }));
 }
 
 /** Whether passengers can board here; rows from an older proxy count as stops. */
@@ -370,7 +379,21 @@ export interface LiveFetchOptions {
   refresh?: boolean;
 }
 
-export async function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainRosterItem[]> {
+const pendingTrainFetches = new Map<string, Promise<TrainRosterItem[]>>();
+
+/** Overlapping callers (startup effects, retries) share one request instead of each downloading the feed. */
+export function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainRosterItem[]> {
+  const key = `${options?.useProxy ? 'proxy' : 'live'}|${options?.proxyUrl ?? ''}|${options?.refresh ? 'r' : ''}`;
+  const pending = pendingTrainFetches.get(key);
+  if (pending) {
+    return pending;
+  }
+  const request = fetchAllTrainsOnce(options).finally(() => pendingTrainFetches.delete(key));
+  pendingTrainFetches.set(key, request);
+  return request;
+}
+
+async function fetchAllTrainsOnce(options?: LiveFetchOptions): Promise<TrainRosterItem[]> {
   // Fetch from live mapa.zsr.sk using the same method as the website
   // POST to /api/action with action: "gtall" (GetAll)
   const isProxy = Boolean(options?.useProxy);
