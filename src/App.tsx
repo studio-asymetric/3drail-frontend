@@ -1761,6 +1761,12 @@ const App: React.FC = () => {
                     <p className="dock__delay">{displayDelayText}</p>
                     {followButton}
                   </div>
+                  {lastPositionLink && (
+                    <p className="dock__last-position dock__last-position--inline">
+                      <span>{t.lastPosition}</span>
+                      {lastPositionLink}
+                    </p>
+                  )}
                 </div>
               )}
               {isMobile && (
@@ -1899,12 +1905,6 @@ const App: React.FC = () => {
                   <div>
                     <dt>{t.operator}</dt>
                     <dd>{displayTrain.operator}</dd>
-                  </div>
-                )}
-                {displayTrain.currentStation && !isMobile && (
-                  <div>
-                    <dt>{t.lastPosition}</dt>
-                    <dd>{lastPositionLink}</dd>
                   </div>
                 )}
               </dl>

@@ -83,6 +83,22 @@ export function normalizeStationName(name) {
 const hasTime = (value) => /\d{1,2}:\d{2}/.test(String(value ?? ''));
 
 /**
+ * What the train does at each row still ahead of it, read from ZSR: it only gives times
+ * for the stops it will call at. Returns [normalizedName, 'stop' | 'pass'] pairs to remember,
+ * because once the train has passed a row ZSR shows times there either way.
+ */
+export function aheadKinds(rows) {
+  const out = [];
+  rows.forEach((row, index) => {
+    if (row.state !== 'ahead' || index === 0 || index === rows.length - 1 || row.bus || isNonStopName(row.name)) {
+      return;
+    }
+    out.push([normalizeStationName(row.name), hasTime(row.scheduledArrival) || hasTime(row.scheduledDeparture) ? 'stop' : 'pass']);
+  });
+  return out;
+}
+
+/**
  * Whether the train calls at each row ('stop') or only runs through it ('pass').
  *
  * Rows ahead of the train are reliable: mapa.zsr.sk gives times only where it
@@ -91,7 +107,7 @@ const hasTime = (value) => /\d{1,2}:\d{2}/.test(String(value ?? ''));
  * one is known (`gtfsStops`, normalized names), and a scheduled dwell always
  * counts as a stop (crossing waits at a passing loop included).
  */
-export function classifyStops(stops, gtfsStops = null) {
+export function classifyStops(stops, gtfsStops = null, memory = null) {
   const last = stops.length - 1;
   return stops.map((stop, index) => {
     if (index === 0 || index === last) {
@@ -110,8 +126,16 @@ export function classifyStops(stops, gtfsStops = null) {
     if (isNonStopName(stop.name)) {
       return { ...stop, kind: dwells ? 'wait' : 'pass' };
     }
-    if (stop.state !== 'ahead' && !dwells && gtfsStops && gtfsStops.size > 0) {
-      return { ...stop, kind: gtfsStops.has(normalizeStationName(stop.name)) ? 'stop' : 'pass' };
+    if (stop.state !== 'ahead' && !dwells) {
+      // Rows the train has passed carry times for everything it went through. What it did
+      // at each was seen while the row was still ahead (no times = not a stop): trust that.
+      const remembered = memory?.get(normalizeStationName(stop.name));
+      if (remembered) {
+        return { ...stop, kind: remembered };
+      }
+      if (gtfsStops && gtfsStops.size > 0) {
+        return { ...stop, kind: gtfsStops.has(normalizeStationName(stop.name)) ? 'stop' : 'pass' };
+      }
     }
     return { ...stop, kind: 'stop' };
   });

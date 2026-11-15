@@ -53,7 +53,13 @@ import {
 } from '../data/trainOsmMapper';
 import { closeRailGaps } from '../data/railStitch';
 import { decodePolyline, encodePolyline, fetchTrainRoute } from '../data/routeService';
-import { fetchJourneys, isOnBus, JourneyAnimator, timelineProgress } from '../data/journeyService';
+import {
+  estimatedDelaySeconds,
+  fetchJourneys,
+  isOnBus,
+  JourneyAnimator,
+  timelineProgress,
+} from '../data/journeyService';
 import { STATION_FOCUS_ZOOM } from '../data/viewConstants';
 import { TrainCanvasLayer } from './trainCanvas';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
@@ -144,15 +150,23 @@ const SIMPLIFIED_RAIL_FADE: ExpressionSpecification = [
   13.4,
   0,
 ];
+/** The full track network (sidings, yards, tunnels) starts fading in here. */
+const BASEMAP_RAIL_MIN_ZOOM = 7;
 const BASEMAP_RAIL_FADE: ExpressionSpecification = [
   'interpolate',
   ['linear'],
   ['zoom'],
-  12.3,
+  BASEMAP_RAIL_MIN_ZOOM,
   0,
-  13.3,
+  11,
   1,
 ];
+/**
+ * Sidings, yards and tram lines are only in the tiles from zoom 14 (checked: z12/13 tiles hold
+ * the main lines only), so they cannot show earlier; they fade in over the first zoom level.
+ */
+const DETAIL_RAIL_MIN_ZOOM = 13.9;
+const DETAIL_RAIL_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 1];
 
 function zoomInterpolateStops(expr: number | ExpressionSpecification): Array<[number, number]> | null {
   if (typeof expr === 'number') {
@@ -904,8 +918,9 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       casingScale: number,
       color: string,
       opacity: number | ExpressionSpecification,
-      options: { dasharray?: number[] } = {}
+      options: { dasharray?: number[]; minzoom?: number } = {}
     ) => {
+      const minzoom = options.minzoom ?? BASEMAP_RAIL_MIN_ZOOM;
       const { fill: fillWidth, casing: casingWidth } = railLineWidthExprs(fillScale, casingScale);
       const layout = {
         'line-cap': (options.dasharray ? 'butt' : 'round') as 'butt' | 'round',
@@ -921,7 +936,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
         type: 'line',
         source: 'basemap',
         'source-layer': 'transportation',
-        minzoom: 12.3,
+        minzoom,
         filter,
         layout,
         paint: {
@@ -936,7 +951,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
         type: 'line',
         source: 'basemap',
         'source-layer': 'transportation',
-        minzoom: 12.3,
+        minzoom,
         filter,
         layout,
         paint: {
@@ -947,18 +962,24 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
         },
       });
     };
-    addBasemapPair('basemap-rails-side', sideFilter, RAIL_SIDE_FILL, RAIL_SIDE_CASING, sideColor, BASEMAP_RAIL_FADE);
+    addBasemapPair('basemap-rails-side', sideFilter, RAIL_SIDE_FILL, RAIL_SIDE_CASING, sideColor, DETAIL_RAIL_FADE, {
+      minzoom: DETAIL_RAIL_MIN_ZOOM,
+    });
     addBasemapPair(
       'basemap-rails-branch',
       branchFilter,
       RAIL_BRANCH_FILL,
       RAIL_BRANCH_CASING,
       fillColor,
-      productOpacity(BASEMAP_RAIL_FADE, RAIL_BRANCH_OPACITY)
+      productOpacity(DETAIL_RAIL_FADE, RAIL_BRANCH_OPACITY),
+      { minzoom: DETAIL_RAIL_MIN_ZOOM }
     );
-    addBasemapPair('basemap-rails-tram', tramFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, fillColor, BASEMAP_RAIL_FADE);
-    addBasemapPair('basemap-rails-tram-tunnel', tramTunnelFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, fillColor, BASEMAP_RAIL_FADE, {
+    addBasemapPair('basemap-rails-tram', tramFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, fillColor, DETAIL_RAIL_FADE, {
+      minzoom: DETAIL_RAIL_MIN_ZOOM,
+    });
+    addBasemapPair('basemap-rails-tram-tunnel', tramTunnelFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, fillColor, DETAIL_RAIL_FADE, {
       dasharray: [2.4, 2.1],
+      minzoom: DETAIL_RAIL_MIN_ZOOM,
     });
     addBasemapPair('basemap-rails-main', mainFilter, RAIL_MAIN_FILL, RAIL_MAIN_CASING, mainFillColor, BASEMAP_RAIL_FADE);
     addBasemapPair('basemap-rails-tunnel', tunnelFilter, RAIL_MAIN_FILL, RAIL_MAIN_CASING, mainFillColor, BASEMAP_RAIL_FADE, {
@@ -1491,6 +1512,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       maxTileCacheZoomLevels: 8,
     });
     mapRef.current = map;
+    if (import.meta.env.DEV) {
+      (window as unknown as { __railMap?: MapLibreMap }).__railMap = map;
+    }
     lockMapNorthUp(map);
     const hydrateOverlay = () => {
       try {
@@ -2349,6 +2373,19 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   useEffect(() => {
     journeyAnimatorRef.current.update(trains);
   }, [trains, journeysVersion]);
+
+  // The opened train: run it on the delay its side panel shows (ZSR's estimated times).
+  useEffect(() => {
+    const animator = journeyAnimatorRef.current;
+    if (!focusedTrainNumber || journeyStatus !== 'ready' || !journeyStops?.length) {
+      return;
+    }
+    animator.setEstimate(focusedTrainNumber, estimatedDelaySeconds(journeyStops));
+    animator.update(trainsRef.current);
+    return () => {
+      animator.setEstimate(focusedTrainNumber, null);
+    };
+  }, [focusedTrainNumber, journeyStatus, journeyStops]);
 
   useEffect(() => {
     let raf = 0;

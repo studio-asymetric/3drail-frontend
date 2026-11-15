@@ -3088,6 +3088,14 @@ body,
   text-align: left;
 }
 
+/* Desktop: sits right under the delay line, label and station on one row. */
+.dock__last-position--inline {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 /* Replacement bus (náhradná autobusová doprava) */
 .dock__bus-notice {
   display: flex;
@@ -3194,20 +3202,84 @@ body,
   bottom: calc(50% + 3px);
 }
 
-/* Rows sliding under a pinned stop fade out instead of being cut off mid-line. */
 /* The rail runs in the gutter to the left of the row, outside the row's own background, so a
-   pinned row also paints over that gutter (first shadow); otherwise the rail of the rows
-   scrolling underneath shows through beside the pinned stud and the dotted stretch. */
-.dock__pane-viewport[data-more-top] .dock__stops li:first-child {
-  box-shadow:
-    -24px 0 0 0 var(--ui-card),
-    0 7px 7px 0 var(--ui-card),
-    -24px 7px 7px 0 var(--ui-card);
+   pinned row also paints over that gutter; otherwise the rail of the rows scrolling
+   underneath shows through beside the pinned stud and the dotted stretch. */
+.dock__pane-viewport[data-more-top] .dock__stops li:first-child,
+.dock__pane-viewport[data-more-bottom] .dock__stops li:last-child:not(:first-child) {
+  box-shadow: -24px 0 0 0 var(--ui-card);
 }
 
-.dock__pane-viewport[data-more-bottom] .dock__stops li:last-child:not(:first-child) {
-  box-shadow:
-    -24px 0 0 0 var(--ui-card),
-    0 -7px 7px 0 var(--ui-card),
-    -24px -7px 7px 0 var(--ui-card);
+/* Rows sliding under a pinned stop fade out over a few rows' worth of height, eased (slow
+   at both ends) so there is no visible edge where the fade starts or stops. The pane sits
+   10 px below its top (padding) and a pinned row is 40 px high. */
+.dock__pane:has(.dock__pane-viewport[data-more-top])::before,
+.dock__pane:has(.dock__pane-viewport[data-more-bottom])::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 10px;
+  height: 44px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.dock__pane:has(.dock__pane-viewport[data-more-top])::before {
+  top: 50px;
+  background: linear-gradient(
+    to bottom,
+    var(--ui-card) 0%,
+    color-mix(in srgb, var(--ui-card) 94%, transparent) 10%,
+    color-mix(in srgb, var(--ui-card) 82%, transparent) 22%,
+    color-mix(in srgb, var(--ui-card) 64%, transparent) 36%,
+    color-mix(in srgb, var(--ui-card) 44%, transparent) 50%,
+    color-mix(in srgb, var(--ui-card) 26%, transparent) 64%,
+    color-mix(in srgb, var(--ui-card) 12%, transparent) 78%,
+    color-mix(in srgb, var(--ui-card) 4%, transparent) 90%,
+    transparent 100%
+  );
+}
+
+.dock__pane:has(.dock__pane-viewport[data-more-bottom])::after {
+  bottom: 44px;
+  background: linear-gradient(
+    to top,
+    var(--ui-card) 0%,
+    color-mix(in srgb, var(--ui-card) 94%, transparent) 10%,
+    color-mix(in srgb, var(--ui-card) 82%, transparent) 22%,
+    color-mix(in srgb, var(--ui-card) 64%, transparent) 36%,
+    color-mix(in srgb, var(--ui-card) 44%, transparent) 50%,
+    color-mix(in srgb, var(--ui-card) 26%, transparent) 64%,
+    color-mix(in srgb, var(--ui-card) 12%, transparent) 78%,
+    color-mix(in srgb, var(--ui-card) 4%, transparent) 90%,
+    transparent 100%
+  );
+}
+
+/* hover tooltips (src/tooltips.ts) */
+.tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 240px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--ui-card);
+  color: inherit;
+  border: 1px solid var(--ui-border, rgba(255, 255, 255, 0.16));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  font-size: 12px;
+  line-height: 1.3;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.tooltip.is-visible {
+  opacity: 1;
+  transform: none;
+}
+@media (hover: none) {
+  .tooltip {
+    display: none;
+  }
 }

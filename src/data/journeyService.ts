@@ -64,15 +64,63 @@ const SNAP_METERS = 6000;
 const BACKTRACK_METERS = 4000;
 /** Seconds a train shown too far on takes to slide back to where ZSR puts it. */
 const EASE_BACK_SECONDS = 4;
-/** A train ZSR still lists as waiting leaves this long after departure + delay. */
-const UNCONFIRMED_GRACE_SECONDS = 120;
-/** Passenger stops timetabled with no dwell (arr = dep) still stand this long. */
-const MIN_STOP_DWELL_SECONDS = 60;
 /**
- * ZSR times are whole minutes; the event falls somewhere inside that minute.
- * Model it at the middle: a 20:46 departure (with delay) leaves at 20:46:30.
+ * A train ZSR still lists as waiting leaves this long after departure + delay. None: ZSR
+ * often confirms a departure a minute or two late (R 10720 left Leopoldov at 14:18 and was
+ * confirmed after 14:19), and a map that holds the train meanwhile runs behind the real one.
+ * Better to leave on time and be eased back if the train really is still standing.
  */
-const MID_MINUTE_SECONDS = 30;
+const UNCONFIRMED_GRACE_SECONDS = 0;
+/** Margin taken off a delay read from ZSR's estimated station times (minute-rounded). */
+const ESTIMATE_OPTIMISM_SECONDS = 40;
+
+const clockMinutes = (text?: string): number | null => {
+  const match = String(text ?? '').match(/(\d{1,2}):(\d{2})/);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+};
+
+/**
+ * The delay ZSR itself expects at the train's current or next timed station (estimated vs
+ * scheduled departure, as the side panel shows it), in seconds; null when there is none.
+ */
+export function estimatedDelaySeconds(
+  rows: Array<{ state: string; scheduledDeparture: string; departure: string; foreign?: boolean }>
+): number | null {
+  for (const row of rows) {
+    if (row.state === 'passed' || row.foreign) {
+      continue;
+    }
+    const planned = clockMinutes(row.scheduledDeparture);
+    const expected = clockMinutes(row.departure);
+    if (planned == null || expected == null) {
+      continue;
+    }
+    let diff = expected - planned;
+    if (diff < -720) {
+      diff += 1440;
+    }
+    return diff > 0 && diff < 600 ? diff * 60 : 0;
+  }
+  return null;
+}
+/**
+ * A passenger stop with only one time (a departure; arr = dep) is taken to have arrived
+ * this long before it leaves, so the pill stands at the station for that long.
+ */
+const MIN_STOP_DWELL_SECONDS = 50;
+/**
+ * ZSR times are whole minutes. A map that runs behind the real train is a problem for the
+ * user, one that runs a little ahead is not, so every time is placed early in its minute:
+ * an arrival at the start of it, a departure just after (14:05 leaves at 14:05:05).
+ */
+const ARRIVE_AFTER_SECONDS = 0;
+const DEPART_AFTER_SECONDS = 5;
+/**
+ * ZSR's delay is rounded up to whole minutes and was measured at the last station, while
+ * trains tend to win some of it back. The model runs on this much less delay (never below
+ * zero), so it errs towards being early rather than late.
+ */
+const DELAY_OPTIMISM_SECONDS = 60;
 /** Seconds a train takes to reach cruising pace after a stand, and to brake into the next. */
 const ACCEL_SECONDS = 45;
 
@@ -155,17 +203,17 @@ export function buildJourney(raw: RawJourney): Journey | null {
     if (arr == null || dep == null) {
       return;
     }
+    const kind = KIND_BY_CODE[kindCode ?? 1] ?? 'stop';
+    const arrival = arr + ARRIVE_AFTER_SECONDS;
+    // Only a train that calls leaves "after" the minute; one running through is just there.
+    const departure = Math.max(dep, arr) + (kind === 'pass' ? ARRIVE_AFTER_SECONDS : DEPART_AFTER_SECONDS);
     const last = stops[stops.length - 1];
     // Keep times and positions moving forward; drop stops that contradict them.
-    if (last && (along < last.along - 50 || arr < last.dep)) {
+    if (last && (along < last.along - 50 || arrival < last.dep - 10)) {
       return;
     }
-    stops.push({
-      along,
-      arr: arr + MID_MINUTE_SECONDS,
-      dep: Math.max(dep, arr) + MID_MINUTE_SECONDS,
-      kind: KIND_BY_CODE[kindCode ?? 1] ?? 'stop',
-    });
+    const arrives = last ? Math.max(arrival, last.dep) : arrival;
+    stops.push({ along, arr: arrives, dep: Math.max(departure, arrives), kind });
   });
   // A halt reads arr = dep. Give such passenger stops a short stand that ends
   // at the (mid-minute) departure, taken from the run before, so the pill
@@ -433,6 +481,16 @@ export interface LiveTrainInput {
 export class JourneyAnimator {
   private journeys = new Map<string, Journey>();
   private states = new Map<string, TrainModelState>();
+  /** Delay (s) read off ZSR's own estimated times for a train's next station: beats the feed's delay. */
+  private estimates = new Map<string, number>();
+
+  setEstimate(train: string, delaySeconds: number | null) {
+    if (delaySeconds == null) {
+      this.estimates.delete(train);
+    } else {
+      this.estimates.set(train, Math.max(0, delaySeconds));
+    }
+  }
 
   setJourneys(journeys: Map<string, Journey>) {
     this.journeys = journeys;
@@ -488,8 +546,16 @@ export class JourneyAnimator {
       // either: ZSR often confirms late, so the train leaves at departure +
       // delay and the next report pulls it back if it really was still standing.
       const previous = this.states.get(train.trainNumber);
-      const reportedDelay = Math.max(0, (train.latestDelayMinutes ?? train.delayMinutes ?? 0) * 60);
-      let delaySeconds = reportedDelay;
+      const estimate = this.estimates.get(train.trainNumber);
+      const reportedDelay =
+        estimate ?? Math.max(0, (train.latestDelayMinutes ?? train.delayMinutes ?? 0) * 60);
+      // What the model runs on: the reported delay less a little (see DELAY_OPTIMISM_SECONDS).
+      // ZSR's own estimated time is minute-rounded and current, so it only needs a small margin.
+      const modelDelay = Math.max(
+        0,
+        reportedDelay - (estimate != null ? ESTIMATE_OPTIMISM_SECONDS : DELAY_OPTIMISM_SECONDS)
+      );
+      let delaySeconds = modelDelay;
       const sameReport =
         previous?.active &&
         previous.sig === journey.sig &&
@@ -504,11 +570,11 @@ export class JourneyAnimator {
         // up time. Lower the delay so it runs on from the reported point now
         // instead of waiting there for the timetable to catch up.
         const nowSeconds = Date.now() / 1000;
-        const scheduled = alongAtTime(journey, nowSeconds - reportedDelay);
+        const scheduled = alongAtTime(journey, nowSeconds - modelDelay);
         if (scheduled != null && scheduled < floor - 50) {
-          const passedAt = timeAtAlong(journey, floor, nowSeconds - reportedDelay);
+          const passedAt = timeAtAlong(journey, floor, nowSeconds - modelDelay);
           if (passedAt != null) {
-            delaySeconds = Math.max(0, Math.min(reportedDelay, nowSeconds - passedAt));
+            delaySeconds = Math.max(0, Math.min(modelDelay, nowSeconds - passedAt));
           }
         }
       }

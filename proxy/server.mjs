@@ -3,7 +3,7 @@ import path from 'node:path';
 import http from 'node:http';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { classifyStops, isNonStopName, normalizeStationName, parseTrainDetail } from './trainDetail.mjs';
+import { aheadKinds, classifyStops, isNonStopName, normalizeStationName, parseTrainDetail } from './trainDetail.mjs';
 import { withForeignStops } from './foreignStops.mjs';
 import { simplifyOsmPayload } from './simplifyRail.mjs';
 import {
@@ -390,7 +390,7 @@ const journeyStore = createJourneyStore({
   file: path.join(path.dirname(config.cacheFile), 'journeys.json'),
   log: logMessage,
   fetchDetail: async (train) => (await fetchTrainDetailStops(train)).stops,
-  classify: (train, stops) => classifyStops(stops, gtfsCallsFor(train)),
+  classify: (train, stops) => classifyStops(stops, gtfsCallsFor(train), stopKindsFor(train)),
 });
 journeyStore.load();
 
@@ -607,6 +607,68 @@ function gtfsCallsFor(train) {
     }
   }
   return gtfsCalls.get(String(train)) ?? null;
+}
+
+// What each train does at each station, learned while the stations were still ahead of it
+// (ZSR only times the stops then). Kept on disk and per train number: timetables repeat daily.
+const STOP_MEMORY_FILE = path.join(path.dirname(config.cacheFile), 'stop-memory.json');
+const STOP_MEMORY_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+/** trainNumber -> { at, kinds: { normalizedName: 'stop' | 'pass' } } */
+const stopMemory = new Map();
+let stopMemoryTimer = null;
+
+try {
+  const saved = JSON.parse(fs.readFileSync(STOP_MEMORY_FILE, 'utf8'));
+  Object.entries(saved ?? {}).forEach(([train, entry]) => {
+    if (entry && Date.now() - entry.at < STOP_MEMORY_TTL_MS) {
+      stopMemory.set(train, entry);
+    }
+  });
+} catch {
+  // first start
+}
+
+function rememberStopKinds(train, rows) {
+  const learned = aheadKinds(rows);
+  if (learned.length === 0) {
+    return;
+  }
+  const entry = stopMemory.get(train) ?? { at: 0, kinds: {} };
+  let changed = false;
+  learned.forEach(([name, kind]) => {
+    if (entry.kinds[name] !== kind) {
+      entry.kinds[name] = kind;
+      changed = true;
+    }
+  });
+  if (!changed) {
+    return;
+  }
+  entry.at = Date.now();
+  stopMemory.set(train, entry);
+  if (!stopMemoryTimer) {
+    stopMemoryTimer = setTimeout(() => {
+      stopMemoryTimer = null;
+      try {
+        fs.writeFileSync(STOP_MEMORY_FILE, JSON.stringify(Object.fromEntries(stopMemory)));
+      } catch (error) {
+        logMessage(`Stop memory save failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }, 5000);
+  }
+}
+
+function stopKindsFor(train) {
+  const number = Number(train);
+  // The train going the other way usually has the neighbouring number (10719 / 10720) and
+  // calls at the same stations: its memory fills in what this train has not shown yet.
+  const partner = Number.isInteger(number) ? String(number % 2 === 0 ? number - 1 : number + 1) : null;
+  const own = stopMemory.get(String(train));
+  const other = partner ? stopMemory.get(partner) : null;
+  if (!own && !other) {
+    return null;
+  }
+  return new Map([...Object.entries(other?.kinds ?? {}), ...Object.entries(own?.kinds ?? {})]);
 }
 
 /** The ZSR rows plus the stops abroad (Budapest, Brno, ...) that only the GTFS timetable knows. */
@@ -1440,7 +1502,9 @@ async function fetchTrainDetailStops(train) {
     error.status = response.status;
     throw error;
   }
-  const stops = classifyStops(parseTrainDetail(html), gtfsCallsFor(train));
+  const parsed = parseTrainDetail(html);
+  rememberStopKinds(String(train), parsed);
+  const stops = classifyStops(parsed, gtfsCallsFor(train), stopKindsFor(train));
   detailCache.set(train, { at: Date.now(), stops });
   logMessage(`Fetched train detail ${train}, ${stops.length} stops`);
   return { stops, status: 'fetched' };

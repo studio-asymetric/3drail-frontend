@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 // @ts-expect-error plain ESM module from the proxy, no type declarations
-import { classifyStops, isNonStopName, normalizeStationName, parseTrainDetail } from '../../proxy/trainDetail.mjs';
+import { aheadKinds, classifyStops, isNonStopName, normalizeStationName, parseTrainDetail } from '../../proxy/trainDetail.mjs';
 // @ts-expect-error plain ESM module from the proxy, no type declarations
 import { withForeignStops } from '../../proxy/foreignStops.mjs';
 import { indexJourneyRows } from '../data/trainService';
@@ -96,18 +96,19 @@ describe('buildJourney stop dwell', () => {
         [9000, t0 + 540, null, 3, 1],
       ],
     })!;
-    // Times sit mid-minute: the 0-minute halt stands one minute, ending at :30.
-    expect(journey.stops[0].dep).toBe(t0 + 30);
-    expect(journey.stops[1].arr).toBe(t0 + 150);
-    expect(journey.stops[1].dep).toBe(t0 + 210);
+    // A departure leaves 5 s into its minute, an arrival at the start of it; a halt with
+    // only a departure time arrived 50 s before it.
+    expect(journey.stops[0].dep).toBe(t0 + 5);
+    expect(journey.stops[1].arr).toBe(t0 + 135);
+    expect(journey.stops[1].dep).toBe(t0 + 185);
     expect(journey.stops[2].dep - journey.stops[2].arr).toBe(0);
-    expect(alongAtTime(journey, t0 + 155)).toBe(3000);
-    expect(alongAtTime(journey, t0 + 209)).toBe(3000);
-    expect(alongAtTime(journey, t0 + 212)).toBeGreaterThan(3000);
+    expect(alongAtTime(journey, t0 + 140)).toBe(3000);
+    expect(alongAtTime(journey, t0 + 184)).toBe(3000);
+    expect(alongAtTime(journey, t0 + 190)).toBeGreaterThan(3000);
     // The passing point is one run with the halt-to-terminus leg: no stand there.
     expect(journey.runs).toEqual([
-      [t0 + 30, t0 + 150],
-      [t0 + 210, t0 + 570],
+      [t0 + 5, t0 + 135],
+      [t0 + 185, t0 + 540],
     ]);
   });
 
@@ -122,18 +123,18 @@ describe('buildJourney stop dwell', () => {
         [6000, t0 + 600, null, 1, 1],
       ],
     })!;
-    const start = t0 + 30;
+    const start = t0 + 5;
     const at = (s: number) => alongAtTime(journey, start + s)!;
-    // Leaves on the half minute, arrives on time.
+    // Leaves 5 s into its minute, arrives at the start of its own (595 s later).
     expect(at(0)).toBe(0);
-    expect(at(600)).toBe(6000);
+    expect(at(595)).toBe(6000);
     // First 10 s cover far less than a steady pace would (100 m).
     expect(at(10)).toBeLessThan(15);
     // Speed builds up: each 10 s covers more than the last, until cruising.
     expect(at(20) - at(10)).toBeGreaterThan(at(10) - at(0));
     expect(at(40) - at(30)).toBeGreaterThan(at(20) - at(10));
     // Symmetric braking.
-    expect(6000 - at(590)).toBeCloseTo(at(10), 5);
+    expect(6000 - at(585)).toBeCloseTo(at(10), 5);
   });
 });
 
@@ -160,19 +161,18 @@ describe('JourneyAnimator glitches', () => {
     animator.update([{ trainNumber: '7', delayMinutes, rosterOrderCurrentStation: 0, departureConfirmed }]);
     return animator;
   };
-  // Timetable times sit mid-minute, so the departure is t0 + 30 s.
-  const departure = (t0 + 30) * 1000;
+  // The first departure is 5 s into its minute.
+  const departure = (t0 + 5) * 1000;
 
   afterEach(() => vi.useRealTimers());
 
-  it('holds a train ZSR still lists as waiting for a short grace after departure + delay', () => {
+  it('does not hold a train ZSR still lists as waiting: it leaves on time like any other', () => {
     vi.useFakeTimers();
     vi.setSystemTime(departure);
     const waiting = make(false);
     const left = make(true);
-    expect(waiting.target('7', departure + 60_000)).toBe(0);
-    expect(left.target('7', departure + 60_000)).toBeGreaterThan(500);
-    expect(waiting.target('7', departure + 150_000)).toBeGreaterThan(50);
+    expect(waiting.target('7', departure + 60_000)).toBeGreaterThan(100);
+    expect(waiting.target('7', departure + 60_000)).toBe(left.target('7', departure + 60_000));
   });
 
   it('slides a train back instead of teleporting it when its delay grows', () => {
@@ -272,5 +272,47 @@ describe('stops abroad', () => {
       { name: 'Břeclav', foreign: true },
     ] as never);
     expect(rows.map((row) => row.index)).toEqual([undefined, 0, 1, undefined]);
+  });
+});
+
+describe('remembering what a train does at each station', () => {
+  const row = (name: string, arr: string, dep: string, state: Row['state']) => ({
+    name,
+    scheduledArrival: arr,
+    scheduledDeparture: dep,
+    state,
+  });
+
+  it('reads it from the rows still ahead: only stops carry times there', () => {
+    const learned = aheadKinds([
+      row('Rača', '12:55', '12:55', 'passed'),
+      row('Svätý Jur', '', '', 'ahead'),
+      row('Pezinok', '13:04', '13:05', 'ahead'),
+      row('Bratislava', '15:15', '', 'ahead'),
+    ]);
+    expect(learned).toEqual([
+      ['svaty jur', 'pass'],
+      ['pezinok', 'stop'],
+    ]);
+  });
+
+  it('keeps a passed row a pass once the train has gone through it, though ZSR now times it', () => {
+    const memory = new Map([
+      ['svaty jur', 'pass'],
+      ['pezinok', 'stop'],
+    ]);
+    const rows = [
+      row('Rača', '12:55', '12:55', 'passed'),
+      row('Svätý Jur', '12:59', '12:59', 'passed'),
+      row('Pezinok', '13:04', '13:04', 'passed'),
+      row('Šenkvice', '13:11', '13:11', 'passed'),
+      row('Bratislava', '15:15', '', 'ahead'),
+    ];
+    const kinds = classifyStops(rows, null, memory).map((stop: { kind: string }) => stop.kind);
+    // Šenkvice was never seen ahead, so it stays a stop; the rest follow the memory.
+    expect(kinds).toEqual(['stop', 'pass', 'stop', 'stop', 'stop']);
+    // Without a memory every passed row with a time would show up as a stop.
+    const without = classifyStops(rows, null, null).map((stop: { kind: string }) => stop.kind);
+    expect(without[1]).toBe('stop');
   });
 });
