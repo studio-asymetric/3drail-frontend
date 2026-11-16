@@ -73,6 +73,21 @@ const EASE_BACK_SECONDS = 4;
 const UNCONFIRMED_GRACE_SECONDS = 0;
 /** Margin taken off a delay read from ZSR's estimated station times (minute-rounded). */
 const ESTIMATE_OPTIMISM_SECONDS = 40;
+/**
+ * A train standing at a station (departure not confirmed) leaves no sooner than its real
+ * arrival (timetable arrival + the reported delay) plus this short stay. ZSR sometimes keeps
+ * an on-time departure estimate for a train that arrived late; the arrival tells better.
+ */
+const MIN_STAY_AFTER_ARRIVAL_SECONDS = 20;
+/** Bratislava hlavná stanica: long platforms and a bigger crowd, so a longer stay. */
+const MAIN_STATION_STAY_SECONDS = 60;
+
+const isBratislavaMain = (name?: string) =>
+  String(name ?? '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .includes('bratislava hlavna');
 
 const clockMinutes = (text?: string): number | null => {
   const match = String(text ?? '').match(/(\d{1,2}):(\d{2})/);
@@ -472,6 +487,8 @@ export interface LiveTrainInput {
   departureConfirmed?: boolean;
   /** Delay from ZSR's newer report at a later station; preferred over `delayMinutes`. */
   latestDelayMinutes?: number;
+  /** Name of the station ZSR last reported the train at. */
+  currentStation?: string;
 }
 
 /**
@@ -551,10 +568,25 @@ export class JourneyAnimator {
         estimate ?? Math.max(0, (train.latestDelayMinutes ?? train.delayMinutes ?? 0) * 60);
       // What the model runs on: the reported delay less a little (see DELAY_OPTIMISM_SECONDS).
       // ZSR's own estimated time is minute-rounded and current, so it only needs a small margin.
-      const modelDelay = Math.max(
+      let modelDelay = Math.max(
         0,
         reportedDelay - (estimate != null ? ESTIMATE_OPTIMISM_SECONDS : DELAY_OPTIMISM_SECONDS)
       );
+      // Standing at a station it arrived at late: count from the arrival, whatever the departure
+      // estimate says (see MIN_STAY_AFTER_ARRIVAL_SECONDS).
+      if (train.departureConfirmed === false) {
+        const feedDelay = Math.max(0, (train.latestDelayMinutes ?? train.delayMinutes ?? 0) * 60);
+        const index = journey.stops.findIndex(
+          (stop, at) => at > 0 && stop.kind !== 'pass' && Math.abs(stop.along - floor) < 150
+        );
+        if (index > 0 && feedDelay > 0) {
+          const stop = journey.stops[index];
+          const stay = isBratislavaMain(train.currentStation)
+            ? MAIN_STATION_STAY_SECONDS
+            : MIN_STAY_AFTER_ARRIVAL_SECONDS;
+          modelDelay = Math.max(modelDelay, feedDelay + stay - (stop.dep - stop.arr));
+        }
+      }
       let delaySeconds = modelDelay;
       const sameReport =
         previous?.active &&

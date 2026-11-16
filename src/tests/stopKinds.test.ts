@@ -193,6 +193,51 @@ describe('JourneyAnimator glitches', () => {
   });
 });
 
+describe('a train that arrived late and still stands at its station', () => {
+  const t0 = 1_800_000_000;
+  const raw = {
+    n: '7',
+    sig: 'late',
+    line: encodePolyline([
+      { lat: 48.0, lng: 17.0 },
+      { lat: 48.5, lng: 17.0 },
+    ]),
+    ok: true,
+    at: [0, 20000, 50000] as Array<number | null>,
+    stops: [
+      [0, null, t0 - 600, 0, 1],
+      [20000, t0 + 600, t0 + 720, 1, 1],
+      [50000, t0 + 3600, null, 2, 1],
+    ] as Array<[number, number | null, number | null, number, number?]>,
+  };
+  // Timetable arrival t0+600, departure t0+725 (5 s into its minute); 2 minutes late on arrival.
+  const standing = (currentStation?: string) => {
+    const animator = new JourneyAnimator();
+    animator.setJourneys(new Map([['7', buildJourney(raw)!]]));
+    // ZSR's own estimate still says "on time" for the departure.
+    animator.setEstimate('7', 0);
+    animator.update([
+      { trainNumber: '7', delayMinutes: 2, rosterOrderCurrentStation: 1, departureConfirmed: false, currentStation },
+    ]);
+    return animator;
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  it('stays until its real arrival plus a short stay, not the stale on-time estimate', () => {
+    const animator = standing('Leopoldov');
+    // Real arrival t0+720, +20 s stay: still standing at t0+735, away by t0+765.
+    expect(animator.target('7', (t0 + 735) * 1000)).toBe(20000);
+    expect(animator.target('7', (t0 + 765) * 1000)!).toBeGreaterThan(20000);
+  });
+
+  it('stands a full minute at Bratislava hlavná stanica', () => {
+    const animator = standing('Bratislava hlavná stanica');
+    expect(animator.target('7', (t0 + 765) * 1000)).toBe(20000);
+    expect(animator.target('7', (t0 + 810) * 1000)!).toBeGreaterThan(20000);
+  });
+});
+
 describe('replacement bus rows', () => {
   const rowHtml = (name: string, bus: boolean, arr: string, dep: string) => `
     <div class="row row__after afterNext" style="display:flex">

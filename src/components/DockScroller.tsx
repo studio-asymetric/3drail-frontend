@@ -100,12 +100,22 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
       const dot = content.querySelector<HTMLElement>('.dock__stop-train');
       if (dot) {
         const rect = dot.getBoundingClientRect();
+        // The dot is a child of the row it is heading for. When that is a pinned (sticky) row,
+        // the row sits away from its natural place and drags the dot along: judge the dot by
+        // where the rail really is, i.e. where the row would be without the pinning.
+        const home = dot.closest('li');
+        let shift = 0;
+        if (home === rows[rows.length - 1] && moreBottom) {
+          shift = rows[rows.length - 2].getBoundingClientRect().bottom - home.getBoundingClientRect().top;
+        }
+        const dotTop = rect.top + shift;
+        const dotBottom = rect.bottom + shift;
         let edge = 1;
         if (moreTop) {
-          edge = Math.min(edge, (rect.top - pinBottom + DOT_LEAD_PX) / EDGE_FADE_PX);
+          edge = Math.min(edge, (dotTop - pinBottom + DOT_LEAD_PX) / EDGE_FADE_PX);
         }
         if (moreBottom) {
-          edge = Math.min(edge, (pinTop - rect.bottom + DOT_LEAD_PX) / EDGE_FADE_PX);
+          edge = Math.min(edge, (pinTop - dotBottom + DOT_LEAD_PX) / EDGE_FADE_PX);
         }
         dot.style.setProperty('--edge', Math.max(0, Math.min(1, edge)).toFixed(2));
       }
