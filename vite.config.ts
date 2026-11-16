@@ -3,6 +3,17 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        // Libraries in their own files: cached across deploys and downloaded in parallel.
+        manualChunks: {
+          maplibre: ['maplibre-gl'],
+          react: ['react', 'react-dom'],
+        },
+      },
+    },
+  },
   server: {
     // The proxy rewrites these every few seconds; watching them keeps Vite busy.
     watch: {

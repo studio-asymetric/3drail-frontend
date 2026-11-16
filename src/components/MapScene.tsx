@@ -9,7 +9,8 @@ import {
   type MapLayerMouseEvent,
   type StyleSpecification,
 } from 'maplibre-gl';
-import maplibreWorkerSource from 'maplibre-gl/dist/maplibre-gl-worker.mjs?raw';
+// The worker as its own file (was inlined as an ~800 kB string in the main bundle).
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import type { FeatureCollection } from 'geojson';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import type { Coordinate, GtfsDataset } from '../data/gtfsParser';
@@ -52,6 +53,7 @@ import {
   type OsmPathResult,
 } from '../data/trainOsmMapper';
 import { closeRailGaps } from '../data/railStitch';
+import { FOLLOW_FRAME_MS, LITE_MODE, RENDER_PIXEL_RATIO, TRAIN_FRAME_MS } from '../perf';
 import { decodePolyline, encodePolyline, fetchTrainRoute } from '../data/routeService';
 import {
   estimatedDelaySeconds,
@@ -311,6 +313,9 @@ type TrainMarkerEntry = {
   lastSelected: boolean;
   lastType: string;
   width: number;
+  /** Position handed to the canvas at the last publish (before overlap spreading). */
+  drawnLat?: number;
+  drawnLng?: number;
 };
 
 function trainPillRadius(selected: boolean): number {
@@ -433,12 +438,12 @@ function packingIterationsForZoom(zoom: number): number {
 }
 const HIGHLIGHT_LINE_WIDTH = 4;
 const SIMPLIFIED_TOLERANCE_METERS = 0;
+/** Geometry simplification when the rails are tiled (px at tile scale): under half a pixel, invisible. */
+const RAIL_TILE_TOLERANCE = 0.3;
 
-setWorkerUrl(
-  URL.createObjectURL(new Blob([maplibreWorkerSource], { type: 'text/javascript' }))
-);
+setWorkerUrl(new URL(maplibreWorkerUrl, window.location.href).href);
 try {
-  setWorkerCount(Math.max(2, Math.min(4, navigator.hardwareConcurrency || 2)));
+  setWorkerCount(LITE_MODE ? 2 : Math.max(2, Math.min(4, navigator.hardwareConcurrency || 2)));
 } catch {
   // Worker count can only be set before the pool starts.
 }
@@ -610,6 +615,11 @@ function serializeOsmGraph(graph: OsmGraph): SerializedOsmGraph {
 }
 
 function emphasizeRelief(map: MapLibreMap, theme: MapTheme) {
+  if (LITE_MODE && map.getLayer('background_relief')) {
+    // Hillshade is the heaviest layer to render; weak devices go without (no DEM tiles load).
+    map.setLayoutProperty('background_relief', 'visibility', 'none');
+    return;
+  }
   if (!map.getLayer('background_relief')) {
     return;
   }
@@ -992,9 +1002,9 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   ensureSource('stations-hover', { maxzoom: 16, tolerance: 0, buffer: 64 });
   ensureSource('rails-highlight', { maxzoom: 16, tolerance: 0.35 });
   ensureSource('rails-highlight-bus', { maxzoom: 16, tolerance: 0.35 });
-  ensureSource('rails-simplified-main', { maxzoom: 14, tolerance: 0 });
-  ensureSource('rails-simplified-branch', { maxzoom: 14, tolerance: 0 });
-  ensureSource('rails-simplified-side', { maxzoom: 14, tolerance: 0 });
+  ensureSource('rails-simplified-main', { maxzoom: 14, tolerance: RAIL_TILE_TOLERANCE });
+  ensureSource('rails-simplified-branch', { maxzoom: 14, tolerance: RAIL_TILE_TOLERANCE });
+  ensureSource('rails-simplified-side', { maxzoom: 14, tolerance: RAIL_TILE_TOLERANCE });
 
   const simplifiedMaxZoom = 13.5;
   for (const leftover of [
@@ -1421,27 +1431,60 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       setOsmStatus((prev) => ({ ...prev, loading: true, lastStatus: 'loading' }));
       setTileLoadPlan({ total: 1, completed: 0 });
       appendLoadingMessage('Loading OSM rails');
-      let ways: OSMWay[] = [];
-      let meta: OsmProxyMeta | undefined;
-      for (let attempt = 0; attempt < 3 && ways.length === 0; attempt += 1) {
-        const result = await fetchSimplifiedNetwork();
-        ways = result.ways;
-        meta = result.meta;
-        if (ways.length === 0 && attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+      // Download, clip, stitch and classify in a worker: on the page this froze the UI for
+      // about a second at startup. Falls back to doing it here if workers are unavailable.
+      const prepared = await new Promise<
+        { display: OSMWay[]; pathfinding: OSMWay[]; meta?: OsmProxyMeta } | null
+      >((resolve) => {
+        let worker: Worker;
+        try {
+          worker = new Worker(new URL('../workers/railPrep.worker.ts', import.meta.url), { type: 'module' });
+        } catch {
+          resolve(null);
+          return;
         }
+        worker.onmessage = (event) => {
+          worker.terminate();
+          resolve(event.data?.ok ? event.data : null);
+        };
+        worker.onerror = () => {
+          worker.terminate();
+          resolve(null);
+        };
+        worker.postMessage({ outline: svgOutlinePolygons });
+      });
+      if (cancelled) {
+        return;
       }
+      let filtered: OSMWay[];
+      let pathfinding: OSMWay[];
+      let meta: OsmProxyMeta | undefined;
+      if (prepared) {
+        filtered = prepared.display;
+        pathfinding = prepared.pathfinding;
+        meta = prepared.meta;
+      } else {
+        let ways: OSMWay[] = [];
+        for (let attempt = 0; attempt < 3 && ways.length === 0; attempt += 1) {
+          const result = await fetchSimplifiedNetwork();
+          ways = result.ways;
+          meta = result.meta;
+          if (ways.length === 0 && attempt < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+          }
+        }
         if (cancelled) {
           return;
         }
-      const clipped = clipWaysToOutline(ways, svgOutlinePolygons);
-      const stitched = closeRailGaps(clipped);
-      const filtered = classifyDisplayRails(stitched);
+        const stitched = closeRailGaps(clipWaysToOutline(ways, svgOutlinePolygons));
+        filtered = classifyDisplayRails(stitched);
+        pathfinding = stitched.filter(isPathfindingWay);
+      }
       osmWaysRef.current = new Map();
       simplifiedWaysRef.current = filtered;
       filtered.forEach((way) => osmWaysRef.current.set(way.id, way));
       osmGraphRef.current = new Map();
-      pathfindingWaysRef.current = stitched.filter(isPathfindingWay);
+      pathfindingWaysRef.current = pathfinding;
       workerGraphPostedRef.current = false;
       setOsmWayCount(filtered.length);
       setTileLoadPlan({ total: 1, completed: 1 });
@@ -1508,6 +1551,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         [SLOVAKIA_BOUNDS.maxLng + MAP_VIEW_BOUNDS_PAD.lng, SLOVAKIA_BOUNDS.maxLat + MAP_VIEW_BOUNDS_PAD.lat],
       ],
       attributionControl: false,
+      pixelRatio: RENDER_PIXEL_RATIO,
       fadeDuration: 0,
       maxParallelImageRequests: 12,
       maxTileCacheZoomLevels: 8,
@@ -1519,11 +1563,18 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     lockMapNorthUp(map);
     // The further out the map is, the wider the screen is compared to the country: let the
     // view slide far enough to bring any train out from behind the side panel / mobile sheet.
-    const fitViewBounds = () => {
+    // Recomputed only when the zoom moved a quarter level (or on resize), not every zoom frame.
+    let boundsZoom = -1;
+    const fitViewBounds = (event?: { type?: string }) => {
       const { clientWidth: width, clientHeight: height } = node;
       if (!width || !height) {
         return;
       }
+      const zoomNow = map.getZoom();
+      if (event?.type === 'zoom' && Math.abs(zoomNow - boundsZoom) < 0.25) {
+        return;
+      }
+      boundsZoom = zoomNow;
       const spanLng = Math.abs(map.unproject([width, height / 2]).lng - map.unproject([0, height / 2]).lng);
       const spanLat = Math.abs(map.unproject([width / 2, 0]).lat - map.unproject([width / 2, height]).lat);
       const padWest = Math.max(MAP_VIEW_BOUNDS_PAD.lng, spanLng * 0.45);
@@ -1535,8 +1586,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       ]);
     };
     map.on('zoom', fitViewBounds);
-    map.on('resize', fitViewBounds);
-    map.once('load', fitViewBounds);
+    map.on('resize', () => fitViewBounds());
+    map.once('load', () => fitViewBounds());
     const hydrateOverlay = () => {
       try {
         emphasizeRelief(map, themeRef.current);
@@ -2103,6 +2154,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       }
       const trackLat = entry.trackLat;
       const trackLng = entry.trackLng;
+      entry.drawnLat = trackLat;
+      entry.drawnLng = trackLng;
       entry.heading = entry.motion || entry.journeyActive ? entry.heading : point.heading;
     return {
         ...point,
@@ -2420,7 +2473,13 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       const zoom = map.getZoom();
       // Smooth motion only when zoomed in; far out, refresh positions every few seconds.
       // Every frame while following, so the pill and the camera move together.
-      const interval = followingRef.current ? 0 : zoom >= 11 ? 40 : zoom >= JOURNEY_SMOOTH_ZOOM ? 200 : 4000;
+      const interval = followingRef.current
+        ? FOLLOW_FRAME_MS
+        : zoom >= 11
+          ? TRAIN_FRAME_MS
+          : zoom >= JOURNEY_SMOOTH_ZOOM
+            ? 200
+            : 4000;
       if (frameMs - lastRun < interval) {
         return;
       }
@@ -2430,6 +2489,17 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       const followed = followingRef.current ? focusedTrainRef.current : null;
       let changed = false;
       const focusedId = focusedTrainRef.current;
+      // Only redraw when a train on screen moved a visible amount (a third of a pixel), so
+      // zoomed in the ~130 pills are not re-packed and re-drawn 25 times a second for nothing.
+      const view = map.getBounds();
+      const degPerPx = 360 / (512 * 2 ** zoom);
+      const margin = degPerPx * 60;
+      const west = view.getWest() - margin;
+      const east = view.getEast() + margin;
+      const south = view.getSouth() - margin;
+      const north = view.getNorth() + margin;
+      const onScreen = (lat: number, lng: number) => lat >= south && lat <= north && lng >= west && lng <= east;
+      const visibleStep = degPerPx / 3;
       trainMarkersRef.current.forEach((entry, id) => {
         const position = animator.position(id, now);
         if (position && id === followed) {
@@ -2448,7 +2518,17 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         }
         if (position) {
           const ownJourney = animator.journey(id);
-          entry.onBus = ownJourney ? isOnBus(ownJourney, position.along) : false;
+          const onBus = ownJourney ? isOnBus(ownJourney, position.along) : false;
+          const moved =
+            !entry.journeyActive ||
+            entry.onBus !== onBus ||
+            entry.drawnLat == null ||
+            entry.drawnLng == null ||
+            ((onScreen(position.lat, position.lng) || onScreen(entry.drawnLat, entry.drawnLng)) &&
+              (Math.abs(position.lat - entry.drawnLat) > visibleStep ||
+                Math.abs(position.lng - entry.drawnLng) > visibleStep ||
+                (position.heading != null && Math.abs(position.heading - (entry.heading ?? 0)) > 2)));
+          entry.onBus = onBus;
           entry.trackLat = position.lat;
           entry.trackLng = position.lng;
           if (position.heading != null) {
@@ -2456,7 +2536,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           }
           entry.motion = undefined;
           entry.journeyActive = true;
-          changed = true;
+          if (moved || id === followed) {
+            changed = true;
+          }
         } else if (entry.journeyActive) {
           entry.journeyActive = false;
           entry.trackLat = entry.targetLat;
@@ -2600,14 +2682,27 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
 
     let raf = 0;
     let lastFrame = performance.now();
+    // Time not yet spent on a camera move: small moves are skipped (a whole map redraw for a
+    // fraction of a pixel) and the time carries over until the step is worth drawing.
+    let pendingDt = 0;
+    // The dock's size is read from the DOM; it only changes on open/resize/sheet drag.
+    let cachedPadding = dockPadding(map);
+    let paddingReadAt = 0;
     const step = (frameMs: number) => {
       raf = window.requestAnimationFrame(step);
-      const dt = Math.min(0.1, Math.max(0, (frameMs - lastFrame) / 1000));
+      const frameDt = Math.min(0.1, Math.max(0, (frameMs - lastFrame) / 1000));
       lastFrame = frameMs;
       if (!mapReadyRef.current || pointerDown || map.isMoving()) {
+        pendingDt = 0;
         return;
       }
-      const padding = dockPadding(map);
+      pendingDt = Math.min(0.25, pendingDt + frameDt);
+      const dt = pendingDt;
+      if (frameMs - paddingReadAt > 200) {
+        cachedPadding = dockPadding(map);
+        paddingReadAt = frameMs;
+      }
+      const padding = cachedPadding;
       const current = map.getPadding();
       const paddingChanged =
         Math.abs(padding.top - (current.top ?? 0)) > 0.5 ||
@@ -2631,19 +2726,26 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         if (paddingChanged) {
           map.jumpTo({ center: here, padding });
         }
+        pendingDt = 0;
         return;
       }
-      const gap = Math.hypot(
-        map.project([target.lng, target.lat]).x - map.project(here).x,
-        map.project([target.lng, target.lat]).y - map.project(here).y
-      );
+      const targetPx = map.project([target.lng, target.lat]);
+      const herePx = map.project(here);
+      const gap = Math.hypot(targetPx.x - herePx.x, targetPx.y - herePx.y);
       if (gap < 0.15) {
-        map.jumpTo({ center: [target.lng, target.lat], padding });
+        if (paddingChanged) {
+          map.jumpTo({ center: [target.lng, target.lat], padding });
+        }
+        pendingDt = 0;
         return;
       }
       // Far away: a longer, softer glide. Close: tight enough to track at speed.
       const tau = FOLLOW_TAU_SECONDS + Math.min(0.7, gap / 2500);
       const k = 1 - Math.exp(-dt / tau);
+      if (!paddingChanged && (gap * k < 0.5 || dt * 1000 < FOLLOW_FRAME_MS)) {
+        return;
+      }
+      pendingDt = 0;
       map.jumpTo({
         center: [here.lng + (target.lng - here.lng) * k, here.lat + (target.lat - here.lat) * k],
         padding,

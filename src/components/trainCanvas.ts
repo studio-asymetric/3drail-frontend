@@ -1,6 +1,7 @@
 import type { Map as MapLibreMap, MapMouseEvent } from 'maplibre-gl';
 import { contrastInk } from '../data/trainService';
 import { stadiumEdgePoint, TRAIN_ARROW_INSET_PX } from '../data/trainPill';
+import { RENDER_PIXEL_RATIO } from '../perf';
 
 /**
  * Train pills drawn on one canvas above the map.
@@ -139,7 +140,7 @@ export class TrainCanvasLayer {
 
   private handleResize = () => {
     const container = this.map.getContainer();
-    this.dpr = Math.min(3, window.devicePixelRatio || 1);
+    this.dpr = RENDER_PIXEL_RATIO;
     const width = container.clientWidth;
     const height = container.clientHeight;
     this.canvas.width = Math.round(width * this.dpr);

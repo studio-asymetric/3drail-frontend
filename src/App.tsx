@@ -1,9 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapScene } from './components/MapScene';
 import { DockScroller } from './components/DockScroller';
 import { DockPanelControls } from './components/DockPanelControls';
 import { DockSheetHandle } from './components/DockSheetHandle';
-import { AboutPanel } from './components/AboutPanel';
 import { STATION_FOCUS_ZOOM } from './data/viewConstants';
 import { useMobileLayout } from './hooks/useMobileLayout';
 import { useMobileDockSheet } from './hooks/useMobileDockSheet';
@@ -376,6 +375,27 @@ async function loadGtfsDataset(): Promise<GtfsDataset> {
     stopTimesCsv: await stopTimesRes.text(),
   });
 }
+
+/** The header clock, ticking on its own so the rest of the page does not re-render each second. */
+function ClockLabel() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return (
+    <>
+      {now.toLocaleTimeString('sk-SK', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      })}
+    </>
+  );
+}
+
+// The About article is only needed when opened: load it on demand.
+const AboutPanel = lazy(() => import('./components/AboutPanel').then((module) => ({ default: module.AboutPanel })));
 
 const App: React.FC = () => {
   const [trains, setTrains] = useState<TrainRenderState[]>([]);
@@ -829,10 +849,18 @@ const App: React.FC = () => {
     refreshStationBoard(station, stationTab);
   }, [stationTab, refreshStationBoard]);
 
+  // The whole app re-rendered every second for the header clock. Now the clock label ticks on
+  // its own (ClockLabel); this clock only drives the opened train's timetable cursor, which
+  // the timetable model replaces once it runs the train (timelineProgress): then it is slow.
+  const modelDrivesFocus = Boolean(focusedTrainNumber && timelineProgress?.train === focusedTrainNumber);
   useEffect(() => {
-    const timer = window.setInterval(() => setClock(new Date()), 1000);
+    if (!focusedTrainNumber) {
+      return;
+    }
+    setClock(new Date());
+    const timer = window.setInterval(() => setClock(new Date()), modelDrivesFocus ? 15_000 : 1000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [focusedTrainNumber, modelDrivesFocus]);
 
   useEffect(
     () => () => {
@@ -1067,6 +1095,18 @@ const App: React.FC = () => {
     [trains]
   );
   const handleOsmStatusChange = useCallback((_status: { tilesLoaded: number }) => {}, []);
+  // Stable callbacks: MapScene is memoised and inline arrows made it re-render with the app.
+  const handleFollowBreak = useCallback(() => setFollowing(false), []);
+  const handleFollowCorrection = useCallback(
+    ({ train, meters }: { train: string; meters: number }) => {
+      pushToast(
+        t.toastPositionCorrected((Math.abs(meters) / 1000).toFixed(1).replace('.', locale === 'sk' ? ',' : '.'), meters < 0),
+        `correct:${train}`,
+        25_000
+      );
+    },
+    [locale, pushToast, t]
+  );
   const panelOpen = Boolean(focusedTrain || focusedStation || aboutOpen);
   const leaveSnapshotRef = useRef<{
     train: TrainRenderState | null;
@@ -1257,11 +1297,6 @@ const App: React.FC = () => {
     displayJourneyStatus === 'ready' && displayStops.length >= 2
       ? { from: displayStops[0].name, to: displayStops[displayStops.length - 1].name }
       : parseSummaryRoute(displayTrain?.summary || displayTrain?.trainName);
-  const clockLabel = clock.toLocaleTimeString('sk-SK', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
   const searchHits = useMemo(() => {
     const query = foldName(searchQuery);
     if (query.length < 1) {
@@ -1347,15 +1382,9 @@ const App: React.FC = () => {
           journeyStops={journeyRows}
           journeyStatus={journeyStatus}
           following={following}
-          onFollowBreak={() => setFollowing(false)}
+          onFollowBreak={handleFollowBreak}
           onTimelineProgress={setTimelineProgress}
-          onFollowCorrection={({ train, meters }) => {
-            pushToast(
-              t.toastPositionCorrected((Math.abs(meters) / 1000).toFixed(1).replace('.', locale === 'sk' ? ',' : '.'), meters < 0),
-              `correct:${train}`,
-              25_000
-            );
-          }}
+          onFollowCorrection={handleFollowCorrection}
           focusedTrainNumber={focusedTrainNumber}
           focusedRouteCursor={focusedTrain ? cursor : null}
           onTrainClick={handleTrainClick}
@@ -1387,7 +1416,7 @@ const App: React.FC = () => {
           <small className="chrome__brand-meta">
             {loading ? t.loadingTrains : t.trainsCount(trains.length)}
             {' · '}
-            {clockLabel}
+            <ClockLabel />
             {' · '}
             <a
               className="chrome__brand-studio"
@@ -2057,7 +2086,9 @@ const App: React.FC = () => {
             </div>
           </div>
         ) : displayAbout ? (
-          <AboutPanel onBack={handleAboutBack} copy={t} locale={locale} />
+          <Suspense fallback={null}>
+            <AboutPanel onBack={handleAboutBack} copy={t} locale={locale} />
+          </Suspense>
         ) : null}
       </aside>
       )}
