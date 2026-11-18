@@ -127,8 +127,10 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
       const overflow = limit > 1;
       // The first and last row stay pinned while the list scrolls; these tell the rail
       // whether there is more hidden above or below them.
-      wrapper.toggleAttribute('data-more-top', overflow && wrapper.scrollTop > 2);
-      wrapper.toggleAttribute('data-more-bottom', overflow && wrapper.scrollTop < limit - 2);
+      // A collapsed mobile sheet shows just the last and next stop: nothing is pinned or faded.
+      const peeking = Boolean(wrapper.closest('.dock--collapsed'));
+      wrapper.toggleAttribute('data-more-top', !peeking && overflow && wrapper.scrollTop > 2);
+      wrapper.toggleAttribute('data-more-bottom', !peeking && overflow && wrapper.scrollTop < limit - 2);
       track.classList.toggle('is-visible', overflow);
       fadeEdgeRows();
       if (!overflow) {
@@ -147,8 +149,37 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
       thumb.style.transform = `translateY(${progress * room}px)`;
     };
 
+    // The small (collapsed) sheet is not scrollable: it shows one stretch of the track, the stop
+    // the train left (or stands at), the stop it heads for, and the dot between them.
+    const alignPeek = (): boolean => {
+      if (!wrapper.closest('.dock--collapsed')) {
+        return false;
+      }
+      const headRow = content.querySelector('.dock__stop-train')?.closest('li') ?? null;
+      const focusRow = content.querySelector('li.is-focus');
+      const top = headRow
+        ? headRow.previousElementSibling ?? headRow
+        : focusRow && !focusRow.nextElementSibling
+          ? focusRow.previousElementSibling ?? focusRow
+          : focusRow;
+      if (!top || wrapper.clientHeight < 1) {
+        return true;
+      }
+      // the list has 4 px of padding above its first row
+      const target =
+        top.getBoundingClientRect().top - wrapper.getBoundingClientRect().top + wrapper.scrollTop - 4;
+      if (Math.abs(wrapper.scrollTop - target) > 0.5) {
+        wrapper.scrollTop = Math.max(0, target);
+      }
+      updateThumb();
+      return true;
+    };
+
     // Scroll so the train (the dot on the rail, else the bold stop) sits a little above the middle.
     const scrollToNext = () => {
+      if (alignPeek()) {
+        return;
+      }
       const marker =
         (content.querySelector('.dock__stop-train') as HTMLElement | null) ??
         (content.querySelector('.is-focus') as HTMLElement | null);
@@ -158,7 +189,7 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
       const rect = marker.getBoundingClientRect();
       const center = rect.top + rect.height / 2;
       const target =
-        center - wrapper.getBoundingClientRect().top + wrapper.scrollTop - wrapper.clientHeight * 0.38;
+        center - wrapper.getBoundingClientRect().top + wrapper.scrollTop - wrapper.clientHeight * (wrapper.closest('.dock--collapsed') ? 0.5 : 0.38);
       wrapper.scrollTop = Math.max(0, target);
       updateThumb();
     };
@@ -228,6 +259,18 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
         scrollToNext();
       }
     };
+    // While collapsed, keep the shown stretch on the train as it moves and passes stops.
+    let peekRaf = 0;
+    const peekObserver = new MutationObserver(() => {
+      if (peekRaf || !wrapper.closest('.dock--collapsed')) {
+        return;
+      }
+      peekRaf = requestAnimationFrame(() => {
+        peekRaf = 0;
+        alignPeek();
+      });
+    });
+    peekObserver.observe(content, { subtree: true, attributes: true, childList: true, attributeFilter: ['class', 'style'] });
     const observer = new ResizeObserver(resize);
     observer.observe(wrapper);
     observer.observe(content);
@@ -246,6 +289,10 @@ export const DockScroller: React.FC<DockScrollerProps> = ({
       stopDrag();
       track.removeEventListener('pointerdown', onPointerDown);
       observer.disconnect();
+      peekObserver.disconnect();
+      if (peekRaf) {
+        cancelAnimationFrame(peekRaf);
+      }
     };
   }, [loading, error, contentKey, revealKey]);
 

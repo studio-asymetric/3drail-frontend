@@ -1,5 +1,6 @@
-import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MapScene } from './components/MapScene';
+import { abbreviationSteps, townOf } from './data/placeName';
 import { DockScroller } from './components/DockScroller';
 import { DockPanelControls } from './components/DockPanelControls';
 import { DockSheetHandle } from './components/DockSheetHandle';
@@ -160,9 +161,15 @@ function indexByStationName(stops: JourneyStop[], name?: string): number {
   if (!key) {
     return -1;
   }
+  // An exact name wins; only then a name that merely starts with the other ("Trnava" must
+  // not match "Trnava Hora" while a stop called exactly "Trnava" exists).
+  const exact = stops.findIndex((stop) => foldName(stop.name) === key);
+  if (exact >= 0) {
+    return exact;
+  }
   return stops.findIndex((stop) => {
     const folded = foldName(stop.name);
-    return folded === key || folded.startsWith(key) || key.startsWith(folded);
+    return folded.startsWith(key) || key.startsWith(folded);
   });
 }
 
@@ -174,13 +181,24 @@ function gtfsStopForName(name: string, dataset: GtfsDataset | null) {
   if (!key) {
     return null;
   }
+  // An exact name wins. Otherwise the closest name that starts with the other (or the
+  // other way round): "Trnava" must not land on "Trnava Hora" just because that comes first.
+  let best: (typeof dataset.stops)[string] | null = null;
+  let bestGap = Infinity;
   for (const stop of Object.values(dataset.stops)) {
     const folded = foldName(stop.name);
-    if (folded === key || folded.startsWith(key) || key.startsWith(folded)) {
+    if (folded === key) {
       return stop;
     }
+    if (folded.startsWith(key) || key.startsWith(folded)) {
+      const gap = Math.abs(folded.length - key.length);
+      if (gap < bestGap) {
+        best = stop;
+        bestGap = gap;
+      }
+    }
   }
-  return null;
+  return best;
 }
 
 function coordFromDataset(name: string, dataset: GtfsDataset | null): Coordinate | null {
@@ -391,6 +409,108 @@ function ClockLabel() {
         second: '2-digit',
       })}
     </>
+  );
+}
+
+const ArrowIcon: React.FC = () => (
+  <svg className="dock__name-arrow" width="22" height="12" viewBox="0 0 22 12" fill="none" aria-hidden="true">
+    <path
+      d="M0 5.52296V6.27296H21V5.52296V4.77296H0V5.52296ZM21.5303 6.05329C21.8232 5.7604 21.8232 5.28553 21.5303 4.99263L16.7574 0.219664C16.4645 -0.0732298 15.9896 -0.0732298 15.6967 0.219664C15.4038 0.512557 15.4038 0.987431 15.6967 1.28032L19.9393 5.52296L15.6967 9.7656C15.4038 10.0585 15.4038 10.5334 15.6967 10.8263C15.9896 11.1192 16.4645 11.1192 16.7574 10.8263L21.5303 6.05329Z"
+      fill="currentColor"
+    />
+  </svg>
+);
+
+/**
+ * The train's title: its name, then "→ town" it runs to; a train without a name shows just
+ * "→ town" in the same style. When that does not fit on a line the town is abbreviated one
+ * word at a time ("Banská Bystrica" -> "B. Bystrica", "Nové Mesto n. V.").
+ */
+const DockTitle: React.FC<{ properName: string; to: string; fallback: string }> = ({
+  properName,
+  to,
+  fallback,
+}) => {
+  const ref = useRef<HTMLSpanElement>(null);
+  const steps = useMemo(() => abbreviationSteps(townOf(to)), [to]);
+  const maxStep = to ? steps.length - 1 : 0;
+  const key = `${properName}|${to}`;
+  const [fit, setFit] = useState({ key, step: 0 });
+  const step = fit.key === key ? fit.step : 0;
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || step >= maxStep) {
+      return;
+    }
+    const lineHeight = parseFloat(getComputedStyle(el).fontSize) * 1.7;
+    if (el.getBoundingClientRect().height > lineHeight) {
+      setFit({ key, step: step + 1 });
+    }
+  }, [step, maxStep, key]);
+
+  // The room changed (window or panel resized): try the full name again.
+  useLayoutEffect(() => {
+    const box = ref.current?.parentElement;
+    if (!box || typeof ResizeObserver === 'undefined') {
+      return;
+    }
+    let width = box.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (Math.abs(box.clientWidth - width) > 1) {
+        width = box.clientWidth;
+        setFit({ key, step: 0 });
+      }
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [key]);
+
+  if (!to) {
+    return <span className={`dock__name${properName ? '' : ' is-route'}`}>{properName || fallback}</span>;
+  }
+  return (
+    <span ref={ref} className={`dock__name${properName ? '' : ' dock__name--dest-only'}`}>
+      {properName}
+      <span className="dock__name-dest">
+        <ArrowIcon />
+        {steps[Math.min(step, steps.length - 1)]}
+      </span>
+    </span>
+  );
+};
+
+/** "rj 273 METROPOLITAN" -> "rj 273": the pill carries the type and number, not the train's name. */
+function boardPillLabel(code?: string): string {
+  const match = String(code ?? '').trim().match(/^(\S+)\s+(\d+)/);
+  return match ? `${match[1]} ${match[2]}` : String(code ?? '').trim();
+}
+
+const ClockIcon: React.FC = () => (
+  <svg className="dock__status-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+    <circle cx="7" cy="7" r="5.6" stroke="currentColor" strokeWidth="1.2" />
+    <path d="M7 3.9V7l2.1 1.4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+const InfoIcon: React.FC = () => (
+  <svg className="dock__status-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+    <circle cx="7" cy="7" r="5.6" stroke="currentColor" strokeWidth="1.2" />
+    <path d="M7 6.3v3.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <circle cx="7" cy="4.5" r="0.75" fill="currentColor" />
+  </svg>
+);
+
+/** "5 min meškanie": the amount stands out, the rest is lighter. */
+function delayView(text: string): React.ReactNode {
+  const match = text.match(/^(\d+\s*min)(\s.*)?$/i);
+  return match ? (
+    <>
+      <strong>{match[1]}</strong>
+      {match[2] ?? ''}
+    </>
+  ) : (
+    text
   );
 }
 
@@ -936,11 +1056,16 @@ const App: React.FC = () => {
     if (!focusedTrain) {
       return;
     }
-    const live = cursor?.position ?? focusedTrain.position;
-    if (live && Number.isFinite(live.lat) && Number.isFinite(live.lng)) {
-      centerMapOn(live.lng, live.lat, 11);
+    // The link names the station ZSR last heard from the train at: go to that station. The
+    // timetable estimate (cursor) is somewhere else along the line, which is not what it says.
+    const at =
+      coordFromDataset(focusedTrain.currentStation ?? '', dataset) ??
+      (focusedTrain.position as { lat: number; lng: number } | undefined) ??
+      null;
+    if (at && Number.isFinite(at.lat) && Number.isFinite(at.lng)) {
+      centerMapOn(at.lng, at.lat, 12);
     }
-  }, [centerMapOn, cursor, focusedTrain]);
+  }, [centerMapOn, dataset, focusedTrain]);
   const handleTrainClick = useCallback(
     (trainNumber: string) => {
       setAboutOpen(false);
@@ -1209,25 +1334,6 @@ const App: React.FC = () => {
     displayTrain,
     cursor?.stopIndex ?? null
   );
-  const approachingStopName = useMemo(() => {
-    if (nextStopIndex >= 0 && displayStops[nextStopIndex]) {
-      return displayStops[nextStopIndex].name;
-    }
-    const liveNext = displayTrain?.nextStation ?? displayTrain?.rosterNextStation;
-    if (liveNext && !/^\d{5,}$/.test(liveNext.replace(/\s/g, ''))) {
-      return liveNext;
-    }
-    if (liveNext && dataset) {
-      const normalized = liveNext.replace(/\D/g, '');
-      const match = Object.values(dataset.stops).find(
-        (stop) => stop.uicCode?.replace(/\D/g, '') === normalized
-      );
-      if (match?.name) {
-        return match.name;
-      }
-    }
-    return displayTrain?.currentStation ?? '—';
-  }, [dataset, displayStops, displayTrain, nextStopIndex]);
   const trailheadIndex = useMemo(() => {
     if (displayStops.length === 0) {
       return -1;
@@ -1272,7 +1378,14 @@ const App: React.FC = () => {
   /** Where ZSR last heard from the train; tapping it centres the map there. */
   const lastPositionLink = displayTrain?.currentStation ? (
     focusedTrain ? (
-      <button type="button" className="dock__fact-link" onClick={centerOnTrainPosition}>
+      <button
+        type="button"
+        className="dock__fact-link"
+        onClick={(event) => {
+          event.stopPropagation();
+          centerOnTrainPosition();
+        }}
+      >
         {displayTrain.currentStation}
       </button>
     ) : (
@@ -1709,55 +1822,19 @@ const App: React.FC = () => {
       >
         {displayTrain ? (
           <div
-            className={`dock__body${
+            className={`dock__body dock__body--train${
               isMobile ? ' dock__body--sheet-touch' : ''
             }${isMobile && !mobileSheetRevealed ? ' dock__body--sheet-collapsed' : ''}`}
             {...(isMobile ? mobileSheet.gesture : {})}
           >
             {isMobile && (
-              <>
-                <DockSheetHandle
-                  expanded={mobileSheetOpen}
-                  expandLabel={t.dockExpandSheet}
-                  onToggle={() => setMobileDockExpanded(!mobileSheetOpen)}
-                />
-                <button
-                  type="button"
-                  className="dock__peek"
-                  aria-expanded={mobileSheetOpen}
-                  onClick={() => {
-                    if (mobileSheet.consumePeekClick()) {
-                      return;
-                    }
-                    setMobileDockExpanded(true);
-                  }}
-                >
-                  <span className="dock__peek-identity">
-                    <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
-                    <span className={`dock__name${properTrainName ? '' : ' is-route'}`}>
-                      {properTrainName ||
-                        (routeEnds ? (
-                          <>
-                            {routeEnds.from}
-                            <span className="dock__name-arrow" aria-hidden="true">
-                              →
-                            </span>
-                            {routeEnds.to}
-                          </>
-                        ) : (
-                          t.train
-                        ))}
-                    </span>
-                  </span>
-                  <span className="dock__peek-meta">
-                    <span>{displayDelayText}</span>
-                    <span>
-                      {t.approachingStation}: <strong>{approachingStopName}</strong>
-                    </span>
-                  </span>
-                </button>
-              </>
+              <DockSheetHandle
+                expanded={mobileSheetOpen}
+                expandLabel={t.dockExpandSheet}
+                onToggle={() => setMobileDockExpanded(!mobileSheetOpen)}
+              />
             )}
+            {isMobile && followButton && <div className="dock__follow-float">{followButton}</div>}
             <div className="dock__sheet-main">
               {!isMobile && (
                 <DockPanelControls
@@ -1765,52 +1842,44 @@ const App: React.FC = () => {
                   closeLabel={t.dockCloseAria}
                   onBack={handleDockBack}
                   onClose={handleClearFocus}
+                  center={followButton}
                 />
               )}
-              {!isMobile && (
-                <div className="dock__head">
-                  <p className="dock__identity">
-                    <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
-                    <span className={`dock__name${properTrainName ? '' : ' is-route'}`}>
-                      {properTrainName ||
-                        (routeEnds ? (
-                          <>
-                            {routeEnds.from}
-                            <span className="dock__name-arrow" aria-hidden="true">
-                              →
-                            </span>
-                            {routeEnds.to}
-                          </>
-                        ) : (
-                          t.train
-                        ))}
-                    </span>
-                  </p>
-                  <div className="dock__meta">
-                    <p className="dock__delay">{displayDelayText}</p>
-                    {followButton}
-                  </div>
+              {/* One header for every state and size: it never changes what it shows when the
+                  mobile sheet opens or closes (it used to swap to a different "peek" and flicker). */}
+              <div
+                className={`dock__head${isMobile ? ' dock__head--tap' : ''}`}
+                onClick={
+                  isMobile
+                    ? () => {
+                        if (mobileSheet.consumePeekClick()) {
+                          return;
+                        }
+                        setMobileDockExpanded(!mobileSheetOpen);
+                      }
+                    : undefined
+                }
+              >
+                <p className="dock__identity">
+                  <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
+                  <DockTitle properName={properTrainName} to={routeEnds?.to ?? ''} fallback={t.train} />
+                </p>
+                <p className="dock__status">
+                  <span className="dock__delay">
+                    <ClockIcon />
+                    <span>{delayView(displayDelayText)}</span>
+                  </span>
                   {lastPositionLink && (
-                    <p className="dock__last-position dock__last-position--inline">
-                      <span>{t.lastPosition}</span>
-                      {lastPositionLink}
-                    </p>
+                    <>
+                      <span className="dock__status-dash" aria-hidden="true" />
+                      <span className="dock__last-position" title={t.lastPosition}>
+                        <InfoIcon />
+                        {lastPositionLink}
+                      </span>
+                    </>
                   )}
-                </div>
-              )}
-              {isMobile && (
-                <div className="dock__meta dock__meta--follow">
-                  {lastPositionLink ? (
-                    <p className="dock__last-position">
-                      <span>{t.lastPosition}</span>
-                      {lastPositionLink}
-                    </p>
-                  ) : (
-                    <span />
-                  )}
-                  {followButton}
-                </div>
-              )}
+                </p>
+              </div>
               {busNotice && (
                 <p className="dock__note dock__bus-notice">
                   <BusIcon />
@@ -2053,10 +2122,10 @@ const App: React.FC = () => {
                             className="dock__pill is-row"
                             style={{ background: delayColor, color: contrastInk(delayColor) }}
                           >
-                            {row.code || t.train}
+                            {boardPillLabel(row.code) || t.train}
                           </span>
                           <span className="dock__board-dest">
-                            <span className="dock__name-arrow" aria-hidden="true">
+                            <span className="dock__board-arrow" aria-hidden="true">
                               →
                             </span>
                             {row.destination}

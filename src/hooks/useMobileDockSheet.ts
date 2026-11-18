@@ -11,6 +11,8 @@ import {
 const FLICK_CLOSE_VELOCITY = 0.42;
 const FLICK_OPEN_VELOCITY = -0.42;
 const LIST_TOP_EPSILON = 2;
+/** Two timeline rows (40 px each) plus the list's own padding and border, as the sheet needs it. */
+const COLLAPSED_LIST_PX = 104;
 const LIST_SCROLL_SLOP_PX = 6;
 /** Sheet height progress above this reveals list content while dragging open. */
 export const SHEET_CONTENT_REVEAL = 0.08;
@@ -95,8 +97,10 @@ export function useMobileDockSheet(
     }
     const viewport = window.visualViewport?.height ?? window.innerHeight;
     const expandedPx = Math.min(viewport * 0.72, viewport - 44 - 8);
+    // A train's collapsed sheet is its header plus the last and next stop; a station's is its peek.
+    const head = dock.querySelector('.dock__body--train .dock__head') as HTMLElement | null;
     const collapsed =
-      (peek?.offsetHeight ?? 0) +
+      (head ? head.offsetHeight + COLLAPSED_LIST_PX : peek?.offsetHeight ?? 0) +
       (handle?.offsetHeight ?? 0) +
       (parseFloat(getComputedStyle(body).paddingTop) || 0) +
       (parseFloat(getComputedStyle(body).paddingBottom) || 0);
