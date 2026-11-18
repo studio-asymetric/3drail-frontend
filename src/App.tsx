@@ -647,6 +647,8 @@ const App: React.FC = () => {
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    // The page background behind the app (set before it starts, in index.html) follows too.
+    document.documentElement.dataset.bootTheme = theme;
     try {
       window.localStorage.setItem(THEME_STORAGE_KEY, theme);
     } catch {
