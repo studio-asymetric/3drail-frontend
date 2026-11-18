@@ -63,7 +63,7 @@ import {
   timelineProgress,
 } from '../data/journeyService';
 import { STATION_FOCUS_ZOOM } from '../data/viewConstants';
-import { TrainCanvasLayer } from './trainCanvas';
+import { PILL_HEIGHT, TrainCanvasLayer } from './trainCanvas';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
 import {
   clipWaysToOutline,
@@ -752,7 +752,8 @@ function placeRailsHighlightAboveTracks(map: MapLibreMap) {
   if (!layers?.length) {
     return;
   }
-  const isHighlight = (id: string) => id === 'rails-highlight' || id === 'rails-highlight-bus';
+  const isHighlight = (id: string) =>
+    id === 'rails-highlight' || id === 'rails-highlight-bus-gap' || id === 'rails-highlight-bus';
   let beforeId: string | undefined;
   for (const layer of layers) {
     if (isHighlight(layer.id)) {
@@ -765,6 +766,9 @@ function placeRailsHighlightAboveTracks(map: MapLibreMap) {
   }
   try {
     map.moveLayer('rails-highlight', beforeId);
+    if (map.getLayer('rails-highlight-bus-gap')) {
+      map.moveLayer('rails-highlight-bus-gap', beforeId);
+    }
     if (map.getLayer('rails-highlight-bus')) {
       map.moveLayer('rails-highlight-bus', beforeId);
     }
@@ -1199,7 +1203,19 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       'line-opacity': 0.95,
     },
   });
-  // Replacement-bus stretches of the highlighted route: dashed, same colour.
+  // Replacement-bus stretches of the highlighted route: dashed, same colour, with white
+  // between the dashes (a solid white line underneath hides the track that runs there).
+  upsertLayer({
+    id: 'rails-highlight-bus-gap',
+    type: 'line',
+    source: 'rails-highlight-bus',
+    layout: { 'line-cap': 'butt', 'line-join': 'round' },
+    paint: {
+      'line-color': '#ffffff',
+      'line-width': HIGHLIGHT_LINE_WIDTH,
+      'line-opacity': 0.95,
+    },
+  });
   upsertLayer({
     id: 'rails-highlight-bus',
     type: 'line',
@@ -2163,6 +2179,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         lng: trackLng,
         heading: entry.heading,
         radius: entry.width / 2 + (point.selected ? 1 : 0),
+        halfHeight: PILL_HEIGHT / 2 + (point.selected ? 1 : 0),
       };
     });
     const zoom = map.getZoom();
@@ -2186,9 +2203,11 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     if (!trainCanvasRef.current) {
       trainCanvasRef.current = new TrainCanvasLayer(map, (trainId) => onTrainClickRef.current?.(trainId));
     }
+    const homeOf = new Map(measured.map((item) => [item.id, item]));
     trainCanvasRef.current.setPills(
       spread.map((point) => {
         const entry = live.get(point.id);
+        const home = homeOf.get(point.id);
         if (entry) {
           entry.lastLng = point.lng;
           entry.lastLat = point.lat;
@@ -2199,6 +2218,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           id: point.id,
           lng: point.lng,
           lat: point.lat,
+          homeLng: home?.lng,
+          homeLat: home?.lat,
           type: shownType,
           color: point.color,
           selected: point.selected,

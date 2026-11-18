@@ -22,15 +22,20 @@ export interface CanvasPill {
   selected: boolean;
   heading: number | null;
   label: string;
+  /** Where the train really is, before overlapping pills were pushed apart (lng/lat is where it is drawn). */
+  homeLng?: number;
+  homeLat?: number;
 }
 
-const PILL_HEIGHT = 14;
+export const PILL_HEIGHT = 14;
 const PILL_PADDING_X = 6;
 const FONT = '700 10px Geist, Inter, system-ui, sans-serif';
 const ARROW_SIZE = 12;
 /** Extra pixels around each pill that still count as a hit (fingers need more). */
 const HIT_PAD_MOUSE = 9;
 const HIT_PAD_TOUCH = 14;
+/** How quickly pills settle after a neighbour moved them (time constant, seconds). */
+const SPREAD_EASE_SECONDS = 0.055;
 
 type Sprite = { canvas: HTMLCanvasElement; width: number; height: number; pillWidth: number };
 
@@ -47,6 +52,9 @@ export class TrainCanvasLayer {
   private onPick: (id: string) => void;
   private coarsePointer = false;
   private downAt: { x: number; y: number } | null = null;
+  /** How far each pill is currently shown from its true spot (degrees), eased towards its target. */
+  private shown = new Map<string, { dLng: number; dLat: number }>();
+  private lastDrawMs = 0;
 
   constructor(map: MapLibreMap, onPick: (id: string) => void) {
     this.map = map;
@@ -88,6 +96,22 @@ export class TrainCanvasLayer {
 
   setPills(pills: CanvasPill[]) {
     this.pills = pills;
+    const ids = new Set<string>();
+    pills.forEach((pill) => {
+      ids.add(pill.id);
+      if (!this.shown.has(pill.id)) {
+        // First sight: no easing, it simply appears where it belongs.
+        this.shown.set(pill.id, {
+          dLng: pill.lng - (pill.homeLng ?? pill.lng),
+          dLat: pill.lat - (pill.homeLat ?? pill.lat),
+        });
+      }
+    });
+    this.shown.forEach((_, id) => {
+      if (!ids.has(id)) {
+        this.shown.delete(id);
+      }
+    });
     this.requestDraw();
   }
 
@@ -273,6 +297,13 @@ export class TrainCanvasLayer {
     const viewWidth = width / this.dpr;
     const viewHeight = height / this.dpr;
     const boxes: typeof this.boxes = [];
+    // Pills pushed apart by their neighbours glide to their new spot instead of jumping there.
+    const now = performance.now();
+    const dt = Math.min(0.1, Math.max(0, (now - (this.lastDrawMs || now)) / 1000));
+    this.lastDrawMs = now;
+    const ease = 1 - Math.exp(-dt / SPREAD_EASE_SECONDS);
+    let settling = false;
+    const degPerPx = 360 / (512 * 2 ** this.map.getZoom());
     // Selected and hovered pills are drawn last so they sit on top.
     const ordered = [...this.pills].sort(
       (left, right) =>
@@ -280,7 +311,22 @@ export class TrainCanvasLayer {
         Number(left.id === this.hovered) - Number(right.id === this.hovered)
     );
     for (const pill of ordered) {
-      const point = this.map.project([pill.lng, pill.lat]);
+      const home = { lng: pill.homeLng ?? pill.lng, lat: pill.homeLat ?? pill.lat };
+      const target = { dLng: pill.lng - home.lng, dLat: pill.lat - home.lat };
+      let offset = this.shown.get(pill.id);
+      if (!offset) {
+        offset = { ...target };
+        this.shown.set(pill.id, offset);
+      }
+      offset.dLng += (target.dLng - offset.dLng) * ease;
+      offset.dLat += (target.dLat - offset.dLat) * ease;
+      if (Math.abs(target.dLng - offset.dLng) > degPerPx * 0.25 || Math.abs(target.dLat - offset.dLat) > degPerPx * 0.25) {
+        settling = true;
+      } else {
+        offset.dLng = target.dLng;
+        offset.dLat = target.dLat;
+      }
+      const point = this.map.project([home.lng + offset.dLng, home.lat + offset.dLat]);
       if (point.x < -40 || point.y < -40 || point.x > viewWidth + 40 || point.y > viewHeight + 40) {
         continue;
       }
@@ -313,5 +359,10 @@ export class TrainCanvasLayer {
       });
     }
     this.boxes = boxes;
+    if (settling) {
+      this.requestDraw();
+    } else {
+      this.lastDrawMs = 0;
+    }
   }
 }

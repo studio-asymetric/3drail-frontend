@@ -129,3 +129,30 @@ describe('mergeLineCollections', () => {
     expect(merged.features).toHaveLength(2);
   });
 });
+
+describe('spreadOverlappingTrainPoints shape', () => {
+  it('packs wide pills like bubbles that respect their shape, not in one column', () => {
+    const wide = (id: string) => ({ id, lat: 10, lng: 20, radius: 20, halfHeight: 7 });
+    const spread = spreadOverlappingTrainPoints(
+      [wide('a'), wide('b'), wide('c'), wide('d')],
+      project,
+      unproject,
+      { iterations: 24 }
+    );
+    const xs = spread.map((point) => point.lng);
+    const ys = spread.map((point) => point.lat);
+    const width = Math.max(...xs) - Math.min(...xs);
+    const height = Math.max(...ys) - Math.min(...ys);
+    // Not a column of four (which would be 3 pill-heights + gaps = 54 high, 0 wide) ...
+    expect(width).toBeGreaterThan(20);
+    expect(height).toBeLessThan(48);
+    // ... and no two pills sit on each other (distance measured in their own half-sizes).
+    for (let i = 0; i < spread.length; i += 1) {
+      for (let j = i + 1; j < spread.length; j += 1) {
+        const sx = (spread[i].lng - spread[j].lng) / (20 + 20 + TRAIN_BUBBLE_GAP_PX);
+        const sy = (spread[i].lat - spread[j].lat) / (7 + 7 + TRAIN_BUBBLE_GAP_PX);
+        expect(Math.hypot(sx, sy)).toBeGreaterThan(0.9);
+      }
+    }
+  });
+});

@@ -399,7 +399,10 @@ type TrainBubblePoint = {
   lat: number;
   lng: number;
   selected?: boolean;
+  /** Half the pill's width (px); also the radius when no height is given. */
   radius?: number;
+  /** Half the pill's height (px). Pills are wider than tall, so they pack tighter on top of each other. */
+  halfHeight?: number;
 };
 
 function bubbleRadius(
@@ -486,13 +489,17 @@ export function spreadOverlappingTrainPoints<T extends TrainBubblePoint>(
   const nodes = points.map((point) => {
     const screen = project(point.lng, point.lat);
     const size = bubbleRadius(point, radius, selectedRadius);
+    const halfHeight =
+      typeof point.halfHeight === 'number' && Number.isFinite(point.halfHeight) ? point.halfHeight : size;
     return {
       point,
       homeX: screen.x,
       homeY: screen.y,
       x: screen.x,
       y: screen.y,
-      r: size,
+      r: Math.max(size, halfHeight),
+      hw: size,
+      hh: halfHeight,
       moved: false,
     };
   });
@@ -512,10 +519,10 @@ export function spreadOverlappingTrainPoints<T extends TrainBubblePoint>(
   forEachNearbyBubblePair(nodes, homeGrid, cellSize, (left, right) => {
     const node = nodes[left];
     const other = nodes[right];
-    const dx = other.x - node.x;
-    const dy = other.y - node.y;
-    const minDist = node.r + other.r + gap;
-    if (dx * dx + dy * dy <= minDist * minDist) {
+    // Pills are wide, not round: distance is measured in units of their own half-sizes.
+    const scaledX = (other.x - node.x) / (node.hw + other.hw + gap);
+    const scaledY = (other.y - node.y) / (node.hh + other.hh + gap);
+    if (scaledX * scaledX + scaledY * scaledY <= 1) {
       parent[find(right)] = find(left);
     }
   });
@@ -550,25 +557,28 @@ export function spreadOverlappingTrainPoints<T extends TrainBubblePoint>(
     forEachNearbyBubblePair(nodes, grid, cellSize, (left, right) => {
       const a = nodes[left];
       const b = nodes[right];
-      let dx = b.x - a.x;
-      let dy = b.y - a.y;
-      let dist = Math.hypot(dx, dy);
-      const minDist = a.r + b.r + gap;
-      if (dist < 1e-5) {
-        dx = 1;
-        dy = 0;
-        dist = 1e-5;
-      }
-      if (dist >= minDist) {
+      const reachX = a.hw + b.hw + gap;
+      const reachY = a.hh + b.hh + gap;
+      let scaledX = (b.x - a.x) / reachX;
+      let scaledY = (b.y - a.y) / reachY;
+      let dist = Math.hypot(scaledX, scaledY);
+      if (dist >= 1) {
         return;
       }
-      const push = (minDist - dist) / 2;
-      const nx = dx / dist;
-      const ny = dy / dist;
-      a.x -= nx * push;
-      a.y -= ny * push;
-      b.x += nx * push;
-      b.y += ny * push;
+      if (dist < 1e-5) {
+        scaledX = left < right ? 1e-5 : -1e-5;
+        scaledY = 0;
+        dist = 1e-5;
+      }
+      // Push apart along the line between the two, like bubbles, but with the room each pill
+      // needs in its own shape: wide sideways, short up and down.
+      const push = (1 - dist) / 2;
+      const ux = scaledX / dist;
+      const uy = scaledY / dist;
+      a.x -= ux * push * reachX;
+      a.y -= uy * push * reachY;
+      b.x += ux * push * reachX;
+      b.y += uy * push * reachY;
       a.moved = true;
       b.moved = true;
     });
