@@ -13,7 +13,7 @@ export const AboutPanel: React.FC<{ onBack: () => void; copy: Copy; locale: AppL
       <div className="dock__meta">
         <p className="dock__identity">
           <span className="dock__pill is-station">{copy.aboutPill}</span>
-          <span className="dock__name">railatlas</span>
+          <span className="dock__name">Môj Vlak</span>
         </p>
         <button type="button" className="dock__follow" onClick={onBack} aria-label={copy.back}>
           {copy.back}

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { aheadKinds, classifyStops, isNonStopName, normalizeStationName, parseTrainDetail } from './trainDetail.mjs';
 import { withForeignStops } from './foreignStops.mjs';
 import { simplifyOsmPayload } from './simplifyRail.mjs';
+import { loadMimoriadnosti } from './mimoriadnosti.mjs';
 import {
   fetchMaptilerRails,
   fetchMaptilerRailsDisplay,
@@ -463,6 +464,20 @@ function handleJourneys(req, res) {
     },
     `journeys${etag}`
   );
+}
+
+/** ZSSK mimoriadnosti (delays, cancellations, closures) as structured events. */
+async function handleDisruptions(res) {
+  try {
+    const payload = await loadMimoriadnosti();
+    sendCompressed(res, 200, JSON.stringify(payload), 'application/json; charset=utf-8', {
+      'Cache-Control': 'public, max-age=60',
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logMessage(`Mimoriadnosti fetch failed: ${message}`);
+    sendJson(res, 502, { error: 'mimoriadnosti unavailable' });
+  }
 }
 
 function warmupRouteGraph() {
@@ -1659,6 +1674,10 @@ const server = http.createServer(async (req, res) => {
     }
     if (mode === 'stations') {
       handleStations(res);
+      return;
+    }
+    if (mode === 'disruptions') {
+      await handleDisruptions(res);
       return;
     }
     if (mode === 'route') {

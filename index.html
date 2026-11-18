@@ -1,11 +1,32 @@
 <!doctype html>
-<html lang="en">
+<html lang="sk">
   <head>
     <meta charset="utf-8" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=overlays-content"
     />
+
+    <title>Môj Vlak – živá poloha vlakov ZSSK na mape</title>
+    <meta
+      name="description"
+      content="Môj Vlak ukazuje v reálnom čase, kde sú vlaky ZSSK na Slovensku: poloha na mape, meškanie, zoznam zastávok, odchody zo staníc a mimoriadnosti na trati."
+    />
+    <meta
+      name="keywords"
+      content="poloha vlakov, vlaky online, ZSSK, meškanie vlakov, mapa vlakov, odchody vlakov, mimoriadnosti, Slovensko, železnica, cestovný poriadok"
+    />
+    <meta name="application-name" content="Môj Vlak" />
+    <meta name="apple-mobile-web-app-title" content="Môj Vlak" />
+    <meta name="author" content="Studio Asymetric" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f5f5f5" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#131313" media="(prefers-color-scheme: dark)" />
+    <meta name="format-detection" content="telephone=no" />
+
+    <link rel="canonical" href="%SITE_URL%/" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="./logo icon black.svg" />
     <link
       rel="icon"
@@ -13,12 +34,102 @@
       href="./logo icon white.svg"
       media="(prefers-color-scheme: light)"
     />
-    <title>Railatlas - Poloha vlakov</title>
-    <link rel="canonical" href="https://railatlas.eu/" />
-    <meta property="og:url" content="https://railatlas.eu/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Môj Vlak" />
+    <meta property="og:locale" content="sk_SK" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta property="og:url" content="%SITE_URL%/" />
+    <meta property="og:title" content="Môj Vlak – živá poloha vlakov ZSSK na mape" />
+    <meta
+      property="og:description"
+      content="Kde je môj vlak? Poloha vlakov ZSSK v reálnom čase, meškanie, zastávky a mimoriadnosti na jednej mape Slovenska."
+    />
+    <meta property="og:image" content="%SITE_URL%/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Môj Vlak: mapa Slovenska so živou polohou vlakov" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Môj Vlak – živá poloha vlakov ZSSK na mape" />
+    <meta
+      name="twitter:description"
+      content="Kde je môj vlak? Poloha vlakov ZSSK v reálnom čase, meškanie, zastávky a mimoriadnosti na jednej mape Slovenska."
+    />
+    <meta name="twitter:image" content="%SITE_URL%/og-image.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "%SITE_URL%/#website",
+            "url": "%SITE_URL%/",
+            "name": "Môj Vlak",
+            "alternateName": ["Moj Vlak", "Poloha vlakov ZSSK"],
+            "description": "Živá poloha vlakov ZSSK na mape Slovenska, meškania, zastávky a mimoriadnosti.",
+            "inLanguage": ["sk", "en"],
+            "publisher": { "@id": "%SITE_URL%/#publisher" }
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "%SITE_URL%/#app",
+            "name": "Môj Vlak",
+            "url": "%SITE_URL%/",
+            "applicationCategory": "TravelApplication",
+            "operatingSystem": "Any (web browser)",
+            "browserRequirements": "Requires JavaScript and WebGL",
+            "description": "Mapa so živou polohou vlakov ZSSK, meškaním, zoznamom zastávok, odchodmi zo staníc a mimoriadnosťami na trati.",
+            "inLanguage": ["sk", "en"],
+            "isAccessibleForFree": true,
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+            "featureList": [
+              "Živá poloha vlakov na mape Slovenska",
+              "Meškanie a zoznam zastávok každého vlaku",
+              "Odchody a príchody zo staníc",
+              "Mimoriadnosti ZSSK: odrieknuté vlaky, výluky, náhradná autobusová doprava",
+              "Sledovanie vlaku na mape"
+            ],
+            "publisher": { "@id": "%SITE_URL%/#publisher" }
+          },
+          {
+            "@type": "Organization",
+            "@id": "%SITE_URL%/#publisher",
+            "name": "Studio Asymetric",
+            "url": "https://asymetric.studio"
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- What search engines and no-JS visitors get; the app replaces it as soon as it loads. -->
+      <main class="seo-fallback" style="font-family: system-ui, sans-serif; max-width: 42rem; margin: 0 auto; padding: 2rem 1rem; line-height: 1.5">
+        <h1>Môj Vlak – živá poloha vlakov ZSSK na mape</h1>
+        <p>
+          Môj Vlak ukazuje v reálnom čase, kde sú vlaky ZSSK na Slovensku. Na mape vidíte polohu každého vlaku, jeho
+          meškanie a zoznam zastávok s plánovanými aj skutočnými časmi.
+        </p>
+        <h2>Čo nájdete v aplikácii</h2>
+        <ul>
+          <li>Poloha vlakov (Os, R, REX, Ex, EC, IC) na mape železníc Slovenska.</li>
+          <li>Meškanie, ďalšia zastávka a trasa vlaku zastávku po zastávke.</li>
+          <li>Odchody a príchody z každej stanice.</li>
+          <li>Mimoriadnosti na trati: odrieknuté vlaky, výluky a náhradná autobusová doprava.</li>
+          <li>Vyhľadávanie vlaku podľa čísla alebo stanice a sledovanie vlaku na mape.</li>
+        </ul>
+        <p lang="en">
+          Môj Vlak (“My Train”) is a live map of Slovak trains: positions, delays, stops, station boards and
+          disruption notices.
+        </p>
+        <noscript>
+          <p>Na zobrazenie mapy vlakov je potrebný JavaScript. / The live train map needs JavaScript.</p>
+        </noscript>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -11,6 +11,21 @@ export function readStoredLocale(): AppLocale {
 }
 
 export type Copy = {
+  alertsTitle: string;
+  alertsAria: string;
+  alertsEmpty: string;
+  alertsSource: string;
+  alertsGroupClosures: string;
+  alertsGroupCancelled: string;
+  alertsGroupDelays: string;
+  alertsGroupNotes: string;
+  alertCancelledFull: string;
+  alertCancelledSection: (from: string, to: string) => string;
+  alertNoReplacement: string;
+  alertReplacement: (text: string) => string;
+  alertDelay: (minutes: number, station: string, forecast: boolean) => string;
+  alertBusReplacement: string;
+  alertTimeAgo: (minutes: number) => string;
   aboutRailatlas: string;
   loadingTrains: string;
   trainsCount: (count: number) => string;
@@ -73,7 +88,23 @@ export type Copy = {
 };
 
 const sk: Copy = {
-  aboutRailatlas: 'O aplikácii railatlas',
+  alertsTitle: 'Mimoriadnosti',
+  alertsAria: 'Mimoriadnosti na trati',
+  alertsEmpty: 'Teraz žiadne mimoriadnosti.',
+  alertsSource: 'Zdroj: ZSSK mimoriadnosti',
+  alertsGroupClosures: 'Výluky',
+  alertsGroupCancelled: 'Odrieknuté vlaky',
+  alertsGroupDelays: 'Meškania',
+  alertsGroupNotes: 'Upozornenia',
+  alertCancelledFull: 'Odrieknutý v celom úseku',
+  alertCancelledSection: (from, to) => `Odrieknutý v úseku ${from} – ${to}`,
+  alertNoReplacement: 'bez náhrady',
+  alertReplacement: (text) => `náhrada: ${text}`,
+  alertDelay: (minutes, station, forecast) =>
+    `${forecast ? 'Predpokladané meškanie' : 'Meškanie'} ${minutes} min zo stanice ${station}`,
+  alertBusReplacement: 'Náhradná autobusová doprava',
+  alertTimeAgo: (minutes) => (minutes < 1 ? 'teraz' : minutes < 60 ? `pred ${minutes} min` : `pred ${Math.round(minutes / 60)} h`),
+  aboutRailatlas: 'O aplikácii Môj Vlak',
   loadingTrains: 'Načítavam vlaky',
   trainsCount: (count) => `${count} vlakov`,
   searchPlaceholder: 'Vyhľadať vlak alebo stanicu',
@@ -137,7 +168,23 @@ const sk: Copy = {
 };
 
 const en: Copy = {
-  aboutRailatlas: 'About railatlas',
+  alertsTitle: 'Disruptions',
+  alertsAria: 'Disruptions on the network',
+  alertsEmpty: 'No disruptions right now.',
+  alertsSource: 'Source: ZSSK disruption notices',
+  alertsGroupClosures: 'Closures',
+  alertsGroupCancelled: 'Cancelled trains',
+  alertsGroupDelays: 'Delays',
+  alertsGroupNotes: 'Notices',
+  alertCancelledFull: 'Cancelled, whole run',
+  alertCancelledSection: (from, to) => `Cancelled between ${from} and ${to}`,
+  alertNoReplacement: 'no replacement',
+  alertReplacement: (text) => `replaced by ${text}`,
+  alertDelay: (minutes, station, forecast) =>
+    `${forecast ? 'Expected delay' : 'Delay'} ${minutes} min from ${station}`,
+  alertBusReplacement: 'Replacement bus service',
+  alertTimeAgo: (minutes) => (minutes < 1 ? 'just now' : minutes < 60 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`),
+  aboutRailatlas: 'About Môj Vlak',
   loadingTrains: 'Loading trains',
   trainsCount: (count) => `${count} trains`,
   searchPlaceholder: 'Search train or station',

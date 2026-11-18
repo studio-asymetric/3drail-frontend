@@ -1,6 +1,9 @@
 import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MapScene } from './components/MapScene';
 import { abbreviationSteps, townOf } from './data/placeName';
+import { applySeo } from './seo';
+import { DisruptionsPanel, describeDisruption } from './components/DisruptionsPanel';
+import { eventsForTrain, fetchDisruptions, type DisruptionPayload } from './data/disruptionService';
 import { DockScroller } from './components/DockScroller';
 import { DockPanelControls } from './components/DockPanelControls';
 import { DockSheetHandle } from './components/DockSheetHandle';
@@ -486,6 +489,14 @@ function boardPillLabel(code?: string): string {
   return match ? `${match[1]} ${match[2]}` : String(code ?? '').trim();
 }
 
+const AlertIcon: React.FC = () => (
+  <svg className="dock__status-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+    <path d="M7 1.8 12.6 11.4H1.4L7 1.8Z" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+    <path d="M7 5.6v2.6" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <circle cx="7" cy="9.7" r="0.7" fill="currentColor" />
+  </svg>
+);
+
 const ClockIcon: React.FC = () => (
   <svg className="dock__status-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
     <circle cx="7" cy="7" r="5.6" stroke="currentColor" strokeWidth="1.2" />
@@ -627,6 +638,8 @@ const App: React.FC = () => {
   const mapViewRef = useRef<MapViewControls | null>(null);
   const [dockLeaving, setDockLeaving] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(bootRoute.about);
+  const [disruptions, setDisruptions] = useState<DisruptionPayload | null>(null);
+  const [alertsOpen, setAlertsOpen] = useState(false);
   const applyingUrlRef = useRef(false);
   const historyIndexRef = useRef(0);
   const lastSerializedRouteRef = useRef(serializeAppRoute(bootRoute));
@@ -1137,6 +1150,44 @@ const App: React.FC = () => {
     applyingUrlRef.current = true;
     handleClearFocus();
   }, [handleClearFocus]);
+  const openAlertTrain = useCallback(
+    (trainNumber: string) => {
+      setAlertsOpen(false);
+      handleTrainClick(trainNumber);
+    },
+    [handleTrainClick]
+  );
+  const openAlertSection = useCallback(
+    (stationName: string) => {
+      setAlertsOpen(false);
+      const at = coordFromDataset(stationName, dataset);
+      if (at) {
+        centerMapOn(at.lng, at.lat, 11);
+      }
+    },
+    [centerMapOn, dataset]
+  );
+
+  // ZSSK mimoriadnosti (cancellations, forecasts, notes, closures): every few minutes.
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer = 0;
+    const load = async () => {
+      const next = await fetchDisruptions(controller.signal);
+      if (next && !controller.signal.aborted) {
+        setDisruptions(next);
+      }
+      if (!controller.signal.aborted) {
+        timer = window.setTimeout(load, 3 * 60 * 1000);
+      }
+    };
+    load();
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   const handleAboutBack = useCallback(() => {
     if (historyIndexRef.current > 0) {
       window.history.back();
@@ -1287,6 +1338,13 @@ const App: React.FC = () => {
   const displayDelayText = focusedTrain
     ? selectedTrainDelayText
     : leaveSnap?.delayText ?? selectedTrainDelayText;
+  const disruptionEvents = disruptions?.events ?? [];
+  // Notices about the opened train; a plain delay is already in the status line.
+  const trainAlerts = eventsForTrain(disruptionEvents, displayTrain?.trainNumber).filter(
+    (event) => event.kind !== 'delay' || event.forecast
+  );
+  const alertBadge = disruptionEvents.filter((event) => event.kind === 'cancel' || event.kind === 'closure').length;
+  const liveTrainNumbers = useMemo(() => new Set(trains.map((train) => train.trainNumber)), [trains]);
   const showDock = Boolean(displayTrain || displayStation || displayAbout);
   const bootLocked = mapBooting || statusKind === 'loading';
 
@@ -1410,6 +1468,21 @@ const App: React.FC = () => {
     displayJourneyStatus === 'ready' && displayStops.length >= 2
       ? { from: displayStops[0].name, to: displayStops[displayStops.length - 1].name }
       : parseSummaryRoute(displayTrain?.summary || displayTrain?.trainName);
+  useEffect(() => {
+    if (displayAbout) {
+      applySeo(locale, { kind: 'about' });
+    } else if (displayTrain) {
+      applySeo(locale, {
+        kind: 'train',
+        label: `${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}${properTrainName ? ` ${properTrainName}` : ''}`,
+        destination: routeEnds?.to ? townOf(routeEnds.to) : '',
+      });
+    } else if (displayStation) {
+      applySeo(locale, { kind: 'station', name: displayStation.name });
+    } else {
+      applySeo(locale, { kind: 'home' });
+    }
+  }, [locale, displayAbout, displayTrain?.trainNumber, displayTrain?.trainType, properTrainName, routeEnds?.to, displayStation?.name]);
   const searchHits = useMemo(() => {
     const query = foldName(searchQuery);
     if (query.length < 1) {
@@ -1514,6 +1587,18 @@ const App: React.FC = () => {
           mapViewRef={mapViewRef}
         />
       </div>
+      {alertsOpen && (
+        <DisruptionsPanel
+          events={disruptionEvents}
+          t={t}
+          liveTrains={liveTrainNumbers}
+          sourceName={disruptions?.source.name ?? ''}
+          sourceUrl={disruptions?.source.url ?? 'https://mastodon.social/@zssk_mimoriadne'}
+          onTrain={openAlertTrain}
+          onSection={openAlertSection}
+          onClose={() => setAlertsOpen(false)}
+        />
+      )}
       <header className="chrome">
         <div className={`chrome__brand ${panelOpen ? 'is-active' : ''}`}>
           <button
@@ -1524,7 +1609,7 @@ const App: React.FC = () => {
             onClick={handleAboutToggle}
           >
             <img src={theme === 'light' ? logoMarkLight : logoMarkDark} alt="" width={17} height={20} />
-            <span>railatlas</span>
+            <span>Môj Vlak</span>
           </button>
           <small className="chrome__brand-meta">
             {loading ? t.loadingTrains : t.trainsCount(trains.length)}
@@ -1721,6 +1806,20 @@ const App: React.FC = () => {
           </button>
           <button
             type="button"
+            className={`chrome__tool chrome__tool--alerts${alertsOpen ? ' is-active' : ''}`}
+            aria-pressed={alertsOpen}
+            aria-label={t.alertsAria}
+            title={t.alertsAria}
+            onClick={() => setAlertsOpen((open) => !open)}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 2 14.2 12.8H1.8L8 2Z" stroke="currentColor" strokeWidth="1.35" strokeLinejoin="round" />
+              <path d="M8 6.6v3M8 11.2h.01" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            {alertBadge > 0 && <span className="chrome__badge">{alertBadge > 9 ? '9+' : alertBadge}</span>}
+          </button>
+          <button
+            type="button"
             className="chrome__tool chrome__theme"
             aria-label={theme === 'dark' ? t.themeToLight : t.themeToDark}
             title={theme === 'dark' ? t.themeLight : t.themeDark}
@@ -1879,6 +1978,16 @@ const App: React.FC = () => {
                     </>
                   )}
                 </p>
+                {trainAlerts.length > 0 && (
+                  <ul className="dock__alerts">
+                    {trainAlerts.map((event) => (
+                      <li key={event.id} className={`dock__alert dock__alert--${event.kind}`}>
+                        <AlertIcon />
+                        <span>{describeDisruption(event, t)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
               {busNotice && (
                 <p className="dock__note dock__bus-notice">

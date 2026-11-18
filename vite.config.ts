@@ -1,8 +1,51 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
+
+/**
+ * The public address of the site, used for the canonical link, social cards, structured data,
+ * robots.txt and the sitemap. Set VITE_SITE_URL when building for another domain.
+ */
+const SITE_URL = (process.env.VITE_SITE_URL ?? 'https://railatlas.eu').replace(/\/+$/, '');
+
+function seoPlugin(): Plugin {
+  return {
+    name: 'seo-site-url',
+    transformIndexHtml: (html) => html.split('%SITE_URL%').join(SITE_URL),
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'robots.txt',
+        source: [
+          'User-agent: *',
+          'Allow: /',
+          'Disallow: /proxy/',
+          'Disallow: /api/',
+          '',
+          `Sitemap: ${SITE_URL}/sitemap.xml`,
+          '',
+        ].join('\n'),
+      });
+      this.emitFile({
+        type: 'asset',
+        fileName: 'sitemap.xml',
+        source: `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${SITE_URL}/</loc>
+    <lastmod>${new Date().toISOString().slice(0, 10)}</lastmod>
+    <changefreq>hourly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>
+`,
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), seoPlugin()],
   build: {
     rollupOptions: {
       output: {

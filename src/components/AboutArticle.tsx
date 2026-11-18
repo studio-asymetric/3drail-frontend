@@ -4,9 +4,9 @@ import type { AppLocale } from '../i18n';
 const AboutArticleEn = () => (
   <article className="about__copy">
     <p>
-      <strong>railatlas</strong> shows live trains on the Slovak network on a tilted MapLibre map.
+      <strong>Môj Vlak</strong> shows live trains on the Slovak network on a tilted MapLibre map.
       Positions, delays, and stop-by-stop journeys sit on OpenStreetMap railway geometry. The
-      background is a custom Railatlas style on OpenFreeMap (OpenMapTiles / OSM) with subdued
+      background is a custom Môj Vlak style on OpenFreeMap (OpenMapTiles / OSM) with subdued
       hillshade from public Mapzen / AWS terrain tiles — no SBB or geOps basemap.
     </p>
     <p>
@@ -21,7 +21,7 @@ const AboutArticleEn = () => (
       Coloured pills are live trains. Open one for the journey list, planned vs actual times, and
       the next stop. Stations open a cp.sk departure or arrival board. The centre search field
       finds trains and stations. Top-right tools: zoom, this about panel (info icon), light / dark
-      theme, and SK / EN language. The railatlas mark in the header opens the same about view.
+      theme, and SK / EN language. The Môj Vlak mark in the header opens the same about view.
     </p>
     <p>
       Pathfinding uses a simplified rail graph so trains snap to tracks. Detailed track geometry
@@ -44,9 +44,9 @@ const AboutArticleEn = () => (
 const AboutArticleSk = () => (
   <article className="about__copy">
     <p>
-      <strong>railatlas</strong> zobrazuje živé vlaky na slovenskej sieti na naklonenej mape
+      <strong>Môj Vlak</strong> zobrazuje živé vlaky na slovenskej sieti na naklonenej mape
       MapLibre. Polohy, meškania a trasa po zastávkach ležia na koľajniciach z OpenStreetMap.
-      Podklad je vlastný štýl Railatlas na OpenFreeMap (OpenMapTiles / OSM) s tlmeným reliéfom z
+      Podklad je vlastný štýl Môj Vlak na OpenFreeMap (OpenMapTiles / OSM) s tlmeným reliéfom z
       verejných dlaždíc Mapzen / AWS — bez podkladu SBB ani geOps.
     </p>
     <p>
@@ -61,7 +61,7 @@ const AboutArticleSk = () => (
       Farebné značky sú živé vlaky. Klik otvorí zoznam zastávok, plánované a skutočné časy a ďalšiu
       zastávku. Stanica ukáže odchody alebo príchody z cp.sk. Stredové vyhľadávanie nájde vlaky aj
       stanice. Vpravo hore: priblíženie, tento panel (ikona info), svetlý / tmavý režim a SK / EN.
-      Logo railatlas v hlavičke otvorí rovnaký text O aplikácii.
+      Logo Môj Vlak v hlavičke otvorí rovnaký text O aplikácii.
     </p>
     <p>
       Pathfinding ide po zjednodušenej grafe, aby vlak sedel na koľajniciach. Detailná geometria sa
@@ -201,7 +201,7 @@ function AboutMapApiDd({ locale }: { locale: AppLocale }) {
       <dl className="about__api">
         <ApiEntry
           path="GET /proxy?mode=style&theme=light|dark"
-          text="Vlastný MapLibre štýl Railatlas (OpenFreeMap, tlmený reliéf)."
+          text="Vlastný MapLibre štýl Môj Vlak (OpenFreeMap, tlmený reliéf)."
         />
         <ApiEntry path="GET /proxy/maptiler/{path}" text="Proxy OpenFreeMap dlaždice, fonty a terén." />
         <ApiEntry path="GET /proxy?mode=osm&level=network" text="Zjednodušená sieť pre pathfinding." />
@@ -213,7 +213,7 @@ function AboutMapApiDd({ locale }: { locale: AppLocale }) {
     <dl className="about__api">
       <ApiEntry
         path="GET /proxy?mode=style&theme=light|dark"
-        text="Custom MapLibre Railatlas style (OpenFreeMap, subdued terrain)."
+        text="Custom MapLibre Môj Vlak style (OpenFreeMap, subdued terrain)."
       />
       <ApiEntry path="GET /proxy/maptiler/{path}" text="Proxied OpenFreeMap tiles, fonts, and terrain." />
       <ApiEntry path="GET /proxy?mode=osm&level=network" text="Simplified rail graph for pathfinding." />

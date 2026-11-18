@@ -1574,7 +1574,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     });
     mapRef.current = map;
     if (import.meta.env.DEV) {
-      (window as unknown as { __railMap?: MapLibreMap }).__railMap = map;
+      const debug = window as unknown as { __railMap?: MapLibreMap; __railEntries?: Map<string, TrainMarkerEntry> };
+      debug.__railMap = map;
+      debug.__railEntries = trainMarkersRef.current;
     }
     lockMapNorthUp(map);
     // The further out the map is, the wider the screen is compared to the country: let the
@@ -2060,6 +2062,11 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     const live = trains.find((train) => train.trainNumber === focused)?.position;
     const entry = trainMarkersRef.current.get(focused);
     if (!entry || !live) {
+      return;
+    }
+    // A train the timetable model moves is already where it should be; putting it on its last
+    // reported point here made the pill jump back there until the model's next tick.
+    if (entry.journeyActive) {
       return;
     }
     if (entry.motionRequestId) {

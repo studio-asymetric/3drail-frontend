@@ -1,0 +1,27 @@
+{
+  "name": "Môj Vlak – živá poloha vlakov",
+  "short_name": "Môj Vlak",
+  "description": "Živá poloha vlakov ZSSK na mape Slovenska, meškania, zastávky a mimoriadnosti.",
+  "lang": "sk",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "id": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#131313",
+  "theme_color": "#131313",
+  "categories": [
+    "travel",
+    "transportation",
+    "navigation"
+  ],
+  "icons": [
+    {
+      "src": "/logo icon white.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
