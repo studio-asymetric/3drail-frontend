@@ -1,9 +1,9 @@
-# Coolify compose for railatlas.eu (SFTP + bind mounts)
+# Coolify compose for mojvlak.sk (SFTP + bind mounts)
 
 Upload these to the server before deploying:
 
 ```text
-/var/www/railatlas.eu/              ← dist/ contents (index.html, assets/, …)
+/var/www/mojvlak.sk/              ← dist/ contents (index.html, assets/, …)
 /var/www/railatlas-proxy/*.mjs      ← ALL of repo proxy/*.mjs (server.mjs imports its siblings,
                                         e.g. trainDetail.mjs, mimoriadnosti.mjs)
 /var/www/railatlas-proxy/osm-cache/ ← from repo proxy/osm-cache/ (optional warm cache)
@@ -19,7 +19,7 @@ services:
     depends_on:
       - proxy
     volumes:
-      - '/var/www/railatlas.eu:/usr/share/nginx/html:ro'
+      - '/var/www/mojvlak.sk:/usr/share/nginx/html:ro'
       - '/var/www/railatlas-nginx.conf:/etc/nginx/conf.d/default.conf:ro'
     ports:
       - '80'
@@ -44,8 +44,8 @@ services:
 ## Verify
 
 ```bash
-curl -s https://railatlas.eu/proxy | head -c 200
-curl -s "https://railatlas.eu/proxy?mode=osm&minLat=47.73&maxLat=48.73&minLng=16.83&maxLng=17.83&level=coarse" | head -c 200
+curl -s https://mojvlak.sk/proxy | head -c 200
+curl -s "https://mojvlak.sk/proxy?mode=osm&minLat=47.73&maxLat=48.73&minLng=16.83&maxLng=17.83&level=coarse" | head -c 200
 ```
 
 Both should return JSON, not HTML or 404.
@@ -56,4 +56,4 @@ Both should return JSON, not HTML or 404.
 npm run build
 ```
 
-Upload **contents** of `dist/` into `/var/www/railatlas.eu/` (flat, not nested).
+Upload **contents** of `dist/` into `/var/www/mojvlak.sk/` (flat, not nested).

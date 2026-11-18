@@ -6,7 +6,7 @@ import react from '@vitejs/plugin-react';
  * The public address of the site, used for the canonical link, social cards, structured data,
  * robots.txt and the sitemap. Set VITE_SITE_URL when building for another domain.
  */
-const SITE_URL = (process.env.VITE_SITE_URL ?? 'https://railatlas.eu').replace(/\/+$/, '');
+const SITE_URL = (process.env.VITE_SITE_URL ?? 'https://mojvlak.sk').replace(/\/+$/, '');
 
 function seoPlugin(): Plugin {
   return {

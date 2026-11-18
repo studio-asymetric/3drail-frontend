@@ -85,10 +85,13 @@ const MIME_TYPES = {
   '.wasm': 'application/wasm',
 };
 
+const PRIMARY_ORIGIN = 'https://mojvlak.sk';
 const CANONICAL_ORIGINS = {
-  'railatlas.eu': 'https://railatlas.eu',
-  'www.railatlas.eu': 'https://railatlas.eu',
+  'mojvlak.sk': PRIMARY_ORIGIN,
+  'www.mojvlak.sk': PRIMARY_ORIGIN,
 };
+// The old brand's domain: everything on it moves permanently to the new one.
+const LEGACY_HOSTS = new Set(['railatlas.eu', 'www.railatlas.eu']);
 
 function hostnameOf(hostHeader) {
   return String(hostHeader ?? '')
@@ -118,6 +121,11 @@ function redirectIfNotCanonical(req, res, reqUrl) {
   const isIndexFile = reqUrl.pathname === '/index.html' || reqUrl.pathname === '/index.htm';
   const pathname = isIndexFile ? '/' : reqUrl.pathname;
   const origin = CANONICAL_ORIGINS[host];
+
+  if (LEGACY_HOSTS.has(host)) {
+    sendRedirect(res, `${PRIMARY_ORIGIN}${pathname}${reqUrl.search}`);
+    return true;
+  }
 
   if (isLocalHostname(host)) {
     if (isIndexFile) {

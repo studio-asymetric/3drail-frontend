@@ -7,6 +7,9 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+# The public address (canonical link, sitemap, social cards); Coolify can override it.
+ARG VITE_SITE_URL=https://mojvlak.sk
+ENV VITE_SITE_URL=$VITE_SITE_URL
 RUN npm run build
 
 FROM node:22-alpine
