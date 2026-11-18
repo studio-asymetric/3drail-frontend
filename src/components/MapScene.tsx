@@ -153,15 +153,18 @@ const SIMPLIFIED_RAIL_FADE: ExpressionSpecification = [
   13.4,
   0,
 ];
-/** The full track network (sidings, yards, tunnels) starts fading in here. */
-const BASEMAP_RAIL_MIN_ZOOM = 7;
+/**
+ * The tiles' main lines take over from our own (simplified) rails, which fade out from 12.4.
+ * Below that both were drawn on top of each other: the same line twice, for nothing.
+ */
+const BASEMAP_RAIL_MIN_ZOOM = 11.8;
 const BASEMAP_RAIL_FADE: ExpressionSpecification = [
   'interpolate',
   ['linear'],
   ['zoom'],
   BASEMAP_RAIL_MIN_ZOOM,
   0,
-  11,
+  12.5,
   1,
 ];
 /**
@@ -469,12 +472,7 @@ function lockMapNorthUp(map: MapLibreMap) {
   map.keyboard.disableRotation();
 }
 
-const STATION_HIT_LAYERS = [
-  'stations-halo',
-  'stations-casing',
-  'stations-fill',
-  'stations-selected',
-];
+const STATION_HIT_LAYERS = ['stations-halo', 'stations-dot'];
 const STATION_DOT_MIN_ZOOM = 10.6;
 /** Dots and labels go from invisible to full over this many zoom levels. */
 const STATION_FADE_ZOOM = 0.8;
@@ -716,6 +714,9 @@ function publishSimplifiedRails(map: MapLibreMap | null, ways: OSMWay[]) {
   );
 }
 
+/** Station features by id, for the one-feature source that draws the selected station. */
+const stationFeatureById = new Map<string, FeatureCollection['features'][number]>();
+
 function applyStationSelection(
   map: MapLibreMap | null,
   nextId: string | null | undefined,
@@ -724,6 +725,8 @@ function applyStationSelection(
   if (!map) {
     return previousId;
   }
+  const selected = nextId ? stationFeatureById.get(nextId) : undefined;
+  setSourceData(map, 'station-selected', selected ? { type: 'FeatureCollection', features: [selected] } : EMPTY_COLLECTION);
   if (previousId && previousId !== nextId) {
     try {
       map.setFeatureState({ source: 'stations', id: previousId }, { selected: false });
@@ -1004,6 +1007,8 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
 
   ensureSource('stations', { maxzoom: 14, tolerance: 0, buffer: 16, promoteId: 'id' });
   ensureSource('stations-hover', { maxzoom: 16, tolerance: 0, buffer: 64 });
+  // Just the selected station, so its ring and label do not need a copy of every station.
+  ensureSource('station-selected', { maxzoom: 16, tolerance: 0, buffer: 64 });
   ensureSource('rails-highlight', { maxzoom: 16, tolerance: 0.35 });
   ensureSource('rails-highlight-bus', { maxzoom: 16, tolerance: 0.35 });
   ensureSource('rails-simplified-main', { maxzoom: 14, tolerance: RAIL_TILE_TOLERANCE });
@@ -1039,7 +1044,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     }
     map.addLayer(layer);
   };
-  for (const legacy of ['stations-label-selected', 'stations-label-hover']) {
+  for (const legacy of ['stations-label-selected', 'stations-label-hover', 'stations-casing', 'stations-fill']) {
     if (map.getLayer(legacy)) {
       map.removeLayer(legacy);
     }
@@ -1068,14 +1073,6 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     0,
     1,
   ];
-  const showSelectedUnlessHovered: ExpressionSpecification = [
-    'case',
-    ['boolean', ['feature-state', 'hover'], false],
-    0,
-    ['boolean', ['feature-state', 'selected'], false],
-    1,
-    0,
-  ];
 
   upsertLayer({
     id: 'stations-halo',
@@ -1097,20 +1094,10 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       'circle-pitch-alignment': 'map',
     },
   });
+  // The dark ring and the light dot in one layer (a circle with a stroke): one pass over
+  // all stations instead of two.
   upsertLayer({
-    id: 'stations-casing',
-    type: 'circle',
-    source: 'stations',
-    minzoom: STATION_DOT_MIN_ZOOM,
-    paint: {
-      'circle-radius': stationCircleRadius([3.2, 3.6, 4.8, 1.18]),
-      'circle-color': casingColor,
-      'circle-opacity': stationFade(1),
-      'circle-pitch-alignment': 'map',
-    },
-  });
-  upsertLayer({
-    id: 'stations-fill',
+    id: 'stations-dot',
     type: 'circle',
     source: 'stations',
     minzoom: STATION_DOT_MIN_ZOOM,
@@ -1118,19 +1105,22 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       'circle-radius': stationCircleRadius([2.2, 2.5, 3.35, 1.18]),
       'circle-color': fillColor,
       'circle-opacity': stationFade(1),
+      'circle-stroke-width': stationCircleRadius([1.0, 1.1, 1.45, 1.18]),
+      'circle-stroke-color': casingColor,
+      'circle-stroke-opacity': stationFade(1),
       'circle-pitch-alignment': 'map',
     },
   });
   upsertLayer({
     id: 'stations-selected',
     type: 'circle',
-    source: 'stations',
+    source: 'station-selected',
     minzoom: STATION_DOT_MIN_ZOOM,
     paint: {
-      'circle-radius': stationCircleRadius([5, 6.2, 8, 1.08]),
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 5, 12.8, 5, 14, 6.2, 16, 8],
       'circle-color': '#fddf57',
-      'circle-opacity': ['case', ['boolean', ['feature-state', 'selected'], false], 1, 0],
-      'circle-stroke-width': ['case', ['boolean', ['feature-state', 'selected'], false], 2, 0],
+      'circle-opacity': 1,
+      'circle-stroke-width': 2,
       'circle-stroke-color': casingColor,
       'circle-pitch-alignment': 'map',
     },
@@ -1162,7 +1152,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     upsertLayer({
       id: `stations-label-selected-${name}`,
       type: 'symbol',
-      source: 'stations',
+      source: 'station-selected',
       minzoom: STATION_DOT_MIN_ZOOM,
       filter: ['==', ['get', 'rank'], rank],
       layout: {
@@ -1171,7 +1161,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
         'text-allow-overlap': true,
         'text-ignore-placement': true,
       },
-      paint: { ...labelPaint, 'text-opacity': showSelectedUnlessHovered },
+      paint: labelPaint,
     });
   });
   labelRanks.forEach(([rank, name]) => {
@@ -1661,6 +1651,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       scheduleTrainMarkers();
     });
     map.on('zoomend', () => {
+      scheduleTrainMarkers();
+    });
+    // Pills are packed only near the screen: after a pan, pack the ones that came into view.
+    map.on('moveend', () => {
       scheduleTrainMarkers();
     });
     let hoveredStationId: string | null = null;
@@ -2191,22 +2185,38 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     });
     const zoom = map.getZoom();
     const packIterations = packingIterationsForZoom(zoom);
-    const spread =
-      packIterations === 0
-        ? measured
-        : spreadOverlappingTrainPoints(
-            measured,
-            (lng, lat) => map.project([lng, lat]),
-            (x, y) => {
-              const lngLat = map.unproject([x, y]);
-              return { lng: lngLat.lng, lat: lngLat.lat };
-            },
-            {
-              radius: trainPillRadius(false),
-              selectedRadius: trainPillRadius(true),
-              iterations: packIterations,
-            }
-          );
+    // Only pills on (or just off) screen can overlap anything the user sees: packing all
+    // ~130 trains on every zoom frame and every live tick was the costliest work per frame.
+    let spread = measured;
+    if (packIterations > 0) {
+      const { clientWidth: viewWidth, clientHeight: viewHeight } = map.getContainer();
+      const margin = 80;
+      const near: typeof measured = [];
+      const far: typeof measured = [];
+      measured.forEach((point) => {
+        const at = map.project([point.lng, point.lat]);
+        (at.x > -margin && at.y > -margin && at.x < viewWidth + margin && at.y < viewHeight + margin ? near : far).push(point);
+      });
+      spread =
+        near.length < 2
+          ? measured
+          : [
+              ...spreadOverlappingTrainPoints(
+                near,
+                (lng, lat) => map.project([lng, lat]),
+                (x, y) => {
+                  const lngLat = map.unproject([x, y]);
+                  return { lng: lngLat.lng, lat: lngLat.lat };
+                },
+                {
+                  radius: trainPillRadius(false),
+                  selectedRadius: trainPillRadius(true),
+                  iterations: packIterations,
+                }
+              ),
+              ...far,
+            ];
+    }
     if (!trainCanvasRef.current) {
       trainCanvasRef.current = new TrainCanvasLayer(map, (trainId) => onTrainClickRef.current?.(trainId));
     }
@@ -2278,10 +2288,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       ),
       (stop) => stop.tripCount ?? tripCountByStop.get(stop.stopId) ?? 0
     );
-    setSourceData(
-      map,
-      'stations',
-      pointsToCollection(
+    const stationCollection = pointsToCollection(
         stops.map((stop) => ({
           id: stop.stopId,
           name: stop.name,
@@ -2293,8 +2300,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
             stop.tripCount ?? tripCountByStop.get(stop.stopId) ?? 0
           ),
         }))
-      )
-    );
+      );
+    stationFeatureById.clear();
+    stationCollection.features.forEach((feature) => stationFeatureById.set(String(feature.properties?.id ?? feature.id), feature));
+    setSourceData(map, 'stations', stationCollection);
     selectedStationRef.current = applyStationSelection(
       map,
       focusedStationIdRef.current,
