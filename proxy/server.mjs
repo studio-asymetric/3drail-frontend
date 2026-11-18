@@ -81,6 +81,7 @@ const MIME_TYPES = {
   '.xml': 'application/xml; charset=utf-8',
   '.pbf': 'application/x-protobuf',
   '.woff2': 'font/woff2',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.wasm': 'application/wasm',
 };
 

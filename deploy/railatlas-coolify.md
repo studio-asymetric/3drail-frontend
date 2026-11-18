@@ -4,7 +4,8 @@ Upload these to the server before deploying:
 
 ```text
 /var/www/railatlas.eu/              ← dist/ contents (index.html, assets/, …)
-/var/www/railatlas-proxy/server.mjs ← from repo proxy/server.mjs
+/var/www/railatlas-proxy/*.mjs      ← ALL of repo proxy/*.mjs (server.mjs imports its siblings,
+                                        e.g. trainDetail.mjs, mimoriadnosti.mjs)
 /var/www/railatlas-proxy/osm-cache/ ← from repo proxy/osm-cache/ (optional warm cache)
 /var/www/railatlas-nginx.conf       ← from repo deploy/railatlas-nginx.conf
 ```
