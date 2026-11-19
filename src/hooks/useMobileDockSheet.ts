@@ -11,8 +11,11 @@ import {
 const FLICK_CLOSE_VELOCITY = 0.42;
 const FLICK_OPEN_VELOCITY = -0.42;
 const LIST_TOP_EPSILON = 2;
-/** Two timeline rows (40 px each) plus the list's own padding and border, as the sheet needs it. */
-const COLLAPSED_LIST_PX = 104;
+/**
+ * Two timeline rows (40 px each) plus the list's own border (1), top padding (13) and the
+ * stops' top padding (4): the collapsed list runs straight to the sheet's bottom edge.
+ */
+const COLLAPSED_LIST_PX = 98;
 const LIST_SCROLL_SLOP_PX = 6;
 /** Sheet height progress above this reveals list content while dragging open. */
 export const SHEET_CONTENT_REVEAL = 0.08;
@@ -60,6 +63,8 @@ export function useMobileDockSheet(
   const [dragging, setDragging] = useState(false);
   const [settling, setSettling] = useState(false);
   const [listAtTop, setListAtTop] = useState(true);
+  /** Bumped when the measured sheet heights change, so the height style is recomputed. */
+  const [, setMetricsVersion] = useState(0);
 
   const applyProgress = useCallback(
     (value: number) => {
@@ -97,19 +102,35 @@ export function useMobileDockSheet(
     }
     const viewport = window.visualViewport?.height ?? window.innerHeight;
     const expandedPx = Math.min(viewport * 0.72, viewport - 44 - 8);
-    // A train's collapsed sheet is its header plus the last and next stop; a station's is its peek.
+    // A train's collapsed sheet is everything above the list (header and any notes under it,
+    // e.g. "delayed before departure") plus the last and next stop; a station's is its peek.
     const head = dock.querySelector('.dock__body--train .dock__head') as HTMLElement | null;
+    const sheetMain = dock.querySelector('.dock__body--train .dock__sheet-main') as HTMLElement | null;
+    const pane = sheetMain?.querySelector(':scope > .dock__pane') as HTMLElement | null;
+    const aboveList =
+      sheetMain && pane && pane.offsetParent === sheetMain.offsetParent
+        ? pane.offsetTop - sheetMain.offsetTop
+        : head?.offsetHeight ?? 0;
     const collapsed =
-      (head ? head.offsetHeight + COLLAPSED_LIST_PX : peek?.offsetHeight ?? 0) +
+      (head ? aboveList + COLLAPSED_LIST_PX : peek?.offsetHeight ?? 0) +
       (handle?.offsetHeight ?? 0) +
       (parseFloat(getComputedStyle(body).paddingTop) || 0) +
       (parseFloat(getComputedStyle(body).paddingBottom) || 0);
     const safeCollapsed = Math.max(collapsed, 112);
+    const previous = metricsRef.current;
     metricsRef.current = {
       collapsed: safeCollapsed,
       expanded: Math.max(expandedPx, safeCollapsed + 120),
       travel: Math.max(expandedPx - safeCollapsed, 120),
     };
+    // The sheet's height is computed from these while rendering: re-render when they moved
+    // (a note appeared above the list, the header wrapped), or the old height stays.
+    if (
+      Math.abs(previous.collapsed - safeCollapsed) >= 0.5 ||
+      Math.abs(previous.expanded - metricsRef.current.expanded) >= 0.5
+    ) {
+      setMetricsVersion((version) => version + 1);
+    }
   }, [enabled]);
 
   const cancelSettle = useCallback(() => {
@@ -161,12 +182,27 @@ export function useMobileDockSheet(
     if (!dock) {
       return;
     }
+    // The dock's own height is fixed by the sheet, so a header that wraps or a note that appears
+    // (they sit above the list) does not resize it: watch those directly, and re-pick them when
+    // the sheet's content changes.
     const observer = new ResizeObserver(() => measure());
     observer.observe(dock);
+    const watchAbove = () => {
+      dock
+        .querySelectorAll('.dock__body--train .dock__sheet-main > :not(.dock__pane)')
+        .forEach((node) => observer.observe(node));
+    };
+    watchAbove();
+    const mutations = new MutationObserver(() => {
+      watchAbove();
+      measure();
+    });
+    mutations.observe(dock, { childList: true, subtree: true, characterData: true });
     window.visualViewport?.addEventListener('resize', measure);
     window.addEventListener('resize', measure);
     return () => {
       observer.disconnect();
+      mutations.disconnect();
       window.visualViewport?.removeEventListener('resize', measure);
       window.removeEventListener('resize', measure);
     };

@@ -2253,6 +2253,21 @@ body,
     gap: 0;
   }
 
+  /* A train's collapsed timeline runs straight to the bottom of the viewport: no padding
+     under it. When the sheet is open the operator row is the last thing, so the bottom
+     spacing (and the safe area) lives under that row instead. */
+  .dock__body--train {
+    padding-bottom: 0;
+  }
+
+  .dock__body--train .dock__pane {
+    padding-bottom: 0;
+  }
+
+  .dock__body--train .dock__facts {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
   .dock--expanded .dock__body {
     padding-top: 4px;
     gap: 10px;
@@ -2352,9 +2367,20 @@ body,
     bottom: calc(100% + 10px);
     transform: translateX(-50%);
     z-index: 5;
+    transition: opacity var(--dur) var(--ease);
   }
 
+  /* Only the open sheet offers "Sledovať"; while collapsed it stays out of the way, unless the
+     train is being followed, so that can still be stopped. */
+  .dock--collapsed .dock__follow-float:not(:has(.dock__follow.is-active)) {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* A bigger target for a thumb: the floating follow button is the main action on the map. */
   .dock__follow-float .dock__follow {
+    padding: 9px 20px;
+    font-size: 13px;
     background: var(--ui-card);
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
   }
