@@ -65,6 +65,7 @@ import {
 import { STATION_FOCUS_ZOOM } from '../data/viewConstants';
 import { PILL_HEIGHT, TrainCanvasLayer } from './trainCanvas';
 import { screenProjection } from '../data/screenProjection';
+import { PERF_HUD, perfAdd, startPerfHud } from '../perfHud';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
 import {
   clipWaysToOutline,
@@ -1647,6 +1648,20 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     };
     map.on('style.load', handleStyleReady);
     map.on('load', handleStyleReady);
+    if (PERF_HUD) {
+      // `?perf` only: time MapLibre's own frame (CPU side) next to ours.
+      const internal = map as unknown as { _render: (...args: unknown[]) => unknown };
+      const render = internal._render.bind(map);
+      internal._render = (...args: unknown[]) => {
+        const start = performance.now();
+        try {
+          return render(...args);
+        } finally {
+          perfAdd('map', performance.now() - start);
+        }
+      };
+      startPerfHud();
+    }
     map.on('styledata', () => {
       if (map.style && map.getLayer('background_fill') && !map.getSource('stations')) {
         handleStyleReady();
@@ -2151,6 +2166,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     if (!mapReadyRef.current || !map) {
       return;
     }
+    const perfStart = PERF_HUD ? performance.now() : 0;
     try {
     const points = trainPointsRef.current;
     const live = trainMarkersRef.current;
@@ -2274,6 +2290,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     });
     } catch (error) {
       console.error('Failed to publish train pills', error);
+    } finally {
+      if (PERF_HUD) {
+        perfAdd('publish', performance.now() - perfStart);
+      }
     }
   };
 

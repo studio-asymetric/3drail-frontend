@@ -193,16 +193,29 @@ export function useMobileDockSheet(
         .forEach((node) => observer.observe(node));
     };
     watchAbove();
+    // Only nodes coming or going above the list matter (a note appearing); text changes resize
+    // the watched elements and reach the ResizeObserver. Batched to one measure per frame, since
+    // measuring forces a layout.
+    let pending = 0;
     const mutations = new MutationObserver(() => {
-      watchAbove();
-      measure();
+      if (pending) {
+        return;
+      }
+      pending = window.requestAnimationFrame(() => {
+        pending = 0;
+        watchAbove();
+        measure();
+      });
     });
-    mutations.observe(dock, { childList: true, subtree: true, characterData: true });
+    mutations.observe(dock, { childList: true, subtree: true });
     window.visualViewport?.addEventListener('resize', measure);
     window.addEventListener('resize', measure);
     return () => {
       observer.disconnect();
       mutations.disconnect();
+      if (pending) {
+        window.cancelAnimationFrame(pending);
+      }
       window.visualViewport?.removeEventListener('resize', measure);
       window.removeEventListener('resize', measure);
     };

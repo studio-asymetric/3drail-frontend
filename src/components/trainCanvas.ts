@@ -3,6 +3,7 @@ import { contrastInk } from '../data/trainService';
 import { stadiumEdgePoint, TRAIN_ARROW_INSET_PX } from '../data/trainPill';
 import { RENDER_PIXEL_RATIO } from '../perf';
 import { screenProjection } from '../data/screenProjection';
+import { PERF_HUD, perfAdd, perfSet } from '../perfHud';
 
 /**
  * Train pills drawn on one canvas above the map.
@@ -43,7 +44,18 @@ const HIT_PAD_TOUCH = 14;
 /** How quickly pills settle after a neighbour moved them (time constant, seconds). */
 const SPREAD_EASE_SECONDS = 0.055;
 
-type Sprite = { canvas: HTMLCanvasElement; width: number; height: number; pillWidth: number };
+/**
+ * Every pill and arrow is painted once into one shared atlas canvas and copied from there.
+ * Separate tiny canvases per sprite are not GPU-backed on Android Chrome, so each frame had to
+ * upload a couple of hundred little bitmaps; one big atlas is a single GPU texture.
+ */
+const ATLAS_CSS_WIDTH = 512;
+const ATLAS_CSS_HEIGHT = 1024;
+const ATLAS_GAP = 2;
+
+/** A cell in the atlas (device px), valid while `gen` matches the atlas generation. */
+type AtlasImage = { sx: number; sy: number; sw: number; sh: number; gen: number };
+type Sprite = AtlasImage & { width: number; height: number; pillWidth: number };
 
 export class TrainCanvasLayer {
   private map: MapLibreMap;
@@ -53,7 +65,9 @@ export class TrainCanvasLayer {
   /** Draw order (selected and hovered last), rebuilt only when pills, selection or hover change. */
   private ordered: CanvasPill[] = [];
   private sprites = new Map<string, Sprite>();
-  private arrows = new Map<number, HTMLCanvasElement>();
+  private arrows = new Map<number, AtlasImage>();
+  private atlas: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; x: number; y: number; row: number } | null = null;
+  private atlasGen = 0;
   private hovered: string | null = null;
   private dpr = 1;
   private frame = 0;
@@ -97,8 +111,7 @@ export class TrainCanvasLayer {
     map.getContainer().addEventListener('mouseleave', this.handleLeave);
     // Re-draw once the web font is ready so the labels use Geist.
     document.fonts?.ready.then(() => {
-      this.sprites.clear();
-      this.arrows.clear();
+      this.resetAtlas();
       this.requestDraw();
     });
     this.handleResize();
@@ -181,6 +194,17 @@ export class TrainCanvasLayer {
     this.draw();
   };
 
+  private draw() {
+    if (!PERF_HUD) {
+      this.paint();
+      return;
+    }
+    const start = performance.now();
+    this.paint();
+    perfAdd('pills', performance.now() - start);
+    perfSet('drawn', this.boxes.length);
+  }
+
   private handleResize = () => {
     const container = this.map.getContainer();
     this.dpr = RENDER_PIXEL_RATIO;
@@ -190,8 +214,7 @@ export class TrainCanvasLayer {
     this.canvas.height = Math.round(height * this.dpr);
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${height}px`;
-    this.sprites.clear();
-    this.arrows.clear();
+    this.resetAtlas();
     this.requestDraw();
   };
 
@@ -248,17 +271,67 @@ export class TrainCanvasLayer {
     });
   }
 
+  /**
+   * Reserve a cell in the atlas (device px) and set `ctx` up to paint into it in CSS px. A full
+   * atlas is wiped and every cached sprite dropped (`atlasGen` moves on); callers holding a
+   * sprite from before must fetch it again.
+   */
+  private atlasCell(cssWidth: number, cssHeight: number): { ctx: CanvasRenderingContext2D; sx: number; sy: number; sw: number; sh: number } {
+    const sw = Math.ceil(cssWidth * this.dpr);
+    const sh = Math.ceil(cssHeight * this.dpr);
+    if (!this.atlas) {
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(ATLAS_CSS_WIDTH * this.dpr);
+      canvas.height = Math.ceil(ATLAS_CSS_HEIGHT * this.dpr);
+      this.atlas = { canvas, ctx: canvas.getContext('2d')!, x: 0, y: 0, row: 0 };
+    }
+    let atlas = this.atlas;
+    if (atlas.x + sw > atlas.canvas.width) {
+      atlas.x = 0;
+      atlas.y += atlas.row + ATLAS_GAP;
+      atlas.row = 0;
+    }
+    if (atlas.y + sh > atlas.canvas.height) {
+      // Full (rare: only many distinct types/colours/headings over a long session): start over.
+      atlas.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      atlas.ctx.clearRect(0, 0, atlas.canvas.width, atlas.canvas.height);
+      atlas.x = 0;
+      atlas.y = 0;
+      atlas.row = 0;
+      this.sprites.clear();
+      this.arrows.clear();
+      this.atlasGen += 1;
+      atlas = this.atlas;
+    }
+    const sx = atlas.x;
+    const sy = atlas.y;
+    atlas.x += sw + ATLAS_GAP;
+    atlas.row = Math.max(atlas.row, sh);
+    const ctx = atlas.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(sx, sy, sw, sh);
+    ctx.clip();
+    ctx.translate(sx, sy);
+    ctx.scale(sw / cssWidth, sh / cssHeight);
+    return { ctx, sx, sy, sw, sh };
+  }
+
+  private resetAtlas() {
+    this.atlas = null;
+    this.sprites.clear();
+    this.arrows.clear();
+    this.atlasGen += 1;
+  }
+
   /** White heading arrow for one 10° step, base at the sprite's centre, tip pointing along the heading. */
-  private arrowSprite(step: number): HTMLCanvasElement {
+  private arrowSprite(step: number): AtlasImage {
     const cached = this.arrows.get(step);
     if (cached) {
       return cached;
     }
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.ceil(ARROW_BOX * this.dpr);
-    canvas.height = canvas.width;
-    const ctx = canvas.getContext('2d')!;
-    ctx.scale(canvas.width / ARROW_BOX, canvas.height / ARROW_BOX);
+    const { ctx, sx, sy, sw, sh } = this.atlasCell(ARROW_BOX, ARROW_BOX);
     ctx.translate(ARROW_BOX / 2, ARROW_BOX / 2);
     ctx.rotate((step * ARROW_STEP_DEG * Math.PI) / 180);
     ctx.beginPath();
@@ -268,8 +341,10 @@ export class TrainCanvasLayer {
     ctx.closePath();
     ctx.fillStyle = '#fff';
     ctx.fill();
-    this.arrows.set(step, canvas);
-    return canvas;
+    ctx.restore();
+    const arrow = { sx, sy, sw, sh, gen: this.atlasGen };
+    this.arrows.set(step, arrow);
+    return arrow;
   }
 
   private sprite(pill: CanvasPill, hovered: boolean): Sprite {
@@ -287,11 +362,7 @@ export class TrainCanvasLayer {
     const margin = ring + shadow + 2;
     const width = pillWidth + margin * 2;
     const height = PILL_HEIGHT + margin * 2;
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.ceil(width * this.dpr);
-    canvas.height = Math.ceil(height * this.dpr);
-    const ctx = canvas.getContext('2d')!;
-    ctx.scale(this.dpr, this.dpr);
+    const { ctx, sx, sy, sw, sh } = this.atlasCell(width, height);
     const x = margin;
     const y = margin;
     const r = PILL_HEIGHT / 2;
@@ -329,12 +400,13 @@ export class TrainCanvasLayer {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(pill.type, x + pillWidth / 2, y + PILL_HEIGHT / 2 + 0.5);
-    const sprite = { canvas, width, height, pillWidth };
+    ctx.restore();
+    const sprite = { sx, sy, sw, sh, gen: this.atlasGen, width, height, pillWidth };
     this.sprites.set(key, sprite);
     return sprite;
   }
 
-  private draw() {
+  private paint() {
     const ctx = this.ctx;
     const { width, height } = this.canvas;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -377,21 +449,40 @@ export class TrainCanvasLayer {
         continue;
       }
       const hovered = pill.id === this.hovered;
-      const sprite = this.sprite(pill, hovered);
+      let sprite = this.sprite(pill, hovered);
       const cx = Math.round(px);
       const cy = Math.round(py);
       if (pill.heading != null && Number.isFinite(pill.heading)) {
         const step = ((Math.round(pill.heading / ARROW_STEP_DEG) % ARROW_STEPS) + ARROW_STEPS) % ARROW_STEPS;
+        const arrow = this.arrowSprite(step);
+        if (sprite.gen !== this.atlasGen) {
+          // The arrow filled the atlas and wiped it: paint the pill again.
+          sprite = this.sprite(pill, hovered);
+        }
         const { x, y } = stadiumEdgePoint(sprite.pillWidth, PILL_HEIGHT, step * ARROW_STEP_DEG, TRAIN_ARROW_INSET_PX);
         ctx.drawImage(
-          this.arrowSprite(step),
+          this.atlas!.canvas,
+          arrow.sx,
+          arrow.sy,
+          arrow.sw,
+          arrow.sh,
           Math.round(cx + x - ARROW_BOX / 2),
           Math.round(cy + y - ARROW_BOX / 2),
           ARROW_BOX,
           ARROW_BOX
         );
       }
-      ctx.drawImage(sprite.canvas, cx - sprite.width / 2, cy - sprite.height / 2, sprite.width, sprite.height);
+      ctx.drawImage(
+        this.atlas!.canvas,
+        sprite.sx,
+        sprite.sy,
+        sprite.sw,
+        sprite.sh,
+        cx - sprite.width / 2,
+        cy - sprite.height / 2,
+        sprite.width,
+        sprite.height
+      );
       boxes.push({
         id: pill.id,
         x: cx - sprite.pillWidth / 2,
