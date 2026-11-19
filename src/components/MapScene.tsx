@@ -64,6 +64,7 @@ import {
 } from '../data/journeyService';
 import { STATION_FOCUS_ZOOM } from '../data/viewConstants';
 import { PILL_HEIGHT, TrainCanvasLayer } from './trainCanvas';
+import { screenProjection } from '../data/screenProjection';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
 import {
   clipWaysToOutline,
@@ -1338,6 +1339,11 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const publishTrainMarkersRef = useRef<() => void>(() => undefined);
   const trainMarkersRef = useRef<Map<string, TrainMarkerEntry>>(new Map());
   const trainCanvasRef = useRef<TrainCanvasLayer | null>(null);
+  /** Last overlap-packing result (each pill's push from its true spot, degrees) and when it ran. */
+  const trainPackOffsetsRef = useRef<Map<string, { dLng: number; dLat: number }>>(new Map());
+  const trainPackAtRef = useRef(0);
+  /** Set after a pan or zoom: the next position tick refreshes every train, not just those near the view. */
+  const trainSweepDueRef = useRef(true);
   const lastTrainPositionsRef = useRef<Map<string, { lat: number; lng: number }>>(new Map());
   const trainNodeStampRef = useRef<Map<string, string>>(new Map());
   const lastScheduledPositionRef = useRef<{ lat: number; lng: number } | null>(null);
@@ -1651,10 +1657,12 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       scheduleTrainMarkers();
     });
     map.on('zoomend', () => {
+      trainSweepDueRef.current = true;
       scheduleTrainMarkers();
     });
     // Pills are packed only near the screen: after a pan, pack the ones that came into view.
     map.on('moveend', () => {
+      trainSweepDueRef.current = true;
       scheduleTrainMarkers();
     });
     let hoveredStationId: string | null = null;
@@ -2188,34 +2196,48 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     // Only pills on (or just off) screen can overlap anything the user sees: packing all
     // ~130 trains on every zoom frame and every live tick was the costliest work per frame.
     let spread = measured;
-    if (packIterations > 0) {
+    const packOffsets = trainPackOffsetsRef.current;
+    const packNow = performance.now();
+    if (packIterations <= 0) {
+      packOffsets.clear();
+    } else if (map.isZooming() && packOffsets.size > 0 && packNow - trainPackAtRef.current < 150) {
+      // Mid-pinch: re-packing every frame was the costliest work on phones. Reuse the last
+      // pushes (at most 150 ms old); zoomend packs again and the canvas glides pills there.
+      spread = measured.map((point) => {
+        const push = packOffsets.get(point.id);
+        return push ? { ...point, lng: point.lng + push.dLng, lat: point.lat + push.dLat } : point;
+      });
+    } else {
+      const projection = screenProjection(map);
       const { clientWidth: viewWidth, clientHeight: viewHeight } = map.getContainer();
       const margin = 80;
       const near: typeof measured = [];
       const far: typeof measured = [];
       measured.forEach((point) => {
-        const at = map.project([point.lng, point.lat]);
-        (at.x > -margin && at.y > -margin && at.x < viewWidth + margin && at.y < viewHeight + margin ? near : far).push(point);
+        const x = projection.projectX(point.lng);
+        const y = projection.projectY(point.lat);
+        (x > -margin && y > -margin && x < viewWidth + margin && y < viewHeight + margin ? near : far).push(point);
       });
       spread =
         near.length < 2
           ? measured
           : [
-              ...spreadOverlappingTrainPoints(
-                near,
-                (lng, lat) => map.project([lng, lat]),
-                (x, y) => {
-                  const lngLat = map.unproject([x, y]);
-                  return { lng: lngLat.lng, lat: lngLat.lat };
-                },
-                {
-                  radius: trainPillRadius(false),
-                  selectedRadius: trainPillRadius(true),
-                  iterations: packIterations,
-                }
-              ),
+              ...spreadOverlappingTrainPoints(near, projection.project, projection.unproject, {
+                radius: trainPillRadius(false),
+                selectedRadius: trainPillRadius(true),
+                iterations: packIterations,
+              }),
               ...far,
             ];
+      trainPackAtRef.current = packNow;
+      packOffsets.clear();
+      const homes = new Map(measured.map((point) => [point.id, point]));
+      spread.forEach((point) => {
+        const home = homes.get(point.id);
+        if (home && (point.lng !== home.lng || point.lat !== home.lat)) {
+          packOffsets.set(point.id, { dLng: point.lng - home.lng, dLat: point.lat - home.lat });
+        }
+      });
     }
     if (!trainCanvasRef.current) {
       trainCanvasRef.current = new TrainCanvasLayer(map, (trainId) => onTrainClickRef.current?.(trainId));
@@ -2501,6 +2523,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   useEffect(() => {
     let raf = 0;
     let lastRun = 0;
+    let lastSweep = 0;
     const tick = (frameMs: number) => {
       raf = window.requestAnimationFrame(tick);
       const map = mapRef.current;
@@ -2536,8 +2559,30 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       const south = view.getSouth() - margin;
       const north = view.getNorth() + margin;
       const onScreen = (lat: number, lng: number) => lat >= south && lat <= north && lng >= west && lng <= east;
+      // Trains well away from the view are only refreshed once a second (or right after a pan
+      // or zoom), so each tick works out positions for the few dozen that can be seen.
+      const sweep = trainSweepDueRef.current || frameMs - lastSweep >= 1000;
+      if (sweep) {
+        trainSweepDueRef.current = false;
+        lastSweep = frameMs;
+      }
+      const padLng = (east - west) / 2;
+      const padLat = (north - south) / 2;
+      const nearView = (lat: number, lng: number) =>
+        lat >= south - padLat && lat <= north + padLat && lng >= west - padLng && lng <= east + padLng;
       const visibleStep = degPerPx / 3;
       trainMarkersRef.current.forEach((entry, id) => {
+        if (
+          !sweep &&
+          entry.journeyActive &&
+          id !== followed &&
+          id !== focusedId &&
+          entry.drawnLat != null &&
+          entry.drawnLng != null &&
+          !nearView(entry.drawnLat, entry.drawnLng)
+        ) {
+          return;
+        }
         const position = animator.position(id, now);
         if (position && id === followed) {
           followPositionRef.current = { lat: position.lat, lng: position.lng, sequence: 0 };

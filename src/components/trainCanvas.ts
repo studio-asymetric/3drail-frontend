@@ -2,6 +2,7 @@ import type { Map as MapLibreMap, MapMouseEvent } from 'maplibre-gl';
 import { contrastInk } from '../data/trainService';
 import { stadiumEdgePoint, TRAIN_ARROW_INSET_PX } from '../data/trainPill';
 import { RENDER_PIXEL_RATIO } from '../perf';
+import { screenProjection } from '../data/screenProjection';
 
 /**
  * Train pills drawn on one canvas above the map.
@@ -31,6 +32,11 @@ export const PILL_HEIGHT = 14;
 const PILL_PADDING_X = 6;
 const FONT = '700 10px Geist, Inter, system-ui, sans-serif';
 const ARROW_SIZE = 12;
+/** Arrows are pre-drawn in this many degrees per step (36 sprites), not rotated per pill per frame. */
+const ARROW_STEP_DEG = 10;
+const ARROW_STEPS = 360 / ARROW_STEP_DEG;
+/** Arrow sprite box (CSS px), anchored at its centre where the arrow's base sits. */
+const ARROW_BOX = ARROW_SIZE * 2 + 2;
 /** Extra pixels around each pill that still count as a hit (fingers need more). */
 const HIT_PAD_MOUSE = 9;
 const HIT_PAD_TOUCH = 14;
@@ -44,7 +50,10 @@ export class TrainCanvasLayer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private pills: CanvasPill[] = [];
+  /** Draw order (selected and hovered last), rebuilt only when pills, selection or hover change. */
+  private ordered: CanvasPill[] = [];
   private sprites = new Map<string, Sprite>();
+  private arrows = new Map<number, HTMLCanvasElement>();
   private hovered: string | null = null;
   private dpr = 1;
   private frame = 0;
@@ -89,6 +98,7 @@ export class TrainCanvasLayer {
     // Re-draw once the web font is ready so the labels use Geist.
     document.fonts?.ready.then(() => {
       this.sprites.clear();
+      this.arrows.clear();
       this.requestDraw();
     });
     this.handleResize();
@@ -112,7 +122,16 @@ export class TrainCanvasLayer {
         this.shown.delete(id);
       }
     });
+    this.reorder();
     this.requestDraw();
+  }
+
+  private reorder() {
+    this.ordered = [...this.pills].sort(
+      (left, right) =>
+        Number(left.selected) - Number(right.selected) ||
+        Number(left.id === this.hovered) - Number(right.id === this.hovered)
+    );
   }
 
   destroy() {
@@ -172,6 +191,7 @@ export class TrainCanvasLayer {
     this.canvas.style.width = `${width}px`;
     this.canvas.style.height = `${height}px`;
     this.sprites.clear();
+    this.arrows.clear();
     this.requestDraw();
   };
 
@@ -182,6 +202,7 @@ export class TrainCanvasLayer {
         this.map.getCanvas().style.cursor = '';
       }
       this.hovered = id;
+      this.reorder();
       this.requestDraw();
     }
     if (id) {
@@ -192,6 +213,7 @@ export class TrainCanvasLayer {
   private handleLeave = () => {
     if (this.hovered) {
       this.hovered = null;
+      this.reorder();
       this.requestDraw();
     }
   };
@@ -224,6 +246,30 @@ export class TrainCanvasLayer {
       this.frame = 0;
       this.draw();
     });
+  }
+
+  /** White heading arrow for one 10° step, base at the sprite's centre, tip pointing along the heading. */
+  private arrowSprite(step: number): HTMLCanvasElement {
+    const cached = this.arrows.get(step);
+    if (cached) {
+      return cached;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(ARROW_BOX * this.dpr);
+    canvas.height = canvas.width;
+    const ctx = canvas.getContext('2d')!;
+    ctx.scale(canvas.width / ARROW_BOX, canvas.height / ARROW_BOX);
+    ctx.translate(ARROW_BOX / 2, ARROW_BOX / 2);
+    ctx.rotate((step * ARROW_STEP_DEG * Math.PI) / 180);
+    ctx.beginPath();
+    ctx.moveTo(0, -ARROW_SIZE);
+    ctx.lineTo(ARROW_SIZE / 2, 0);
+    ctx.lineTo(-ARROW_SIZE / 2, 0);
+    ctx.closePath();
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    this.arrows.set(step, canvas);
+    return canvas;
   }
 
   private sprite(pill: CanvasPill, hovered: boolean): Sprite {
@@ -303,14 +349,10 @@ export class TrainCanvasLayer {
     this.lastDrawMs = now;
     const ease = 1 - Math.exp(-dt / SPREAD_EASE_SECONDS);
     let settling = false;
-    const degPerPx = 360 / (512 * 2 ** this.map.getZoom());
+    const projection = screenProjection(this.map);
+    const degPerPx = 360 / projection.scale;
     // Selected and hovered pills are drawn last so they sit on top.
-    const ordered = [...this.pills].sort(
-      (left, right) =>
-        Number(left.selected) - Number(right.selected) ||
-        Number(left.id === this.hovered) - Number(right.id === this.hovered)
-    );
-    for (const pill of ordered) {
+    for (const pill of this.ordered) {
       const home = { lng: pill.homeLng ?? pill.lng, lat: pill.homeLat ?? pill.lat };
       const target = { dLng: pill.lng - home.lng, dLat: pill.lat - home.lat };
       let offset = this.shown.get(pill.id);
@@ -326,27 +368,28 @@ export class TrainCanvasLayer {
         offset.dLng = target.dLng;
         offset.dLat = target.dLat;
       }
-      const point = this.map.project([home.lng + offset.dLng, home.lat + offset.dLat]);
-      if (point.x < -40 || point.y < -40 || point.x > viewWidth + 40 || point.y > viewHeight + 40) {
+      const px = projection.projectX(home.lng + offset.dLng);
+      if (px < -40 || px > viewWidth + 40) {
+        continue;
+      }
+      const py = projection.projectY(home.lat + offset.dLat);
+      if (py < -40 || py > viewHeight + 40) {
         continue;
       }
       const hovered = pill.id === this.hovered;
       const sprite = this.sprite(pill, hovered);
-      const cx = Math.round(point.x);
-      const cy = Math.round(point.y);
-      if (pill.heading != null) {
-        const { x, y } = stadiumEdgePoint(sprite.pillWidth, PILL_HEIGHT, pill.heading, TRAIN_ARROW_INSET_PX);
-        ctx.save();
-        ctx.translate(cx + x, cy + y);
-        ctx.rotate((pill.heading * Math.PI) / 180);
-        ctx.beginPath();
-        ctx.moveTo(0, -ARROW_SIZE);
-        ctx.lineTo(ARROW_SIZE / 2, 0);
-        ctx.lineTo(-ARROW_SIZE / 2, 0);
-        ctx.closePath();
-        ctx.fillStyle = '#fff';
-        ctx.fill();
-        ctx.restore();
+      const cx = Math.round(px);
+      const cy = Math.round(py);
+      if (pill.heading != null && Number.isFinite(pill.heading)) {
+        const step = ((Math.round(pill.heading / ARROW_STEP_DEG) % ARROW_STEPS) + ARROW_STEPS) % ARROW_STEPS;
+        const { x, y } = stadiumEdgePoint(sprite.pillWidth, PILL_HEIGHT, step * ARROW_STEP_DEG, TRAIN_ARROW_INSET_PX);
+        ctx.drawImage(
+          this.arrowSprite(step),
+          Math.round(cx + x - ARROW_BOX / 2),
+          Math.round(cy + y - ARROW_BOX / 2),
+          ARROW_BOX,
+          ARROW_BOX
+        );
       }
       ctx.drawImage(sprite.canvas, cx - sprite.width / 2, cy - sprite.height / 2, sprite.width, sprite.height);
       boxes.push({
