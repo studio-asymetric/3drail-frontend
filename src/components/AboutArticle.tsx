@@ -4,7 +4,8 @@ import type { AppLocale } from '../i18n';
 const AboutArticleEn = () => (
   <article className="about__copy">
     <p>
-      <strong>Môj Vlak</strong> shows live trains on the Slovak network on a tilted MapLibre map.
+      <strong>Môj Vlak</strong> is a live train map of Slovakia: every train on the Slovak network
+      on a tilted MapLibre map.
       Positions, delays, and stop-by-stop journeys sit on OpenStreetMap railway geometry. The
       background is a custom Môj Vlak style on OpenFreeMap (OpenMapTiles / OSM) with subdued
       hillshade from public Mapzen / AWS terrain tiles — no SBB or geOps basemap.
@@ -44,8 +45,8 @@ const AboutArticleEn = () => (
 const AboutArticleSk = () => (
   <article className="about__copy">
     <p>
-      <strong>Môj Vlak</strong> zobrazuje živé vlaky na slovenskej sieti na naklonenej mape
-      MapLibre. Polohy, meškania a trasa po zastávkach ležia na koľajniciach z OpenStreetMap.
+      <strong>Môj Vlak</strong> je mapa vlakov so živou polohou vlakov na Slovensku: všetky vlaky
+      na slovenskej sieti na naklonenej mape MapLibre. Polohy, meškania a trasa po zastávkach ležia na koľajniciach z OpenStreetMap.
       Podklad je vlastný štýl Môj Vlak na OpenFreeMap (OpenMapTiles / OSM) s tlmeným reliéfom z
       verejných dlaždíc Mapzen / AWS — bez podkladu SBB ani geOps.
     </p>

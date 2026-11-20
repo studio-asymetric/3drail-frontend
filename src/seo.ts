@@ -4,12 +4,12 @@ const SITE_NAME = 'Môj Vlak';
 
 const DEFAULTS: Record<AppLocale, { title: string; description: string }> = {
   sk: {
-    title: 'Môj Vlak – živá poloha vlakov ZSSK na mape',
+    title: 'Mapa vlakov a poloha vlakov ZSSK naživo | Môj Vlak',
     description:
-      'Môj Vlak ukazuje v reálnom čase, kde sú vlaky ZSSK na Slovensku: poloha na mape, meškanie, zoznam zastávok, odchody zo staníc a mimoriadnosti na trati.',
+      'Mapa vlakov Slovenska: poloha vlakov ZSSK naživo, meškanie, zastávky, odchody zo staníc a mimoriadnosti na trati. Kde je váš vlak práve teraz.',
   },
   en: {
-    title: 'Môj Vlak – live map of Slovak trains',
+    title: 'Live train map of Slovakia – train positions | Môj Vlak',
     description:
       'Môj Vlak shows where Slovak trains are right now: live positions on a map, delays, stop lists, station departures and disruption notices.',
   },
@@ -27,7 +27,7 @@ export function seoFor(locale: AppLocale, state: SeoState): { title: string; des
   if (state.kind === 'train') {
     const route = state.destination ? ` → ${state.destination}` : '';
     return {
-      title: `${state.label}${route} – ${sk ? 'poloha a meškanie' : 'position and delay'} | ${SITE_NAME}`,
+      title: `${state.label}${route} – ${sk ? 'poloha vlaku a meškanie' : 'train position and delay'} | ${SITE_NAME}`,
       description: sk
         ? `Živá poloha vlaku ${state.label}${route} na mape: meškanie, zastávky a plánované aj skutočné časy. ${SITE_NAME}.`
         : `Live position of train ${state.label}${route}: delay, stops and scheduled and actual times. ${SITE_NAME}.`,
@@ -35,7 +35,7 @@ export function seoFor(locale: AppLocale, state: SeoState): { title: string; des
   }
   if (state.kind === 'station') {
     return {
-      title: `${state.name} – ${sk ? 'odchody a príchody vlakov' : 'train departures and arrivals'} | ${SITE_NAME}`,
+      title: `${state.name} – ${sk ? 'odchody vlakov a poloha vlakov' : 'train departures and arrivals'} | ${SITE_NAME}`,
       description: sk
         ? `Odchody a príchody vlakov zo stanice ${state.name}, s meškaním a polohou vlakov na mape. ${SITE_NAME}.`
         : `Train departures and arrivals at ${state.name}, with delays and live positions on the map. ${SITE_NAME}.`,

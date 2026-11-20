@@ -7,14 +7,14 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=overlays-content"
     />
 
-    <title>Môj Vlak – živá poloha vlakov ZSSK na mape</title>
+    <title>Mapa vlakov a poloha vlakov ZSSK naživo | Môj Vlak</title>
     <meta
       name="description"
-      content="Môj Vlak ukazuje v reálnom čase, kde sú vlaky ZSSK na Slovensku: poloha na mape, meškanie, zoznam zastávok, odchody zo staníc a mimoriadnosti na trati."
+      content="Mapa vlakov Slovenska: poloha vlakov ZSSK naživo, meškanie, zastávky, odchody zo staníc a mimoriadnosti na trati. Kde je váš vlak práve teraz."
     />
     <meta
       name="keywords"
-      content="poloha vlakov, vlaky online, ZSSK, meškanie vlakov, mapa vlakov, odchody vlakov, mimoriadnosti, Slovensko, železnica, cestovný poriadok"
+      content="mapa vlakov, poloha vlakov, poloha vlakov ZSSK, mapa vlakov naživo, poloha vlakov online, kde je vlak, meškanie vlakov, vlaky na mape, odchody vlakov, mimoriadnosti ZSSK, Slovensko"
     />
     <meta name="application-name" content="Môj Vlak" />
     <meta name="apple-mobile-web-app-title" content="Môj Vlak" />
@@ -72,22 +72,22 @@
     <meta property="og:locale" content="sk_SK" />
     <meta property="og:locale:alternate" content="en_US" />
     <meta property="og:url" content="%SITE_URL%/" />
-    <meta property="og:title" content="Môj Vlak – živá poloha vlakov ZSSK na mape" />
+    <meta property="og:title" content="Mapa vlakov a poloha vlakov ZSSK naživo | Môj Vlak" />
     <meta
       property="og:description"
-      content="Kde je môj vlak? Poloha vlakov ZSSK v reálnom čase, meškanie, zastávky a mimoriadnosti na jednej mape Slovenska."
+      content="Mapa vlakov s polohou vlakov ZSSK v reálnom čase: kde je vlak, koľko mešká, ktoré zastávky ho čakajú a čo sa deje na trati."
     />
     <meta property="og:image" content="%SITE_URL%/og-image.png" />
     <meta property="og:image:type" content="image/png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Môj Vlak: mapa Slovenska so živou polohou vlakov" />
+    <meta property="og:image:alt" content="Mapa vlakov Môj Vlak: poloha vlakov na mape Slovenska" />
 
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Môj Vlak – živá poloha vlakov ZSSK na mape" />
+    <meta name="twitter:title" content="Mapa vlakov a poloha vlakov ZSSK naživo | Môj Vlak" />
     <meta
       name="twitter:description"
-      content="Kde je môj vlak? Poloha vlakov ZSSK v reálnom čase, meškanie, zastávky a mimoriadnosti na jednej mape Slovenska."
+      content="Mapa vlakov s polohou vlakov ZSSK v reálnom čase: kde je vlak, koľko mešká, ktoré zastávky ho čakajú a čo sa deje na trati."
     />
     <meta name="twitter:image" content="%SITE_URL%/og-image.png" />
 
@@ -100,8 +100,8 @@
             "@id": "%SITE_URL%/#website",
             "url": "%SITE_URL%/",
             "name": "Môj Vlak",
-            "alternateName": ["Moj Vlak", "Poloha vlakov ZSSK"],
-            "description": "Živá poloha vlakov ZSSK na mape Slovenska, meškania, zastávky a mimoriadnosti.",
+            "alternateName": ["Mapa vlakov", "Poloha vlakov", "Moj Vlak", "Poloha vlakov ZSSK"],
+            "description": "Mapa vlakov Slovenska so živou polohou vlakov ZSSK, meškaním, zastávkami a mimoriadnosťami.",
             "inLanguage": ["sk", "en"],
             "publisher": { "@id": "%SITE_URL%/#publisher" }
           },
@@ -113,7 +113,7 @@
             "applicationCategory": "TravelApplication",
             "operatingSystem": "Any (web browser)",
             "browserRequirements": "Requires JavaScript and WebGL",
-            "description": "Mapa so živou polohou vlakov ZSSK, meškaním, zoznamom zastávok, odchodmi zo staníc a mimoriadnosťami na trati.",
+            "description": "Mapa vlakov a poloha vlakov ZSSK naživo: meškanie, zoznam zastávok, odchody zo staníc a mimoriadnosti na trati.",
             "inLanguage": ["sk", "en"],
             "isAccessibleForFree": true,
             "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
@@ -137,28 +137,38 @@
     </script>
   </head>
   <body>
-    <div id="root">
-      <!-- What search engines and no-JS visitors get; the app replaces it as soon as it loads. -->
-      <main class="seo-fallback">
-        <h1>Môj Vlak – živá poloha vlakov ZSSK na mape</h1>
-        <p>
-          Môj Vlak ukazuje v reálnom čase, kde sú vlaky ZSSK na Slovensku. Na mape vidíte polohu každého vlaku, jeho
-          meškanie a zoznam zastávok s plánovanými aj skutočnými časmi.
-        </p>
-        <h2>Čo nájdete v aplikácii</h2>
-        <ul>
-          <li>Poloha vlakov (Os, R, REX, Ex, EC, IC) na mape železníc Slovenska.</li>
-          <li>Meškanie, ďalšia zastávka a trasa vlaku zastávku po zastávke.</li>
-          <li>Odchody a príchody z každej stanice.</li>
-          <li>Mimoriadnosti na trati: odrieknuté vlaky, výluky a náhradná autobusová doprava.</li>
-          <li>Vyhľadávanie vlaku podľa čísla alebo stanice a sledovanie vlaku na mape.</li>
-        </ul>
-        <p lang="en">
-          Môj Vlak (“My Train”) is a live map of Slovak trains: positions, delays, stops, station boards and
-          disruption notices.
-        </p>
-      </main>
-    </div>
+    <div id="root"></div>
+    <!-- What the page is about, for search engines and screen readers. It stays in the page after
+         the app starts (outside #root), visually hidden; it describes exactly what the app shows. -->
+    <main class="seo-fallback">
+      <h1>Mapa vlakov – poloha vlakov na Slovensku naživo</h1>
+      <p>
+        Môj Vlak je mapa vlakov so živou polohou vlakov ZSSK. Na mape Slovenska vidíte, kde je každý vlak práve
+        teraz, koľko mešká a ktoré zastávky ho ešte čakajú.
+      </p>
+      <h2>Poloha vlakov v reálnom čase</h2>
+      <p>
+        Poloha vlakov sa obnovuje priebežne podľa údajov Železníc Slovenskej republiky. Každý vlak (Os, R, REX, Ex,
+        EC, IC) má na mape vlakov svoju značku, ktorá sa pohybuje po trati medzi stanicami.
+      </p>
+      <h2>Čo ukazuje mapa vlakov</h2>
+      <ul>
+        <li>Poloha vlakov na mape železníc Slovenska a sledovanie vybraného vlaku.</li>
+        <li>Meškanie vlaku, ďalšia zastávka a trasa zastávku po zastávke s plánovanými aj skutočnými časmi.</li>
+        <li>Odchody a príchody vlakov z každej stanice.</li>
+        <li>Mimoriadnosti ZSSK: odrieknuté vlaky, výluky a náhradná autobusová doprava.</li>
+        <li>Vyhľadávanie vlaku podľa čísla alebo stanice.</li>
+      </ul>
+      <h2>Kde je môj vlak?</h2>
+      <p>
+        Vyhľadajte číslo vlaku alebo stanicu a mapa vlakov ukáže jeho aktuálnu polohu, meškanie a čas príchodu do
+        ďalších staníc.
+      </p>
+      <p lang="en">
+        Môj Vlak (“My Train”) is a live train map of Slovakia: train positions, delays, stops, station boards and
+        disruption notices.
+      </p>
+    </main>
     <noscript>
       <p style="font-family: system-ui, sans-serif; text-align: center; padding: 2rem 1rem">
         Na zobrazenie mapy vlakov je potrebný JavaScript. / The live train map needs JavaScript.
