@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo
 import { MapScene } from './components/MapScene';
 import { abbreviationSteps, townOf } from './data/placeName';
 import { applySeo } from './seo';
+import { vagonwebTrainUrl } from './data/vagonweb';
 import { DisruptionsPanel, describeDisruption } from './components/DisruptionsPanel';
 import { eventsForTrain, fetchDisruptions, type DisruptionPayload } from './data/disruptionService';
 import { DockScroller } from './components/DockScroller';
@@ -1340,6 +1341,13 @@ const App: React.FC = () => {
   const displayDelayText = focusedTrain
     ? selectedTrainDelayText
     : leaveSnap?.delayText ?? selectedTrainDelayText;
+  // Where the coach order of the opened train can be seen (vagonWEB): ZSSK trains only.
+  const compositionUrl = displayTrain
+    ? vagonwebTrainUrl(
+        { trainType: displayTrain.trainType, trainNumber: displayTrain.trainNumber, operator: displayTrain.operator },
+        locale
+      )
+    : null;
   const disruptionEvents = disruptions?.events ?? [];
   // Notices about the opened train; a plain delay is already in the status line.
   const trainAlerts = eventsForTrain(disruptionEvents, displayTrain?.trainNumber).filter(
@@ -2114,6 +2122,23 @@ const App: React.FC = () => {
                   <div>
                     <dt>{t.operator}</dt>
                     <dd>{displayTrain.operator}</dd>
+                  </div>
+                )}
+                {compositionUrl && (
+                  <div>
+                    <dt>{t.trainComposition}</dt>
+                    <dd>
+                      <a
+                        className="dock__fact-link dock__fact-link--external"
+                        href={compositionUrl}
+                        target="_blank"
+                        rel="noopener"
+                        title={t.trainCompositionTitle}
+                      >
+                        {t.trainCompositionLink}
+                        <span aria-hidden="true"> ↗</span>
+                      </a>
+                    </dd>
                   </div>
                 )}
               </dl>

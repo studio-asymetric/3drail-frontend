@@ -11,6 +11,9 @@ export function readStoredLocale(): AppLocale {
 }
 
 export type Copy = {
+  trainComposition: string;
+  trainCompositionLink: string;
+  trainCompositionTitle: string;
   alertsTitle: string;
   alertsAria: string;
   alertsEmpty: string;
@@ -88,6 +91,9 @@ export type Copy = {
 };
 
 const sk: Copy = {
+  trainComposition: 'Zloženie vlaku',
+  trainCompositionLink: 'vagonWEB',
+  trainCompositionTitle: 'Rad vozňov vlaku na vagonWEB (vagonweb.cz) – otvorí sa v novom okne',
   alertsTitle: 'Mimoriadnosti',
   alertsAria: 'Mimoriadnosti na trati',
   alertsEmpty: 'Teraz žiadne mimoriadnosti.',
@@ -168,6 +174,9 @@ const sk: Copy = {
 };
 
 const en: Copy = {
+  trainComposition: 'Train composition',
+  trainCompositionLink: 'vagonWEB',
+  trainCompositionTitle: 'Coach order of this train on vagonWEB (vagonweb.cz) – opens in a new tab',
   alertsTitle: 'Disruptions',
   alertsAria: 'Disruptions on the network',
   alertsEmpty: 'No disruptions right now.',

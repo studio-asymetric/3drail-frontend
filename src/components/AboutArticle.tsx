@@ -31,6 +31,16 @@ const AboutArticleEn = () => (
     <p>
       Map attribution (OpenStreetMap, OpenFreeMap, terrain) stays in the corner of the map canvas.
     </p>
+    <h3>Train compositions</h3>
+    <p>
+      The coach order of a train (which cars it has and in which order) is shown on{' '}
+      <a href="https://www.vagonweb.cz" target="_blank" rel="noopener">
+        vagonWEB
+      </a>{' '}
+      (vagonweb.cz), the database of Czech and Slovak railway passenger cars. Môj Vlak links to the
+      matching vagonWEB train page, with the permission of the vagonWEB team, and thanks them for
+      it. All composition data belongs to vagonWEB and its contributors.
+    </p>
     <h3>Stack</h3>
     <ul>
       <li>Vite 7, React 19, MapLibre GL 6</li>
@@ -69,6 +79,16 @@ const AboutArticleSk = () => (
       kreslí až po priblížení. Dvojkoľajný úsek je v grafe zámerne zjednotený.
     </p>
     <p>Atribúcia mapy (OSM, OpenFreeMap, terén) zostáva v rohu mapy.</p>
+    <h3>Zloženie vlakov</h3>
+    <p>
+      Zloženie vlaku (aké vozne má a v akom poradí) ukazuje{' '}
+      <a href="https://www.vagonweb.cz" target="_blank" rel="noopener">
+        vagonWEB
+      </a>{' '}
+      (vagonweb.cz), databáza českých a slovenských osobných železničných vozňov. Môj Vlak odkazuje
+      na príslušnú stránku vlaku na vagonWEB so súhlasom tímu vagonWEB a ďakuje mu za to. Všetky údaje
+      o zložení patria vagonWEB a jeho prispievateľom.
+    </p>
     <h3>Technológie</h3>
     <ul>
       <li>Vite 7, React 19, MapLibre GL 6</li>
