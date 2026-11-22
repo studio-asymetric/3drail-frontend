@@ -1759,7 +1759,7 @@ const App: React.FC = () => {
             aria-label={t.aboutRailatlas}
             onClick={handleAboutToggle}
           >
-            <img src={theme === 'light' ? logoMarkLight : logoMarkDark} alt="" width={17} height={20} />
+            <img src={theme === 'light' ? logoMarkLight : logoMarkDark} alt="" width={20} height={20} />
             <span>Môj Vlak</span>
           </button>
           <small className="chrome__brand-meta">

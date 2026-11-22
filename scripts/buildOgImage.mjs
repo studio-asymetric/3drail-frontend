@@ -66,7 +66,7 @@ const html = `<!doctype html>
   .rails { position: absolute; left: -90px; top: -40px; width: 1000px; height: 600px; opacity: 0.2; }
   .rails path { fill: none; stroke: #fff; stroke-width: 0.9; stroke-linecap: round; stroke-linejoin: round; }
   .brand { position: absolute; left: 72px; top: 64px; display: flex; align-items: center; gap: 22px; }
-  .logo { width: 62px; height: 75px; }
+  .logo { width: 68px; height: 68px; }
   .brand span { font-size: 54px; font-weight: 600; letter-spacing: -0.03em; }
   .claim { position: absolute; left: 72px; bottom: 76px; width: 520px; }
   .claim h1 { font-size: 66px; line-height: 1.04; font-weight: 600; letter-spacing: -0.045em; }
