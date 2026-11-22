@@ -24,6 +24,8 @@ export interface CanvasPill {
   selected: boolean;
   heading: number | null;
   label: string;
+  /** Drawn as a small dot, with no arrow and no label (crowded buses, trams and metro seen from afar). */
+  dot?: boolean;
   /** Where the train really is, before overlapping pills were pushed apart (lng/lat is where it is drawn). */
   homeLng?: number;
   homeLat?: number;
@@ -39,6 +41,7 @@ const ARROW_STEPS = 360 / ARROW_STEP_DEG;
 /** Arrow sprite box (CSS px), anchored at its centre where the arrow's base sits. */
 const ARROW_BOX = ARROW_SIZE * 2 + 2;
 /** Extra pixels around each pill that still count as a hit (fingers need more). */
+const DOT_RADIUS = 2.4;
 const HIT_PAD_MOUSE = 9;
 const HIT_PAD_TOUCH = 14;
 /** How quickly pills settle after a neighbour moved them (time constant, seconds). */
@@ -142,6 +145,8 @@ export class TrainCanvasLayer {
   private reorder() {
     this.ordered = [...this.pills].sort(
       (left, right) =>
+        // dots first: they sit beneath every pill
+        Number(Boolean(right.dot && !right.selected)) - Number(Boolean(left.dot && !left.selected)) ||
         Number(left.selected) - Number(right.selected) ||
         Number(left.id === this.hovered) - Number(right.id === this.hovered)
     );
@@ -449,9 +454,28 @@ export class TrainCanvasLayer {
         continue;
       }
       const hovered = pill.id === this.hovered;
-      let sprite = this.sprite(pill, hovered);
       const cx = Math.round(px);
       const cy = Math.round(py);
+      if (pill.dot && !pill.selected) {
+        // a tiny black dot with a white rim, like the pills in miniature
+        const radius = DOT_RADIUS;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+        ctx.shadowBlur = 2;
+        ctx.fillStyle = pill.color;
+        ctx.fill();
+        ctx.restore();
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius - 0.5, 0, Math.PI * 2);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#fff';
+        ctx.stroke();
+        // not selectable, not hoverable: no hit box
+        continue;
+      }
+      let sprite = this.sprite(pill, hovered);
       if (pill.heading != null && Number.isFinite(pill.heading)) {
         const step = ((Math.round(pill.heading / ARROW_STEP_DEG) % ARROW_STEPS) + ARROW_STEPS) % ARROW_STEPS;
         const arrow = this.arrowSprite(step);

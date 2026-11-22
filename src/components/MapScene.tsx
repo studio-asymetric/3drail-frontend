@@ -68,7 +68,7 @@ import { PILL_HEIGHT, TrainCanvasLayer } from './trainCanvas';
 import { screenProjection } from '../data/screenProjection';
 import { PERF_HUD, perfAdd, startPerfHud } from '../perfHud';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
-import { REGION, REGION_ID, vehicleModeOf } from '../region';
+import { REGION, REGION_ID } from '../region';
 import {
   clipWaysToOutline,
   isCoordinateInsideOutline,
@@ -91,10 +91,15 @@ import {
 /** What the view may pan over: the region on this page (Slovakia, or Prague with /pid). */
 const VIEW_BOUNDS = REGION.bounds;
 /**
- * The map has to be zoomed in at least this far before a kind of vehicle is drawn (Prague has
- * hundreds of buses): a single stretch of the map would otherwise be a heap of labels.
+ * Buses, trams and metro: zoomed in to this level they are full pills like the trains. Further out,
+ * where more than DOT_DENSITY of them are on screen (a city) they shrink to small dots, and out
+ * beyond DOT_MIN_ZOOM they are left out; where there are few (the countryside) they stay full
+ * pills at any zoom, so they can be seen from far away.
  */
-const MODE_MIN_ZOOM: Record<string, number> = { rail: 0, metro: 9, tram: 10, trolley: 11, bus: 11.5 };
+const DOT_ZOOM = 13.4;
+/** Also where the tram and metro tracks start to show. */
+const DOT_MIN_ZOOM = 11.8;
+const DOT_DENSITY = 10;
 /** A jump of the opened train bigger than this (metres) is announced with a notice. */
 const POSITION_UPDATE_METERS = 700;
 /** Extra pan room beyond Slovakia (degrees). */
@@ -184,7 +189,7 @@ const BASEMAP_RAIL_FADE: ExpressionSpecification = [
 const DETAIL_RAIL_MIN_ZOOM = 13.9;
 const DETAIL_RAIL_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 1];
 /** The simplified tram tracks: faint from afar, full in the city, gone once the detailed ones are in. */
-const TRAM_SIMPLIFIED_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 8, 0.5, 12, 0.85, 14, 0.85, 15, 0];
+const TRAM_SIMPLIFIED_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 11.8, 0.6, 13, 0.85, 14, 0.85, 15, 0];
 
 function zoomInterpolateStops(expr: number | ExpressionSpecification): Array<[number, number]> | null {
   if (typeof expr === 'number') {
@@ -297,6 +302,8 @@ type TrainPillPoint = {
   type: string;
   number: string;
   heading: number | null;
+  /** 'tram', 'metro', 'bus'...; absent for trains. */
+  mode?: string;
   radius?: number;
 };
 
@@ -814,7 +821,7 @@ function addTransitLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     id: 'transit-metro',
     type: 'line',
     source: 'transit-lines',
-    minzoom: 7,
+    minzoom: DOT_MIN_ZOOM,
     filter: ['==', ['get', 'mode'], 'metro'],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
@@ -866,6 +873,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       dasharray?: number[];
       color?: string;
       maxzoom?: number;
+      minzoom?: number;
     } = {}
   ) => {
     const { fill: fillWidth, casing: casingWidth } = railLineWidthExprs(fill, casing);
@@ -881,7 +889,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       id: `${prefix}-casing`,
       type: 'line',
       source,
-      minzoom: 8.6,
+      minzoom: options.minzoom ?? 8.6,
       ...(options.maxzoom ? { maxzoom: options.maxzoom } : {}),
       layout,
       ...(filter ? { filter } : {}),
@@ -896,6 +904,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       id: `${prefix}-fill`,
       type: 'line',
       source,
+      ...(options.minzoom ? { minzoom: options.minzoom } : {}),
       ...(options.maxzoom ? { maxzoom: options.maxzoom } : {}),
       layout,
       ...(filter ? { filter } : {}),
@@ -1080,6 +1089,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   // They stay until the base map's own tram tracks (zoom 14 to 15) have faded in over them.
   addPair('transit-lines', 'transit-tram', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, TRAM_SIMPLIFIED_FADE, {
     filter: ['==', ['get', 'mode'], 'tram'],
+    minzoom: DOT_MIN_ZOOM,
     maxzoom: 15.1,
   });
 
@@ -1672,18 +1682,19 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       ]);
     };
     map.on('zoom', fitViewBounds);
-    // Buses, trams and metro appear and disappear with the zoom level.
+    // Buses, trams and metro turn into dots (or pills, or nothing) with the zoom level and how many
+    // are in view: re-decide when the zoom crosses a limit and whenever the view stops moving.
     let modeBand = -1;
-    const modeBandOf = (zoom: number) => Object.values(MODE_MIN_ZOOM).filter((min) => zoom >= min).length;
+    const modeBandOf = (zoom: number) => (zoom >= DOT_ZOOM ? 2 : zoom >= DOT_MIN_ZOOM ? 1 : 0);
     map.on('zoom', () => {
       const band = modeBandOf(map.getZoom());
       if (band === modeBand) {
         return;
       }
       modeBand = band;
-      rebuildTrainPointsRef.current();
       publishTrainMarkersRef.current();
     });
+    map.on('moveend', () => publishTrainMarkersRef.current());
     map.on('resize', () => fitViewBounds());
     map.once('load', () => fitViewBounds());
     const hydrateOverlay = () => {
@@ -2196,12 +2207,6 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       if (!position) {
         return [];
       }
-      if (train.mode && train.trainNumber !== focused) {
-        const zoom = mapRef.current?.getZoom() ?? 99;
-        if (zoom < (MODE_MIN_ZOOM[vehicleModeOf(train.mode)] ?? 0)) {
-          return [];
-        }
-      }
       if (
         !isCoordinateInsideOutline(
           { lat: position.lat, lng: position.lng },
@@ -2247,6 +2252,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           type,
           number: trainNumberLabel(type, train.trainNumber),
           heading,
+          mode: train.mode,
         },
       ];
     });
@@ -2299,10 +2305,31 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       };
     });
     const zoom = map.getZoom();
+    // Crowded buses, trams and metro seen from afar: dots, or nothing when far out.
+    const viewProjection = screenProjection(map);
+    const viewBox = map.getContainer();
+    let otherOnScreen = 0;
+    measured.forEach((point) => {
+      if (!point.mode || point.selected) return;
+      const x = viewProjection.projectX(point.lng);
+      const y = viewProjection.projectY(point.lat);
+      if (x > 0 && y > 0 && x < viewBox.clientWidth && y < viewBox.clientHeight) otherOnScreen += 1;
+    });
+    const crowded = otherOnScreen > DOT_DENSITY;
+    const dotted = new Set<string>();
+    const hidden = new Set<string>();
+    if (crowded && zoom < DOT_ZOOM) {
+      measured.forEach((point) => {
+        if (!point.mode || point.selected) return;
+        (zoom < DOT_MIN_ZOOM ? hidden : dotted).add(point.id);
+      });
+    }
+    const pillPoints = measured.filter((point) => !dotted.has(point.id) && !hidden.has(point.id));
+    const dotPoints = measured.filter((point) => dotted.has(point.id));
     const packIterations = packingIterationsForZoom(zoom);
     // Only pills on (or just off) screen can overlap anything the user sees: packing all
     // ~130 trains on every zoom frame and every live tick was the costliest work per frame.
-    let spread = measured;
+    let spread = pillPoints;
     const packOffsets = trainPackOffsetsRef.current;
     const packNow = performance.now();
     if (packIterations <= 0) {
@@ -2310,7 +2337,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     } else if (map.isZooming() && packOffsets.size > 0 && packNow - trainPackAtRef.current < 150) {
       // Mid-pinch: re-packing every frame was the costliest work on phones. Reuse the last
       // pushes (at most 150 ms old); zoomend packs again and the canvas glides pills there.
-      spread = measured.map((point) => {
+      spread = pillPoints.map((point) => {
         const push = packOffsets.get(point.id);
         return push ? { ...point, lng: point.lng + push.dLng, lat: point.lat + push.dLat } : point;
       });
@@ -2320,14 +2347,14 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       const margin = 80;
       const near: typeof measured = [];
       const far: typeof measured = [];
-      measured.forEach((point) => {
+      pillPoints.forEach((point) => {
         const x = projection.projectX(point.lng);
         const y = projection.projectY(point.lat);
         (x > -margin && y > -margin && x < viewWidth + margin && y < viewHeight + margin ? near : far).push(point);
       });
       spread =
         near.length < 2
-          ? measured
+          ? pillPoints
           : [
               ...spreadOverlappingTrainPoints(near, projection.project, projection.unproject, {
                 radius: trainPillRadius(false),
@@ -2351,7 +2378,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     }
     const homeOf = new Map(measured.map((item) => [item.id, item]));
     trainCanvasRef.current.setPills(
-      spread.map((point) => {
+      [...spread, ...dotPoints].map((point) => {
         const entry = live.get(point.id);
         const home = homeOf.get(point.id);
         if (entry) {
@@ -2371,6 +2398,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           selected: point.selected,
           heading: point.heading ?? null,
           label: `${shownType} ${point.number}`,
+          dot: dotted.has(point.id) || undefined,
         };
       })
     );
