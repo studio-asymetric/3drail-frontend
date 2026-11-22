@@ -25,6 +25,8 @@ interface Props {
 }
 
 const REGION_ORDER: RegionId[] = ['sk', 'pid'];
+/** Wider than this the menu is a card in the corner; narrower it fills the screen. */
+const DESKTOP_QUERY = '(min-width: 801px)';
 
 /**
  * Full-screen menu behind the hamburger. Regions are cards with a sketch of their rail network
@@ -44,8 +46,24 @@ export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocal
         onClose();
       }
     };
+    // On a computer the menu is a small card in the corner: a click anywhere else closes it
+    // (the hamburger toggles it itself).
+    const onPointerDown = (event: PointerEvent) => {
+      if (!window.matchMedia(DESKTOP_QUERY).matches) {
+        return;
+      }
+      const target = event.target as Element | null;
+      if (target?.closest('.menu') || target?.closest('.chrome__tool--menu')) {
+        return;
+      }
+      onClose();
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onPointerDown);
+    };
   }, [open, onClose]);
 
   if (!open) {
@@ -92,7 +110,8 @@ export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocal
                     aria-hidden="true"
                     focusable="false"
                   >
-                    <path d={REGION_SKETCH[id]} />
+                    <path className="menu__outline" d={REGION_SKETCH[id].outline} />
+                    <path className="menu__rails" d={REGION_SKETCH[id].rails} />
                   </svg>
                   <span className="menu__region-text">
                     <span className="menu__region-name">{copy.regionNames[id]}</span>

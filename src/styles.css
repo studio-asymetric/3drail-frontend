@@ -3153,18 +3153,33 @@ body,
 }
 
 .menu__map path {
-  fill: none;
   stroke: currentColor;
-  stroke-width: 1;
   stroke-linecap: round;
   stroke-linejoin: round;
-  opacity: 0.5;
   transition: opacity var(--dur) var(--ease);
 }
 
-.menu__region:hover .menu__map path,
-.menu__region.is-current .menu__map path {
-  opacity: 0.95;
+.menu__outline {
+  fill: currentColor;
+  fill-opacity: 0.07;
+  stroke-width: 0.9;
+  opacity: 0.45;
+}
+
+.menu__rails {
+  fill: none;
+  stroke-width: 0.8;
+  opacity: 0.55;
+}
+
+.menu__region:hover .menu__outline,
+.menu__region.is-current .menu__outline {
+  opacity: 0.8;
+}
+
+.menu__region:hover .menu__rails,
+.menu__region.is-current .menu__rails {
+  opacity: 1;
 }
 
 .menu__region-text {
@@ -3326,5 +3341,121 @@ body,
   .menu__switch-knob {
     animation: none;
     transition: none;
+  }
+}
+
+/* Hamburger button: three bars that turn into a cross while the menu is open. */
+.menu-bars {
+  position: relative;
+  display: block;
+  width: 16px;
+  height: 12px;
+}
+
+.menu-bars i {
+  position: absolute;
+  left: 0;
+  display: block;
+  width: 16px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+  transition:
+    transform 280ms var(--ease),
+    opacity 160ms var(--ease),
+    width 200ms var(--ease);
+}
+
+.menu-bars i:nth-child(1) {
+  top: 1px;
+}
+
+.menu-bars i:nth-child(2) {
+  top: 5.25px;
+  width: 11px;
+}
+
+.menu-bars i:nth-child(3) {
+  top: 9.5px;
+}
+
+.chrome__tool--menu:hover .menu-bars i:nth-child(2) {
+  width: 16px;
+}
+
+.chrome__tool--menu.is-active .menu-bars i:nth-child(1) {
+  transform: translateY(4.25px) rotate(45deg);
+}
+
+.chrome__tool--menu.is-active .menu-bars i:nth-child(2) {
+  width: 16px;
+  opacity: 0;
+  transform: scaleX(0.2);
+}
+
+.chrome__tool--menu.is-active .menu-bars i:nth-child(3) {
+  transform: translateY(-4.25px) rotate(-45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu-bars i {
+    transition: none;
+  }
+}
+
+/* On a computer the menu is a small card next to the buttons instead of a full screen. */
+@media (min-width: 801px) {
+  .menu {
+    inset: auto;
+    top: var(--chrome-inset);
+    right: calc(var(--chrome-inset) + var(--chrome-control-height) + 8px);
+    width: 344px;
+    max-height: calc(100vh - var(--chrome-inset) * 2);
+    overflow-y: auto;
+    border: 1px solid var(--menu-line);
+    border-radius: 12px;
+    background: rgba(19, 19, 19, 0.96);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+    transform-origin: top right;
+    animation: menu-pop 200ms var(--ease) both;
+  }
+
+  .shell[data-theme='light'] .menu {
+    background: rgba(245, 245, 245, 0.97);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.16);
+  }
+
+  .menu__head,
+  .menu__close {
+    display: none;
+  }
+
+  .menu__body {
+    max-width: none;
+    padding: 0 16px 4px;
+    overflow: visible;
+  }
+
+  .menu__group {
+    padding: 16px 0 14px;
+  }
+
+  .menu__region-name {
+    font-size: 15px;
+  }
+
+  .menu__regions {
+    gap: 8px;
+  }
+}
+
+@keyframes menu-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }

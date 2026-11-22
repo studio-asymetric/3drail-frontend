@@ -1,26 +1,30 @@
 /**
- * Draws each region's rail network as a tiny SVG path for the menu's region cards.
+ * Draws each region as a tiny SVG for the menu's region cards: its outline and the lines
+ * passenger trains run on.
  *
  *   node scripts/buildRegionSketches.mjs [proxy = http://127.0.0.1:3001]
  *
- * Reads the simplified network packs from a running proxy and writes src/data/regionSketch.ts.
- * Only needs re-running when a region's network changes a lot.
+ * The outline comes from OpenStreetMap (Nominatim, once), the lines from the proxy's journeys
+ * (the routes of the trains running right now, so run it by day). Writes src/data/regionSketch.ts.
  */
 import fs from 'node:fs';
-import { unpackRails } from '../proxy/packRails.mjs';
+import { decodePolyline } from '../proxy/railRoute.mjs';
 
 const proxy = process.argv[2] ?? 'http://127.0.0.1:3001';
 const W = 200;
 const H = 120;
-/** Simplification and the shortest piece kept, in sketch units: the card is only 200 wide. */
-const EPS = Number(process.env.SKETCH_EPS ?? 1.1);
-const MIN_LENGTH = Number(process.env.SKETCH_MIN ?? 7);
+const PAD = 6;
+const UA = 'region-sketch-script/1.0';
 
 const REGIONS = {
-  sk: { query: '', bounds: { minLat: 47.73, maxLat: 49.62, minLng: 16.83, maxLng: 22.57 } },
-  pid: { query: '&regions=pid&only=1', bounds: { minLat: 49.35, maxLat: 50.59, minLng: 13.16, maxLng: 15.58 } },
+  sk: { journeys: '', outlines: ['country=Slovakia'] },
+  pid: {
+    journeys: '&regions=pid&only=1',
+    outlines: ['state=Středočeský kraj&country=Czechia', 'city=Praha&country=Czechia'],
+  },
 };
 
+/** Douglas-Peucker on [x, y]. */
 function rdp(points, eps) {
   if (points.length < 3) return points;
   const keep = new Uint8Array(points.length);
@@ -52,36 +56,100 @@ function rdp(points, eps) {
   return points.filter((_, i) => keep[i]);
 }
 
+async function outlineRings(query) {
+  const url = `https://nominatim.openstreetmap.org/search?${query}&format=jsonv2&polygon_geojson=1&polygon_threshold=0.004&limit=1`;
+  const response = await fetch(url, { headers: { 'User-Agent': UA } });
+  if (!response.ok) throw new Error(`Nominatim ${query}: HTTP ${response.status}`);
+  const [hit] = await response.json();
+  const geo = hit?.geojson;
+  if (!geo) throw new Error(`No outline for ${query}`);
+  // [lng, lat] rings: outer rings of every polygon, holes dropped
+  const polygons = geo.type === 'MultiPolygon' ? geo.coordinates : geo.type === 'Polygon' ? [geo.coordinates] : [];
+  return polygons.map((polygon) => polygon[0]);
+}
+
+async function routeLines(query) {
+  const response = await fetch(`${proxy}/proxy/journeys?mode=journeys&v=2${query}`);
+  if (!response.ok) throw new Error(`journeys: HTTP ${response.status}`);
+  const payload = await response.json();
+  const lines = [];
+  for (const route of Object.values(payload.routes ?? {})) {
+    // decodePolyline gives [lat, lng]
+    lines.push(decodePolyline(route.line).map(([lat, lng]) => [lng, lat]));
+  }
+  return lines;
+}
+
 const out = {};
 for (const [id, region] of Object.entries(REGIONS)) {
-  const response = await fetch(`${proxy}/proxy/osm/network?mode=osm&level=network&v=12${region.query}`);
-  if (!response.ok) throw new Error(`${id}: HTTP ${response.status}`);
-  const ways = unpackRails(new Uint8Array(await response.arrayBuffer()));
-  const b = region.bounds;
-  const k = Math.cos((((b.minLat + b.maxLat) / 2) * Math.PI) / 180);
-  const spanX = (b.maxLng - b.minLng) * k;
-  const spanY = b.maxLat - b.minLat;
-  const scale = Math.min((W - 8) / spanX, (H - 8) / spanY);
+  const rings = [];
+  for (const query of region.outlines) {
+    rings.push(...(await outlineRings(query)));
+    await new Promise((resolve) => setTimeout(resolve, 1200)); // Nominatim: one request a second
+  }
+  const lines = await routeLines(region.journeys);
+
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  for (const ring of rings) {
+    for (const [lng, lat] of ring) {
+      minLng = Math.min(minLng, lng);
+      maxLng = Math.max(maxLng, lng);
+      minLat = Math.min(minLat, lat);
+      maxLat = Math.max(maxLat, lat);
+    }
+  }
+  const k = Math.cos((((minLat + maxLat) / 2) * Math.PI) / 180);
+  const spanX = (maxLng - minLng) * k;
+  const spanY = maxLat - minLat;
+  const scale = Math.min((W - PAD * 2) / spanX, (H - PAD * 2) / spanY);
   const offX = (W - spanX * scale) / 2;
   const offY = (H - spanY * scale) / 2;
-  const project = ({ lat, lon }) => [offX + (lon - b.minLng) * k * scale, H - offY - (lat - b.minLat) * scale];
-  let d = '';
-  for (const way of ways) {
-    const pts = rdp((way.geometry ?? []).map(project), EPS);
-    if (pts.length < 2) continue;
-    const length = pts.reduce((sum, p, i) => (i ? sum + Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) : 0), 0);
-    if (length < MIN_LENGTH) continue;
-    d += `M${pts.map(([x, y]) => `${x.toFixed(0)} ${y.toFixed(0)}`).join('L')}`;
+  const project = ([lng, lat]) => [offX + (lng - minLng) * k * scale, H - offY - (lat - minLat) * scale];
+  const fmt = (points) => points.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join('L');
+
+  const outline = rings
+    .map((ring) => rdp(ring.map(project), 0.5))
+    .filter((ring) => ring.length > 3)
+    .map((ring) => `M${fmt(ring)}Z`)
+    .join('');
+
+  // Each stretch of track once: trains of many routes share it. Cells of ~1.4 sketch units.
+  const seen = new Set();
+  const cell = (p) => `${Math.round(p[0] / 1.4)},${Math.round(p[1] / 1.4)}`;
+  let rails = '';
+  for (const line of lines) {
+    const points = rdp(line.map(project), 0.45);
+    let chain = [];
+    const flush = () => {
+      if (chain.length >= 2) rails += `M${fmt(chain)}`;
+      chain = [];
+    };
+    for (let i = 0; i < points.length - 1; i += 1) {
+      const a = cell(points[i]);
+      const b = cell(points[i + 1]);
+      const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+      if (seen.has(key)) {
+        flush();
+        continue;
+      }
+      seen.add(key);
+      if (chain.length === 0) chain.push(points[i]);
+      chain.push(points[i + 1]);
+    }
+    flush();
   }
-  out[id] = d;
-  console.log(id, ways.length, 'ways,', d.length, 'chars');
+  out[id] = { outline, rails };
+  console.log(id, `${rings.length} rings, ${lines.length} routes: outline ${outline.length} + rails ${rails.length} chars`);
 }
 
 fs.writeFileSync(
   new URL('../src/data/regionSketch.ts', import.meta.url),
-  `/** Rail network of each region as a small SVG path (200 x 120), generated by scripts/buildRegionSketches.mjs. */
+  `/** Outline and train lines of each region as small SVG paths (200 x 120), made by scripts/buildRegionSketches.mjs. */
 export const REGION_SKETCH_SIZE = { width: ${W}, height: ${H} };
 
-export const REGION_SKETCH: Record<'sk' | 'pid', string> = ${JSON.stringify(out, null, 2)};
+export const REGION_SKETCH: Record<'sk' | 'pid', { outline: string; rails: string }> = ${JSON.stringify(out, null, 2)};
 `
 );

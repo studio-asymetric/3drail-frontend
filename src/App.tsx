@@ -1359,13 +1359,19 @@ const App: React.FC = () => {
         locale
       )
     : null;
-  const disruptionEvents = disruptions?.events ?? [];
+  const liveTrainNumbers = useMemo(() => new Set(trains.map((train) => train.trainNumber)), [trains]);
+  // Only notices about a train that is on the map right now: line closures (no train) and trains
+  // that have left the map are not shown.
+  const disruptionEvents = useMemo(
+    () =>
+      (disruptions?.events ?? []).filter((event) => event.train != null && liveTrainNumbers.has(event.train.number)),
+    [disruptions, liveTrainNumbers]
+  );
   // Notices about the opened train; a plain delay is already in the status line.
   const trainAlerts = eventsForTrain(disruptionEvents, displayTrain?.trainNumber).filter(
     (event) => event.kind !== 'delay' || event.forecast
   );
   const alertBadge = disruptionEvents.filter((event) => event.kind === 'cancel' || event.kind === 'closure').length;
-  const liveTrainNumbers = useMemo(() => new Set(trains.map((train) => train.trainNumber)), [trains]);
   const showDock = Boolean(displayTrain || displayStation || displayAbout);
   const bootLocked = mapBooting || statusKind === 'loading';
 
@@ -1795,11 +1801,13 @@ const App: React.FC = () => {
             aria-label={t.menuOpen}
             aria-expanded={menuOpen}
             title={t.menuOpen}
-            onClick={() => setMenuOpen(true)}
+            onClick={() => setMenuOpen((open) => !open)}
           >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M2 4.5h12M2 8h12M2 11.5h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
+            <span className="menu-bars" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
           </button>
           <button
             type="button"
