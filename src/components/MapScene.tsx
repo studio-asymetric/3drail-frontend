@@ -829,7 +829,7 @@ function addTransitLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     paint: {
       'line-color': ['get', 'color'],
       'line-opacity': 0.9,
-      'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1, 11, 2, 14, 3.4, 17, 6],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 7, 0.7, 11, 1.4, 14, 2.4, 17, 4.2],
     },
   });
 }
