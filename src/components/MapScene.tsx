@@ -183,6 +183,8 @@ const BASEMAP_RAIL_FADE: ExpressionSpecification = [
  */
 const DETAIL_RAIL_MIN_ZOOM = 13.9;
 const DETAIL_RAIL_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 1];
+/** The simplified tram tracks: faint from afar, full in the city, gone once the detailed ones are in. */
+const TRAM_SIMPLIFIED_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 8, 0.5, 12, 0.85, 14, 0.85, 15, 0];
 
 function zoomInterpolateStops(expr: number | ExpressionSpecification): Array<[number, number]> | null {
   if (typeof expr === 'number') {
@@ -1075,9 +1077,10 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     maxzoom: simplifiedMaxZoom,
   });
   // Prague's tram tracks, drawn like the railway's branch lines
-  addPair('transit-lines', 'transit-tram', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, productOpacity(SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY), {
+  // They stay until the base map's own tram tracks (zoom 14 to 15) have faded in over them.
+  addPair('transit-lines', 'transit-tram', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, TRAM_SIMPLIFIED_FADE, {
     filter: ['==', ['get', 'mode'], 'tram'],
-    maxzoom: simplifiedMaxZoom,
+    maxzoom: 15.1,
   });
 
   const upsertLayer = (layer: Parameters<MapLibreMap['addLayer']>[0]) => {
