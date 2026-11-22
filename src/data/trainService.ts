@@ -48,6 +48,8 @@ interface MapaZsrTrain {
   PotvrdenyOdj?: boolean | null;
   /** Region feeds: `Position` is a live GPS fix, not the last station reported. */
   PositionLive?: boolean;
+  /** Region feeds: 'tram', 'metro', 'bus', 'trolley' (absent for trains). */
+  Rezim?: string;
 }
 
 export interface RouteSegment {
@@ -106,6 +108,7 @@ export interface TrainRosterItem {
   orderCurrentStation?: number;
   /** `position` is a live GPS fix (not the last station). */
   liveGps?: boolean;
+  mode?: string;
   summary?: string;
   operator?: string;
   delayText?: string;
@@ -129,6 +132,8 @@ export interface TrainDelayPayload {
 
 export interface TrainRenderState {
   trainNumber: string;
+  /** 'tram', 'metro', 'bus', 'trolley'; absent for trains. */
+  mode?: string;
   trainName?: string;
   trainType?: string;
   shapePath: Coordinate[];
@@ -353,6 +358,15 @@ export function contrastInk(fill: string): string {
 }
 
 /** Short callout on the map pill: Ex, Os, rj. */
+/** What a train is called on screen: "Ex 526". A region vehicle has no number people know, so just its line ("S49", "136"). */
+export function trainLabel(train: { trainType?: string; trainNumber: string }): string {
+  const type = train.trainType?.trim() ?? '';
+  if (/^p\d/.test(train.trainNumber)) {
+    return type || train.trainNumber;
+  }
+  return `${type ? `${type} ` : ''}${train.trainNumber}`;
+}
+
 export function trainTypeCallout(type?: string): string {
   const raw = (type ?? '').trim();
   if (!raw) {
@@ -690,6 +704,7 @@ function convertTrainsToRosterItems(trains: MapaZsrTrain[]): TrainRosterItem[] {
       rosterNextStation: train.NadDo || undefined,
       orderCurrentStation: Number.isFinite(parsedOrder) ? parsedOrder : undefined,
       liveGps: train.PositionLive === true ? true : undefined,
+      mode: train.Rezim || undefined,
       summary: train.Popis || train.Nazov || undefined,
       operator: train.Dopravca || undefined,
       delayText: train.MeskaTextEn || train.MeskaText || undefined,
@@ -776,6 +791,7 @@ export function buildTrainRenderState(
         ? formatTrainDisplayName(roster.train.name)
         : undefined,
       trainType: roster.train?.type,
+      mode: roster.mode,
       shapePath: EMPTY_SHAPE_PATH,
       position: roster.position,
       progress: 0.5,
@@ -836,6 +852,7 @@ export function buildTrainRenderState(
       ? formatTrainDisplayName(roster.train.name)
       : undefined,
     trainType: roster.train?.type,
+    mode: roster.mode,
     shapePath: shape.points,
     position: interpolateShape(shape.points, progress),
     progress,
@@ -896,6 +913,7 @@ function trainsLookEqual(left: TrainRenderState, right: TrainRenderState): boole
     left.delayMinutes === right.delayMinutes &&
     left.color === right.color &&
     left.trainType === right.trainType &&
+    left.mode === right.mode &&
     left.trainName === right.trainName &&
     left.currentStation === right.currentStation &&
     left.nextStation === right.nextStation &&

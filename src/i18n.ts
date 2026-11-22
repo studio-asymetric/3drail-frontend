@@ -59,6 +59,12 @@ export type Copy = {
   regionPid: string;
   menuDarkMode: string;
   menuAbout: string;
+  menuShow: string;
+  modeRail: string;
+  modeMetro: string;
+  modeTram: string;
+  modeTrolley: string;
+  modeBus: string;
   menuStudio: string;
   regionSkMeta: string;
   regionPidMeta: string;
@@ -160,6 +166,12 @@ const sk: Copy = {
   regionPid: 'Praha a okolie (PID)',
   menuDarkMode: 'Tmavý režim',
   menuAbout: 'O aplikácii',
+  menuShow: 'Zobraziť',
+  modeRail: 'Vlaky',
+  modeMetro: 'Metro',
+  modeTram: 'Električky',
+  modeTrolley: 'Trolejbusy',
+  modeBus: 'Autobusy',
   menuStudio: 'Autor',
   regionSkMeta: 'ZSSK · naživo',
   regionPidMeta: 'PID · naživo',
@@ -263,6 +275,12 @@ const en: Copy = {
   regionPid: 'Prague and surroundings (PID)',
   menuDarkMode: 'Dark mode',
   menuAbout: 'About the app',
+  menuShow: 'Show',
+  modeRail: 'Trains',
+  modeMetro: 'Metro',
+  modeTram: 'Trams',
+  modeTrolley: 'Trolleybuses',
+  modeBus: 'Buses',
   menuStudio: 'Made by',
   regionSkMeta: 'ZSSK · live',
   regionPidMeta: 'PID · live',

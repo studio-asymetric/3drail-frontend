@@ -14,14 +14,12 @@ const POLL_MS = 15_000;
 const STALE_MS = 3 * 60_000;
 
 export function parseFeatures(features, tripKey, now = Date.now()) {
-  const out = new Map();
+  const rail = new Map();
+  const other = [];
   for (const feature of features ?? []) {
     const props = feature?.properties ?? {};
-    const tripId = props.trip?.gtfs?.trip_id;
-    const key = tripId ? tripKey.get(tripId) : null;
-    if (!key) {
-      continue;
-    }
+    const gtfs = props.trip?.gtfs ?? {};
+    const tripId = gtfs.trip_id;
     const last = props.last_position ?? {};
     const stamp = Date.parse(last.origin_timestamp ?? '');
     if (Number.isFinite(stamp) && now - stamp > STALE_MS) {
@@ -29,17 +27,47 @@ export function parseFeatures(features, tripKey, now = Date.now()) {
     }
     const coords = feature.geometry?.coordinates;
     const delay = Number(last.delay?.actual);
-    out.set(key, {
-      delaySec: Number.isFinite(delay) ? delay : 0,
-      /** GTFS stop_sequence of the last stop it served, and whether it is standing there now. */
-      lastSeq: Number.isFinite(Number(last.last_stop?.sequence)) ? Number(last.last_stop.sequence) : null,
+    const delaySec = Number.isFinite(delay) ? delay : 0;
+    const lastSeq = Number.isFinite(Number(last.last_stop?.sequence)) ? Number(last.last_stop.sequence) : null;
+    const key = tripId ? tripKey.get(tripId) : null;
+    if (key) {
+      rail.set(key, {
+        delaySec,
+        /** GTFS stop_sequence of the last stop it served, and whether it is standing there now. */
+        lastSeq,
+        atStop: last.state_position === 'at_stop',
+        lat: Array.isArray(coords) ? Number(coords[1]) : undefined,
+        lng: Array.isArray(coords) ? Number(coords[0]) : undefined,
+        at: Number.isFinite(stamp) ? stamp : now,
+      });
+      continue;
+    }
+    // Buses, trams, metro, trolleybuses, ferries: shown from the live report alone.
+    if (!tripId || !Array.isArray(coords) || !Number.isFinite(Number(coords[0]))) {
+      continue;
+    }
+    other.push({
+      tripId,
+      routeId: gtfs.route_id,
+      short: gtfs.route_short_name ?? '',
+      type: Number(gtfs.route_type),
+      headsign: gtfs.trip_headsign ?? '',
+      agency: props.trip?.agency_name?.real ?? '',
+      startTs: props.trip?.start_timestamp ?? '',
+      lat: Number(coords[1]),
+      lng: Number(coords[0]),
+      bearing: Number(last.bearing),
+      delaySec,
+      lastStopId: last.last_stop?.id ?? '',
+      nextStopId: last.next_stop?.id ?? '',
+      lastTime: String(last.last_stop?.departure_time ?? last.last_stop?.arrival_time ?? '').slice(11, 16),
+      nextTime: String(last.next_stop?.arrival_time ?? '').slice(11, 16),
+      lastSeq,
       atStop: last.state_position === 'at_stop',
-      lat: Array.isArray(coords) ? Number(coords[1]) : undefined,
-      lng: Array.isArray(coords) ? Number(coords[0]) : undefined,
       at: Number.isFinite(stamp) ? stamp : now,
     });
   }
-  return out;
+  return { rail, other };
 }
 
 export function startGolemioPolling({ region, apiKey, log = () => undefined, fetchImpl = fetch }) {
@@ -58,9 +86,10 @@ export function startGolemioPolling({ region, apiKey, log = () => undefined, fet
       }
       const body = await response.json();
       const tripKey = new Map(region.activeTrips().map((entry) => [entry.trip.id, entry.key]));
-      const live = parseFeatures(body.features, tripKey);
-      region.setLive(live);
-      log(`Golemio: ${body.features?.length ?? 0} vehicles, ${live.size} matched to running trains`);
+      const { rail, other } = parseFeatures(body.features, tripKey);
+      region.setLive(rail);
+      region.setOthers(other);
+      log(`Golemio: ${body.features?.length ?? 0} vehicles, ${rail.size} trains, ${other.length} buses, trams and metro`);
     } catch (error) {
       log(`Golemio poll failed: ${error instanceof Error ? error.message : String(error)}`);
     }

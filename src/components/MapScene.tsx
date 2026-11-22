@@ -67,7 +67,7 @@ import { PILL_HEIGHT, TrainCanvasLayer } from './trainCanvas';
 import { screenProjection } from '../data/screenProjection';
 import { PERF_HUD, perfAdd, startPerfHud } from '../perfHud';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
-import { REGION, REGION_ID } from '../region';
+import { REGION, REGION_ID, vehicleModeOf } from '../region';
 import {
   clipWaysToOutline,
   isCoordinateInsideOutline,
@@ -89,6 +89,11 @@ import {
 
 /** What the view may pan over: the region on this page (Slovakia, or Prague with /pid). */
 const VIEW_BOUNDS = REGION.bounds;
+/**
+ * The map has to be zoomed in at least this far before a kind of vehicle is drawn (Prague has
+ * hundreds of buses): a single stretch of the map would otherwise be a heap of labels.
+ */
+const MODE_MIN_ZOOM: Record<string, number> = { rail: 0, metro: 9, tram: 10, trolley: 11, bus: 11.5 };
 /** A jump of the opened train bigger than this (metres) is announced with a notice. */
 const POSITION_UPDATE_METERS = 700;
 /** Extra pan room beyond Slovakia (degrees). */
@@ -1626,6 +1631,18 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       ]);
     };
     map.on('zoom', fitViewBounds);
+    // Buses, trams and metro appear and disappear with the zoom level.
+    let modeBand = -1;
+    const modeBandOf = (zoom: number) => Object.values(MODE_MIN_ZOOM).filter((min) => zoom >= min).length;
+    map.on('zoom', () => {
+      const band = modeBandOf(map.getZoom());
+      if (band === modeBand) {
+        return;
+      }
+      modeBand = band;
+      rebuildTrainPointsRef.current();
+      publishTrainMarkersRef.current();
+    });
     map.on('resize', () => fitViewBounds());
     map.once('load', () => fitViewBounds());
     const hydrateOverlay = () => {
@@ -2135,6 +2152,12 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           : train.position;
       if (!position) {
         return [];
+      }
+      if (train.mode && train.trainNumber !== focused) {
+        const zoom = mapRef.current?.getZoom() ?? 99;
+        if (zoom < (MODE_MIN_ZOOM[vehicleModeOf(train.mode)] ?? 0)) {
+          return [];
+        }
       }
       if (
         !isCoordinateInsideOutline(

@@ -17,7 +17,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createGtfsRegion } from './gtfsRegion.mjs';
 import { startGolemioPolling } from './golemio.mjs';
-import { buildRailSubset } from './buildGtfs.mjs';
+import { buildRailSubset, REGION_DATA_VERSION } from './buildGtfs.mjs';
 
 const dirName = path.dirname(fileURLToPath(import.meta.url));
 const PID_FEED_URL = 'https://data.pid.cz/PID_GTFS.zip';
@@ -74,7 +74,8 @@ export function createRegionHub(log = () => undefined) {
 
   const dataFresh = () => {
     try {
-      return Date.now() - fs.statSync(path.join(dataDir, 'trips.txt')).mtimeMs < MAX_DATA_AGE_MS;
+      const version = Number(fs.readFileSync(path.join(dataDir, 'region.version'), 'utf8'));
+      return version === REGION_DATA_VERSION && Date.now() - fs.statSync(path.join(dataDir, 'trips.txt')).mtimeMs < MAX_DATA_AGE_MS;
     } catch {
       return false;
     }
@@ -117,6 +118,7 @@ export function createRegionHub(log = () => undefined) {
           stopPolling?.();
           stopPolling = null;
           region?.setLive(new Map());
+          region?.setOthers([]);
           clearInterval(idleTimer);
           log('PID: idle, live polling stopped');
         }
@@ -158,7 +160,7 @@ export function createRegionHub(log = () => undefined) {
     /** Stop list of a running region train, or null. */
     detail(key) {
       touch();
-      return region?.hasKey(key) ? region.detail(key) : null;
+      return region?.detail(key) ?? null;
     },
     /** `{stations:[...]}` JSON of the region only (the browser merges it); null while loading. */
     stationsBody() {

@@ -25,8 +25,9 @@ import {
   routeCursor,
   stationPoints,
   trainTypeCallout,
+  trainLabel,
 } from './data/trainService';
-import { REGION_ID, regionsQuery } from './region';
+import { REGION_ID, readStoredModes, regionsQuery, storeModes, vehicleModeOf, type VehicleMode } from './region';
 import { MainMenu } from './components/MainMenu';
 import type { Coordinate, GtfsDataset } from './data/gtfsParser';
 import { buildGtfsDataset } from './data/gtfsParser';
@@ -555,6 +556,10 @@ const App: React.FC = () => {
   const service = useMemo(() => new TrainService(dataset ?? EMPTY_DATASET), [dataset]);
   const [locale, setLocale] = useState<AppLocale>(readStoredLocale);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Prague: which kinds of vehicle are drawn (trains, metro, trams, trolleybuses, buses).
+  const [modes, setModes] = useState<VehicleMode[]>(readStoredModes);
+  const modesRef = useRef(modes);
+  modesRef.current = modes;
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locating, setLocating] = useState(false);
   const t = useMemo(() => copyFor(locale), [locale]);
@@ -799,8 +804,9 @@ const App: React.FC = () => {
               feedDown = false;
               pushToast(t.toastFeedBack, 'feed-back', 10_000);
             }
-            setTrains((current) => mergeTrainList(current, live));
-            setStatusMessage(t.trainsCount(live.length));
+            const shown = live.filter((train) => modesRef.current.includes(vehicleModeOf(train.mode)));
+            setTrains((current) => mergeTrainList(current, shown));
+            setStatusMessage(t.trainsCount(shown.length));
             setStatusKind('success');
             setLoading(false);
             return;
@@ -1226,6 +1232,21 @@ const App: React.FC = () => {
     setAboutOpen(true);
   }, [aboutOpen, handleAboutBack]);
 
+  const handleToggleMode = useCallback((mode: VehicleMode) => {
+    setModes((current) => {
+      const next = current.includes(mode) ? current.filter((item) => item !== mode) : [...current, mode];
+      storeModes(next);
+      return next;
+    });
+  }, []);
+  // switching a kind off removes it at once; switching it on brings it back with the next update
+  useEffect(() => {
+    setTrains((current) => {
+      const kept = current.filter((train) => modes.includes(vehicleModeOf(train.mode)));
+      return kept.length === current.length ? current : kept;
+    });
+  }, [modes]);
+
   // Where am I: asks the browser for the position, centres the map there and marks it. The position
   // stays in the browser; nothing is sent anywhere.
   const handleLocate = useCallback(() => {
@@ -1582,7 +1603,7 @@ const App: React.FC = () => {
     } else if (displayTrain) {
       applySeo(locale, {
         kind: 'train',
-        label: `${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}${properTrainName ? ` ${properTrainName}` : ''}`,
+        label: `${trainLabel(displayTrain)}${properTrainName ? ` ${properTrainName}` : ''}`,
         destination: routeEnds?.to ? townOf(routeEnds.to) : '',
       });
     } else if (displayStation) {
@@ -1852,7 +1873,7 @@ const App: React.FC = () => {
                     <span className="chrome__hit-copy">
                       <span className="chrome__hit-title">
                         {hit.kind === 'train'
-                          ? `${hit.train.trainType ? `${hit.train.trainType} ` : ''}${hit.train.trainNumber}`
+                          ? `${trainLabel(hit.train)}`
                           : hit.station.name}
                       </span>
                       <small className="chrome__hit-meta">
@@ -1971,6 +1992,8 @@ const App: React.FC = () => {
         onLocale={setLocale}
         theme={theme}
         onTheme={setTheme}
+        modes={modes}
+        onToggleMode={handleToggleMode}
         onAbout={() => {
           setMenuOpen(false);
           if (!aboutOpen) {
@@ -1984,6 +2007,8 @@ const App: React.FC = () => {
           menuAppearance: t.menuAppearance,
           menuDarkMode: t.menuDarkMode,
           menuAbout: t.menuAbout,
+          menuShow: t.menuShow,
+          modeNames: { rail: t.modeRail, metro: t.modeMetro, tram: t.modeTram, trolley: t.modeTrolley, bus: t.modeBus },
           menuStudio: t.menuStudio,
           regionNames: { sk: t.regionSk, pid: t.regionPid },
           regionMeta: { sk: t.regionSkMeta, pid: t.regionPidMeta },
@@ -2076,7 +2101,7 @@ const App: React.FC = () => {
                 }
               >
                 <p className="dock__identity">
-                  <span className="dock__pill">{`${displayTrain.trainType ? `${displayTrain.trainType} ` : ''}${displayTrain.trainNumber}`}</span>
+                  <span className="dock__pill">{`${trainLabel(displayTrain)}`}</span>
                   <DockTitle properName={properTrainName} to={routeEnds?.to ?? ''} fallback={t.train} />
                 </p>
                 <p className="dock__status">

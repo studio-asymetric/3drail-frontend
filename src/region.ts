@@ -43,3 +43,36 @@ export const REGION: RegionInfo = REGIONS[REGION_ID];
 
 /** `&regions=pid&only=1` for the proxy's endpoints on a region page; empty for Slovakia. */
 export const regionsQuery = (): string => (REGION_ID === 'sk' ? '' : `&regions=${REGION_ID}&only=1`);
+
+/** What a vehicle is: trains are "rail"; the Prague feed also has the others. */
+export type VehicleMode = 'rail' | 'metro' | 'tram' | 'trolley' | 'bus';
+export const VEHICLE_MODES: VehicleMode[] = ['rail', 'metro', 'tram', 'trolley', 'bus'];
+
+const MODES_KEY = 'mojvlak-modes';
+
+export function readStoredModes(): VehicleMode[] {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(MODES_KEY) ?? 'null');
+    if (Array.isArray(parsed)) {
+      return VEHICLE_MODES.filter((mode) => parsed.includes(mode));
+    }
+  } catch {
+    // private mode: use the default
+  }
+  return [...VEHICLE_MODES];
+}
+
+export function storeModes(modes: VehicleMode[]) {
+  try {
+    window.localStorage.setItem(MODES_KEY, JSON.stringify(modes));
+  } catch {
+    // ignore
+  }
+}
+
+/** The mode a feed row belongs to; ferries and funiculars count with the buses. */
+export function vehicleModeOf(mode?: string): VehicleMode {
+  if (!mode) return 'rail';
+  if (mode === 'metro' || mode === 'tram' || mode === 'trolley') return mode;
+  return 'bus';
+}

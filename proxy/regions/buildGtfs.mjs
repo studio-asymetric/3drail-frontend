@@ -7,6 +7,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
+/** Bumped when the cut-down timetable gains files, so older copies are rebuilt. */
+export const REGION_DATA_VERSION = 2;
+
 function splitCsv(line) {
   const out = [];
   let cur = '';
@@ -82,25 +85,62 @@ export async function buildRailSubset(inDirArg, outDirArg, log = console.log) {
   outDir = path.resolve(outDirArg);
   fs.mkdirSync(outDir, { recursive: true });
 const railRoutes = new Set();
-await filterFile('routes.txt', (r) => (r.route_type === '2' ? (railRoutes.add(r.route_id), true) : false)).then((n) =>
-  log(`routes: ${n}`)
-);
+const otherRoutes = new Set();
+// every route is kept (names and colours of buses, trams and metro lines are needed)
+await filterFile('routes.txt', (r) => {
+  (r.route_type === '2' ? railRoutes : otherRoutes).add(r.route_id);
+  return true;
+}).then((n) => log(`routes: ${n}`));
 
 const trips = new Set();
+const otherTrips = new Set();
 const services = new Set();
 const shapes = new Set();
 await filterFile('trips.txt', (r) => {
+  if (otherRoutes.has(r.route_id)) {
+    // not written: buses, trams and metro are shown from the live feed; only their stop times are kept
+    otherTrips.add(r.trip_id);
+    return false;
+  }
   if (!railRoutes.has(r.route_id)) return false;
   trips.add(r.trip_id);
   services.add(r.service_id);
   if (r.shape_id) shapes.add(r.shape_id);
   return true;
-}).then((n) => log(`trips: ${n}`));
+}).then((n) => log(`rail trips: ${n}; other trips: ${otherTrips.size}`));
 
 const stopIds = new Set();
-await filterFile('stop_times.txt', (r) => (trips.has(r.trip_id) ? (stopIds.add(r.stop_id), true) : false)).then((n) =>
-  log(`stop_times: ${n}`)
-);
+const toSec = (text) => {
+  const m = String(text).match(/^(\d+):(\d{2}):(\d{2})$/);
+  return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : '';
+};
+{
+  const railOut = fs.createWriteStream(path.join(outDir, 'stop_times.txt'));
+  const otherOut = fs.createWriteStream(path.join(outDir, 'other_stop_times.txt'));
+  let railRows = 0;
+  let otherRows = 0;
+  const header = await stream('stop_times.txt', (r, line) => {
+    if (trips.has(r.trip_id)) {
+      railOut.write(`${line}\n`);
+      stopIds.add(r.stop_id);
+      railRows += 1;
+    } else if (otherTrips.has(r.trip_id)) {
+      // compact: trip, arrival s, departure s, stop, sequence (no header; read back by offset)
+      otherOut.write(`${r.trip_id},${toSec(r.arrival_time)},${toSec(r.departure_time)},${r.stop_id},${r.stop_sequence}\n`);
+      stopIds.add(r.stop_id);
+      otherRows += 1;
+    }
+  });
+  railOut.end();
+  otherOut.end();
+  await Promise.all([
+    new Promise((resolve) => railOut.on('finish', resolve)),
+    new Promise((resolve) => otherOut.on('finish', resolve)),
+  ]);
+  const body = fs.readFileSync(path.join(outDir, 'stop_times.txt'), 'utf8');
+  fs.writeFileSync(path.join(outDir, 'stop_times.txt'), `${header}\n${body}`);
+  log(`stop_times: ${railRows} rail rows, ${otherRows} other rows`);
+}
 await filterFile('shapes.txt', (r) => shapes.has(r.shape_id)).then((n) => log(`shape points: ${n}`));
 await filterFile('stops.txt', (r) => stopIds.has(r.stop_id) || r.location_type === '1').then((n) => log(`stops: ${n}`));
 await filterFile('calendar.txt', (r) => services.has(r.service_id)).then((n) => log(`calendar: ${n}`));
@@ -108,5 +148,6 @@ await filterFile('calendar_dates.txt', (r) => services.has(r.service_id)).then((
 for (const file of ['agency.txt', 'feed_info.txt']) {
   fs.copyFileSync(path.join(inDir, file), path.join(outDir, file));
 }
+fs.writeFileSync(path.join(outDir, 'region.version'), String(REGION_DATA_VERSION));
 log(`written to ${outDir}`);
 }

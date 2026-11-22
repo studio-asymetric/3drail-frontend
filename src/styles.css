@@ -3649,3 +3649,39 @@ body,
     display: none;
   }
 }
+
+/* Which kinds of vehicle to show. */
+.menu__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.menu__chip {
+  padding: 7px 14px;
+  border: 1px solid var(--menu-line);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  opacity: 0.6;
+  transition:
+    background-color var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    opacity var(--dur) var(--ease);
+}
+
+.menu__chip.is-on {
+  background: var(--menu-ink);
+  color: var(--menu-ink-invert);
+  border-color: var(--menu-ink);
+  opacity: 1;
+}
+
+.menu__chip:focus-visible {
+  outline: 1px solid var(--menu-ink);
+  outline-offset: 2px;
+}

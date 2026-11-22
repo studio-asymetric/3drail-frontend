@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { REGION_ID, REGIONS, type RegionId } from '../region';
+import { REGION_ID, REGIONS, VEHICLE_MODES, type RegionId, type VehicleMode } from '../region';
 import type { AppLocale } from '../i18n';
 import { REGION_SKETCH, REGION_SKETCH_SIZE } from '../data/regionSketch';
 
@@ -10,6 +10,8 @@ export interface MenuCopy {
   menuAppearance: string;
   menuDarkMode: string;
   menuAbout: string;
+  menuShow: string;
+  modeNames: Record<VehicleMode, string>;
   menuStudio: string;
   regionNames: Record<RegionId, string>;
   regionMeta: Record<RegionId, string>;
@@ -25,6 +27,9 @@ interface Props {
   onTheme: (theme: 'light' | 'dark') => void;
   /** Opens the About panel (on a phone the menu is where it lives). */
   onAbout: () => void;
+  /** Which kinds of vehicle are drawn (a region with more than trains). */
+  modes: VehicleMode[];
+  onToggleMode: (mode: VehicleMode) => void;
   logo: string;
 }
 
@@ -37,7 +42,7 @@ const DESKTOP_QUERY = '(min-width: 801px)';
  * (each region is a page of its own, "/" and "/pid", so choosing one opens it); language is a
  * two-way switch and the colour mode a toggle.
  */
-export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocale, theme, onTheme, onAbout, logo }) => {
+export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocale, theme, onTheme, onAbout, modes, onToggleMode, logo }) => {
   const closeRef = useRef<HTMLButtonElement | null>(null);
   // Stays in the page while it fades out (the same exit as the left panel), then goes.
   const [mounted, setMounted] = useState(open);
@@ -157,6 +162,25 @@ export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocal
             })}
           </div>
         </section>
+
+        {REGION_ID === 'pid' && (
+          <section className="menu__group">
+            <h2 className="menu__label">{copy.menuShow}</h2>
+            <div className="menu__chips" role="group" aria-label={copy.menuShow}>
+              {VEHICLE_MODES.map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`menu__chip${modes.includes(mode) ? ' is-on' : ''}`}
+                  aria-pressed={modes.includes(mode)}
+                  onClick={() => onToggleMode(mode)}
+                >
+                  {copy.modeNames[mode]}
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
         <section className="menu__group menu__duo">
           <div className="menu__item">

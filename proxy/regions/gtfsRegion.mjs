@@ -138,6 +138,9 @@ function simplifyLine(line, eps = 3) {
   return line.filter((_, i) => keep[i]);
 }
 
+const MODE_BY_TYPE = { 0: 'tram', 1: 'metro', 3: 'bus', 4: 'ferry', 7: 'funicular', 11: 'trolley' };
+const MODE_CODE = { tram: 't', metro: 'm', bus: 'b', ferry: 'f', funicular: 'n', trolley: 'u' };
+
 export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefined }) {
   const stops = new Map(); // stop_id -> { name, lat, lng }
   const routes = new Map(); // route_id -> { short, long, color }
@@ -322,10 +325,136 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
   }
 
   let live = new Map(); // key -> { delaySec, lat, lng }
+
+  // Buses, trams, metro and the like: only what the live feed says about them.
+  let others = new Map(); // key -> { v: live record, row: gtall row }
+  const stopName = (id) => stops.get(id)?.name ?? '';
+
+  function otherRow(v) {
+    const mode = MODE_BY_TYPE[v.type] ?? 'bus';
+    const mid = v.tripId.split('_')[1] ?? v.tripId.replace(/\W/g, '').slice(-6);
+    const day = v.startTs.slice(8, 10) || '00';
+    const key = `p${mid}${day}${MODE_CODE[mode]}`.slice(0, 12);
+    const delayMin = Math.round(v.delaySec / 60);
+    return [
+      key,
+      {
+        CisloVlaku: key,
+        TypVlaku: v.short,
+        NazovVlaku: v.short,
+        Nazov: v.headsign,
+        Popis: `${v.short} → ${v.headsign}`,
+        Position: [v.lat, v.lng],
+        Trasa: [],
+        Meska: delayMin,
+        MeskaSkutocne: delayMin,
+        MeskaColor: delayMin > 5 ? 'red' : delayMin > 1 ? 'orange' : 'green',
+        InfoZoStanice: stopName(v.lastStopId),
+        NextStation: stopName(v.nextStopId),
+        Cas: '',
+        CasPlan: '',
+        Dopravca: v.agency,
+        Angle: Number.isFinite(v.bearing) ? v.bearing : undefined,
+        Narusenie: false,
+        PotvrdenyOdj: !v.atStop,
+        PositionLive: true,
+        Rezim: mode,
+        Farba: routes.get(v.routeId)?.color || '',
+      },
+    ];
+  }
+
+  // stop times of the other trips, read from disk by offset when a vehicle is opened
+  let otherIndex = null;
+  let otherFd = null;
+  function ensureOtherIndex() {
+    if (otherIndex) return otherIndex;
+    otherIndex = new Map();
+    const file = path.join(dir, 'other_stop_times.txt');
+    if (!fs.existsSync(file)) return otherIndex;
+    const buf = fs.readFileSync(file);
+    let start = 0;
+    let current = null;
+    let currentStart = 0;
+    for (let i = 0; i < buf.length; i += 1) {
+      if (buf[i] !== 10) continue;
+      let c = start;
+      while (c < i && buf[c] !== 44) c += 1;
+      const id = buf.toString('latin1', start, c);
+      if (id !== current) {
+        if (current !== null) otherIndex.set(current, [currentStart, start]);
+        current = id;
+        currentStart = start;
+      }
+      start = i + 1;
+    }
+    if (current !== null) otherIndex.set(current, [currentStart, start]);
+    otherFd = fs.openSync(file, 'r');
+    log(`GTFS region: ${otherIndex.size} other trips indexed`);
+    return otherIndex;
+  }
+
+  function otherDetail(key) {
+    const entry = others.get(key);
+    if (!entry) return null;
+    const { v } = entry;
+    const span = ensureOtherIndex().get(v.tripId);
+    let rows = [];
+    if (span && otherFd != null) {
+      const chunk = Buffer.alloc(span[1] - span[0]);
+      fs.readSync(otherFd, chunk, 0, chunk.length, span[0]);
+      rows = chunk
+        .toString('utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((line) => line.split(','))
+        .map(([, arr, dep, stopId, seq]) => ({ arr: Number(arr), dep: Number(dep), stopId, seq: Number(seq) }))
+        .sort((a, b) => a.seq - b.seq);
+    }
+    const delay = v.delaySec;
+    let stopsOut;
+    if (rows.length > 0) {
+      stopsOut = rows.map((row) => {
+        const state = v.lastSeq == null ? 'ahead' : row.seq < v.lastSeq ? 'passed' : row.seq === v.lastSeq ? 'current' : 'ahead';
+        const arr = Number.isFinite(row.arr) ? row.arr : row.dep;
+        const dep = Number.isFinite(row.dep) ? row.dep : row.arr;
+        return {
+          name: stopName(row.stopId) || row.stopId,
+          arrival: clock(arr + delay),
+          departure: clock(dep + delay),
+          scheduledArrival: clock(arr),
+          scheduledDeparture: clock(dep),
+          state,
+          kind: 'stop',
+        };
+      });
+    } else {
+      // this trip is not in our copy of the timetable (a newer one): at least the last and next stop
+      stopsOut = [
+        { name: stopName(v.lastStopId), time: v.lastTime, state: 'current' },
+        { name: stopName(v.nextStopId), time: v.nextTime, state: 'ahead' },
+      ]
+        .filter((row) => row.name)
+        .map((row) => ({
+          name: row.name,
+          arrival: row.time,
+          departure: row.time,
+          scheduledArrival: row.time,
+          scheduledDeparture: row.time,
+          state: row.state,
+          kind: 'stop',
+        }));
+    }
+    return { source: 'gtfs-region', train: key, status: 'live', stops: stopsOut };
+  }
   return {
     /** Live feed hook: Map(key -> { delaySec, lat, lng }), replaces the previous snapshot. */
     setLive(next) {
       live = next;
+    },
+    /** Live buses, trams, metro...: array of records from the live feed (replaces the previous list). */
+    setOthers(list) {
+      others = new Map(list.map(otherRow).map(([key, row], i) => [key, { v: list[i], row }]));
     },
     activeTrips(nowMs = Date.now()) {
       return active(nowMs);
@@ -376,6 +505,7 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
           PositionLive: lv?.lat != null,
         });
       }
+      others.forEach((entry) => rows.push(entry.row));
       return rows;
     },
 
@@ -415,7 +545,7 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
     /** Stop rows for the side panel. */
     detail(key, nowMs = Date.now()) {
       const entry = active(nowMs).find((e) => e.key === key);
-      if (!entry) return null;
+      if (!entry) return otherDetail(key);
       const lv = live.get(key);
       const delay = lv?.delaySec ?? 0;
       const sim = simulate(entry, nowMs, delay);
