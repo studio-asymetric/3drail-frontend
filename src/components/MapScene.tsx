@@ -188,8 +188,10 @@ const BASEMAP_RAIL_FADE: ExpressionSpecification = [
  */
 const DETAIL_RAIL_MIN_ZOOM = 13.9;
 const DETAIL_RAIL_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 1];
+/** The detailed tram tracks fade in to the same grey and strength the simplified ones have (no glow). */
+const TRAM_DETAIL_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 0.6];
 /** The simplified tram tracks: faint from afar, full in the city, gone once the detailed ones are in. */
-const TRAM_SIMPLIFIED_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 11.8, 0.6, 13, 0.85, 14, 0.85, 15, 0];
+const TRAM_SIMPLIFIED_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 11.8, 0.4, 13, 0.6, 14, 0.6, 15, 0];
 
 function zoomInterpolateStops(expr: number | ExpressionSpecification): Array<[number, number]> | null {
   if (typeof expr === 'number') {
@@ -825,8 +827,9 @@ function addTransitLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     filter: ['==', ['get', 'mode'], 'metro'],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
-      'line-color': ['get', 'color'],
-      'line-opacity': 0.9,
+      // the line colours, toned down: part way to a grey, and a little transparent
+      'line-color': ['interpolate', ['linear'], 0.45, 0, ['get', 'color'], 1, theme === 'dark' ? '#6e7076' : '#9b9da3'],
+      'line-opacity': 0.72,
       'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1, 11, 2, 14, 3.4, 17, 6],
     },
   });
@@ -916,6 +919,17 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       },
     });
   };
+
+  // Prague's tram tracks, drawn like the railway's branch lines. Added first, so every railway is
+  // above them (and the metro, added before all of these, is below).
+  // They stay until the base map's own tram tracks (zoom 14 to 15) have faded in over them.
+  addPair('transit-lines', 'transit-tram', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, TRAM_SIMPLIFIED_FADE, {
+    filter: ['==', ['get', 'mode'], 'tram'],
+    // the grey of the side tracks, not the bright main-line white: trams should not glow
+    color: sideColor,
+    minzoom: DOT_MIN_ZOOM,
+    maxzoom: 15.1,
+  });
 
   if (map.getSource('basemap')) {
     for (const legacyId of [
@@ -1028,6 +1042,14 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
         },
       });
     };
+    // tram tracks first: every railway is drawn above them
+    addBasemapPair('basemap-rails-tram', tramFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, sideColor, TRAM_DETAIL_FADE, {
+      minzoom: DETAIL_RAIL_MIN_ZOOM,
+    });
+    addBasemapPair('basemap-rails-tram-tunnel', tramTunnelFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, sideColor, TRAM_DETAIL_FADE, {
+      dasharray: [2.4, 2.1],
+      minzoom: DETAIL_RAIL_MIN_ZOOM,
+    });
     addBasemapPair('basemap-rails-side', sideFilter, RAIL_SIDE_FILL, RAIL_SIDE_CASING, sideColor, DETAIL_RAIL_FADE, {
       minzoom: DETAIL_RAIL_MIN_ZOOM,
     });
@@ -1040,13 +1062,6 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       productOpacity(DETAIL_RAIL_FADE, RAIL_BRANCH_OPACITY),
       { minzoom: DETAIL_RAIL_MIN_ZOOM }
     );
-    addBasemapPair('basemap-rails-tram', tramFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, fillColor, DETAIL_RAIL_FADE, {
-      minzoom: DETAIL_RAIL_MIN_ZOOM,
-    });
-    addBasemapPair('basemap-rails-tram-tunnel', tramTunnelFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, fillColor, DETAIL_RAIL_FADE, {
-      dasharray: [2.4, 2.1],
-      minzoom: DETAIL_RAIL_MIN_ZOOM,
-    });
     addBasemapPair('basemap-rails-main', mainFilter, RAIL_MAIN_FILL, RAIL_MAIN_CASING, mainFillColor, BASEMAP_RAIL_FADE);
     addBasemapPair('basemap-rails-tunnel', tunnelFilter, RAIL_MAIN_FILL, RAIL_MAIN_CASING, mainFillColor, BASEMAP_RAIL_FADE, {
       dasharray: [2.6, 2.2],
@@ -1084,13 +1099,6 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   addPair('rails-simplified-main', 'rails-simplified-main', RAIL_MAIN_FILL, RAIL_MAIN_CASING, SIMPLIFIED_RAIL_FADE, {
     color: mainFillColor,
     maxzoom: simplifiedMaxZoom,
-  });
-  // Prague's tram tracks, drawn like the railway's branch lines
-  // They stay until the base map's own tram tracks (zoom 14 to 15) have faded in over them.
-  addPair('transit-lines', 'transit-tram', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, TRAM_SIMPLIFIED_FADE, {
-    filter: ['==', ['get', 'mode'], 'tram'],
-    minzoom: DOT_MIN_ZOOM,
-    maxzoom: 15.1,
   });
 
   const upsertLayer = (layer: Parameters<MapLibreMap['addLayer']>[0]) => {
