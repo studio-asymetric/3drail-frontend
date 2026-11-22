@@ -26,6 +26,7 @@ import {
   type JourneyStop,
   type RouteCursor,
   type TrainRenderState,
+  VEHICLE_MAP_PILL_COLOR,
 } from '../data/trainService';
 import {
   headingFromPoints,
@@ -2238,7 +2239,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           id: train.trainNumber,
           lat: position.lat,
           lng: position.lng,
-          color: train.color || getDelayColor(train.delayMinutes),
+          color: train.mode ? VEHICLE_MAP_PILL_COLOR : train.color || getDelayColor(train.delayMinutes),
           selected: train.trainNumber === focused,
           type,
           number: trainNumberLabel(type, train.trainNumber),

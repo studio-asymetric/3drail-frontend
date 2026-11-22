@@ -331,6 +331,8 @@ export function formatTrainDisplayName(name: string): string {
 
 /** Buses, trams and metro are drawn white: the delay colours belong to the trains. */
 export const VEHICLE_PILL_COLOR = '#ffffff';
+/** On the map they are black pills with a white outline and white text, like the station pill. */
+export const VEHICLE_MAP_PILL_COLOR = '#151515';
 
 export function getDelayColor(delayMinutes: number): string {
   if (delayMinutes >= 30) {
