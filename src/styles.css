@@ -3508,3 +3508,21 @@ body,
   overflow: visible;
   padding: 0 4px 8px 0;
 }
+
+/* Language and colour mode share one line. */
+.menu__duo {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.menu__item {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.menu__item .menu__label {
+  margin: 0;
+}

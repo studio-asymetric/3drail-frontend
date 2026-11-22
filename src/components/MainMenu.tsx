@@ -128,49 +128,50 @@ export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocal
           </div>
         </section>
 
-        <section className="menu__group menu__row">
-          <h2 className="menu__label">{copy.menuLanguage}</h2>
-          <div className="menu__segment" role="radiogroup" aria-label={copy.menuLanguage} data-value={locale}>
-            <span className="menu__thumb" aria-hidden="true" />
-            <button type="button" role="radio" aria-checked={locale === 'sk'} onClick={() => onLocale('sk')}>
-              SK
-            </button>
-            <button type="button" role="radio" aria-checked={locale === 'en'} onClick={() => onLocale('en')}>
-              EN
+        <section className="menu__group menu__duo">
+          <div className="menu__item">
+            <h2 className="menu__label">{copy.menuLanguage}</h2>
+            <div className="menu__segment" role="radiogroup" aria-label={copy.menuLanguage} data-value={locale}>
+              <span className="menu__thumb" aria-hidden="true" />
+              <button type="button" role="radio" aria-checked={locale === 'sk'} onClick={() => onLocale('sk')}>
+                SK
+              </button>
+              <button type="button" role="radio" aria-checked={locale === 'en'} onClick={() => onLocale('en')}>
+                EN
+              </button>
+            </div>
+          </div>
+          <div className="menu__item">
+            <h2 className="menu__label" id="menu-dark-label">
+              {copy.menuAppearance}
+            </h2>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={dark}
+              aria-label={copy.menuDarkMode}
+              className="menu__switch"
+              onClick={() => onTheme(dark ? 'light' : 'dark')}
+            >
+              <span className="menu__switch-icon menu__switch-icon--sun" aria-hidden="true">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                  <circle cx="8" cy="8" r="3.1" stroke="currentColor" strokeWidth="1.4" />
+                  <path
+                    d="M8 1.4v1.6M8 13v1.6M1.4 8h1.6M13 8h1.6M3.1 3.1l1.1 1.1M11.8 11.8l1.1 1.1M3.1 12.9l1.1-1.1M11.8 4.2l1.1-1.1"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </span>
+              <span className="menu__switch-icon menu__switch-icon--moon" aria-hidden="true">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                  <path d="M13.2 9.3A5.4 5.4 0 1 1 6.7 2.8 4.3 4.3 0 0 0 13.2 9.3Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+                </svg>
+              </span>
+              <span className="menu__switch-knob" aria-hidden="true" />
             </button>
           </div>
-        </section>
-
-        <section className="menu__group menu__row">
-          <h2 className="menu__label" id="menu-dark-label">
-            {copy.menuAppearance}
-          </h2>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={dark}
-            aria-label={copy.menuDarkMode}
-            className="menu__switch"
-            onClick={() => onTheme(dark ? 'light' : 'dark')}
-          >
-            <span className="menu__switch-icon menu__switch-icon--sun" aria-hidden="true">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <circle cx="8" cy="8" r="3.1" stroke="currentColor" strokeWidth="1.4" />
-                <path
-                  d="M8 1.4v1.6M8 13v1.6M1.4 8h1.6M13 8h1.6M3.1 3.1l1.1 1.1M11.8 11.8l1.1 1.1M3.1 12.9l1.1-1.1M11.8 4.2l1.1-1.1"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </span>
-            <span className="menu__switch-icon menu__switch-icon--moon" aria-hidden="true">
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                <path d="M13.2 9.3A5.4 5.4 0 1 1 6.7 2.8 4.3 4.3 0 0 0 13.2 9.3Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
-              </svg>
-            </span>
-            <span className="menu__switch-knob" aria-hidden="true" />
-          </button>
         </section>
       </div>
     </div>
