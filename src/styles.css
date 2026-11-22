@@ -3029,7 +3029,8 @@ body,
   color: #ffffff;
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
-  animation: menu-in 200ms var(--ease) both;
+  /* the same fade and 8px rise as the left panel */
+  animation: dock-in var(--enter-dur) var(--ease) both;
   --menu-line: rgba(255, 255, 255, 0.14);
   --menu-card: rgba(255, 255, 255, 0.05);
   --menu-card-hover: rgba(255, 255, 255, 0.09);
@@ -3432,7 +3433,7 @@ body,
     background: rgba(19, 19, 19, 0.96);
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
     transform-origin: top right;
-    animation: menu-pop 200ms var(--ease) both;
+    animation: dock-in var(--enter-dur) var(--ease) both;
   }
 
   .shell[data-theme='light'] .menu {
@@ -3525,4 +3526,62 @@ body,
 
 .menu__item .menu__label {
   margin: 0;
+}
+
+/* Closing: the same fade and 8px drop as the left panel leaving. */
+.menu--leave {
+  animation: dock-out var(--enter-dur) var(--ease) both !important;
+  pointer-events: none;
+}
+
+/* A gap between the menu / search / info / alerts group and the zoom / locate group. */
+.chrome__tool--gap {
+  margin-top: 14px;
+}
+
+.chrome__tool--locate:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.chrome__tool--locate.is-active svg {
+  animation: map-loading-spin 1.1s linear infinite;
+}
+
+/* The visitor's position on the map. */
+.user-dot {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #2f7cf6;
+  border: 2.5px solid #ffffff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+}
+
+.user-dot::after {
+  content: '';
+  position: absolute;
+  inset: -9px;
+  border-radius: 50%;
+  background: rgba(47, 124, 246, 0.28);
+  animation: user-dot-pulse 2.2s ease-out infinite;
+}
+
+@keyframes user-dot-pulse {
+  from {
+    transform: scale(0.45);
+    opacity: 1;
+  }
+  to {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-dot::after,
+  .chrome__tool--locate.is-active svg {
+    animation: none;
+  }
 }

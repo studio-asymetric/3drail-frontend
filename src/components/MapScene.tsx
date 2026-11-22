@@ -1252,6 +1252,8 @@ interface MapSceneProps {
   theme?: MapTheme;
   locale?: AppLocale;
   mapViewRef?: React.MutableRefObject<MapViewControls | null>;
+  /** The visitor's position (from the locate button), drawn as a dot. It never leaves the browser. */
+  userLocation?: { lat: number; lng: number } | null;
 }
 
 export const MapScene: React.FC<MapSceneProps> = React.memo(({
@@ -1278,6 +1280,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   theme = 'light',
   locale = 'sk',
   mapViewRef,
+  userLocation = null,
 }) => {
   const mapCopy = useMemo(() => copyFor(locale), [locale]);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -3026,6 +3029,20 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       mapViewRef.current = null;
     };
   }, [mapViewRef, terrainLoaded]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !terrainLoaded || !userLocation) {
+      return undefined;
+    }
+    const element = document.createElement('div');
+    element.className = 'user-dot';
+    element.setAttribute('aria-hidden', 'true');
+    const marker = new Marker({ element }).setLngLat([userLocation.lng, userLocation.lat]).addTo(map);
+    return () => {
+      marker.remove();
+    };
+  }, [userLocation, terrainLoaded]);
 
   const mapReady = terrainLoaded;
   const railsReady = !osmStatus.loading && tileLoadPlan.completed > 0;

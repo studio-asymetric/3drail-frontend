@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { REGION_ID, REGIONS, type RegionId } from '../region';
 import type { AppLocale } from '../i18n';
 import { REGION_SKETCH, REGION_SKETCH_SIZE } from '../data/regionSketch';
@@ -35,6 +35,22 @@ const DESKTOP_QUERY = '(min-width: 801px)';
  */
 export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocale, theme, onTheme, logo }) => {
   const closeRef = useRef<HTMLButtonElement | null>(null);
+  // Stays in the page while it fades out (the same exit as the left panel), then goes.
+  const [mounted, setMounted] = useState(open);
+  const leaving = mounted && !open;
+
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return undefined;
+    }
+    if (!mounted) {
+      return undefined;
+    }
+    // animationend does it; the timer covers reduced motion, where there is no animation
+    const timer = window.setTimeout(() => setMounted(false), 400);
+    return () => window.clearTimeout(timer);
+  }, [open, mounted]);
 
   useEffect(() => {
     if (!open) {
@@ -66,14 +82,24 @@ export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocal
     };
   }, [open, onClose]);
 
-  if (!open) {
+  if (!mounted) {
     return null;
   }
 
   const dark = theme === 'dark';
 
   return (
-    <div className="menu" role="dialog" aria-modal="true" aria-label="Menu">
+    <div
+      className={`menu${leaving ? ' menu--leave' : ''}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Menu"
+      onAnimationEnd={(event) => {
+        if (leaving && event.target === event.currentTarget) {
+          setMounted(false);
+        }
+      }}
+    >
       <div className="menu__head">
         <span className="menu__brand">
           <img src={logo} alt="" width={22} height={22} />

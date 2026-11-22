@@ -555,6 +555,8 @@ const App: React.FC = () => {
   const service = useMemo(() => new TrainService(dataset ?? EMPTY_DATASET), [dataset]);
   const [locale, setLocale] = useState<AppLocale>(readStoredLocale);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [locating, setLocating] = useState(false);
   const t = useMemo(() => copyFor(locale), [locale]);
   const [statusMessage, setStatusMessage] = useState(() => copyFor(readStoredLocale()).loadingGtfs);
   const [statusKind, setStatusKind] = useState<'loading' | 'success' | 'error'>(
@@ -1224,6 +1226,29 @@ const App: React.FC = () => {
     setAboutOpen(true);
   }, [aboutOpen, handleAboutBack]);
 
+  // Where am I: asks the browser for the position, centres the map there and marks it. The position
+  // stays in the browser; nothing is sent anywhere.
+  const handleLocate = useCallback(() => {
+    if (!navigator.geolocation) {
+      pushToast(t.locateFailed, 'locate', 8_000);
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLocating(false);
+        const here = { lat: position.coords.latitude, lng: position.coords.longitude };
+        setUserLocation(here);
+        mapViewRef.current?.centerOn(here.lng, here.lat, { minZoom: 12 });
+      },
+      (error) => {
+        setLocating(false);
+        pushToast(error.code === error.PERMISSION_DENIED ? t.locateDenied : t.locateFailed, 'locate', 8_000);
+      },
+      { enableHighAccuracy: true, timeout: 12_000, maximumAge: 30_000 }
+    );
+  }, [pushToast, t]);
+
   const handleAlertsToggle = useCallback(() => {
     if (alertsOpen) {
       setAlertsOpen(false);
@@ -1669,6 +1694,7 @@ const App: React.FC = () => {
           theme={theme}
           locale={locale}
           mapViewRef={mapViewRef}
+          userLocation={userLocation}
         />
       </div>
       <header className="chrome">
@@ -1856,21 +1882,19 @@ const App: React.FC = () => {
           </button>
           <button
             type="button"
-            className="chrome__tool"
-            aria-label={t.zoomIn}
-            title={t.zoomIn}
-            onClick={() => mapViewRef.current?.zoomIn()}
+            className={`chrome__tool chrome__tool--search${searchMobileOpen ? ' is-active' : ''}`}
+            aria-label={t.searchPlaceholder}
+            aria-pressed={searchMobileOpen}
+            title={t.searchPlaceholder}
+            onClick={() => {
+              if (searchMobileOpen) {
+                searchInputRef.current?.focus();
+                return;
+              }
+              openMobileSearch();
+            }}
           >
-            <span aria-hidden="true">+</span>
-          </button>
-          <button
-            type="button"
-            className="chrome__tool"
-            aria-label={t.zoomOut}
-            title={t.zoomOut}
-            onClick={() => mapViewRef.current?.zoomOut()}
-          >
-            <span aria-hidden="true">−</span>
+            <ChromeSearchIcon className="chrome__search-glyph chrome__search-glyph--tool" />
           </button>
           <button
             type="button"
@@ -1908,19 +1932,34 @@ const App: React.FC = () => {
           )}
           <button
             type="button"
-            className={`chrome__tool chrome__tool--search${searchMobileOpen ? ' is-active' : ''}`}
-            aria-label={t.searchPlaceholder}
-            aria-pressed={searchMobileOpen}
-            title={t.searchPlaceholder}
-            onClick={() => {
-              if (searchMobileOpen) {
-                searchInputRef.current?.focus();
-                return;
-              }
-              openMobileSearch();
-            }}
+            className="chrome__tool chrome__tool--gap"
+            aria-label={t.zoomIn}
+            title={t.zoomIn}
+            onClick={() => mapViewRef.current?.zoomIn()}
           >
-            <ChromeSearchIcon className="chrome__search-glyph chrome__search-glyph--tool" />
+            <span aria-hidden="true">+</span>
+          </button>
+          <button
+            type="button"
+            className="chrome__tool"
+            aria-label={t.zoomOut}
+            title={t.zoomOut}
+            onClick={() => mapViewRef.current?.zoomOut()}
+          >
+            <span aria-hidden="true">−</span>
+          </button>
+          <button
+            type="button"
+            className={`chrome__tool chrome__tool--locate${locating ? ' is-active' : ''}`}
+            aria-label={t.locateAria}
+            title={t.locateAria}
+            disabled={locating}
+            onClick={handleLocate}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="8" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M8 .9v2.3M8 12.8v2.3M.9 8h2.3M12.8 8h2.3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
           </button>
         </div>
       </header>

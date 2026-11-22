@@ -41,6 +41,9 @@ export type Copy = {
   station: string;
   zoomIn: string;
   zoomOut: string;
+  locateAria: string;
+  locateDenied: string;
+  locateFailed: string;
   themeToLight: string;
   themeToDark: string;
   themeLight: string;
@@ -137,6 +140,9 @@ const sk: Copy = {
   station: 'Stanica',
   zoomIn: 'Priblížiť mapu',
   zoomOut: 'Oddialiť mapu',
+  locateAria: 'Moja poloha',
+  locateDenied: 'Poloha nie je povolená. Povoľte ju v nastaveniach prehliadača.',
+  locateFailed: 'Polohu sa nepodarilo zistiť.',
   themeToLight: 'Prepnúť na svetlý režim',
   themeToDark: 'Prepnúť na tmavý režim',
   themeLight: 'Svetlý režim',
@@ -235,6 +241,9 @@ const en: Copy = {
   station: 'Station',
   zoomIn: 'Zoom in',
   zoomOut: 'Zoom out',
+  locateAria: 'My location',
+  locateDenied: 'Location is blocked. Allow it in your browser settings.',
+  locateFailed: 'Could not find your location.',
   themeToLight: 'Switch to light mode',
   themeToDark: 'Switch to dark mode',
   themeLight: 'Light mode',
