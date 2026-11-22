@@ -49,6 +49,8 @@ export type VehicleMode = 'rail' | 'metro' | 'tram' | 'trolley' | 'bus';
 export const VEHICLE_MODES: VehicleMode[] = ['rail', 'metro', 'tram', 'trolley', 'bus'];
 
 const MODES_KEY = 'mojvlak-modes';
+/** Buses are many and off until someone asks for them. */
+const DEFAULT_MODES: VehicleMode[] = VEHICLE_MODES.filter((mode) => mode !== 'bus');
 
 export function readStoredModes(): VehicleMode[] {
   try {
@@ -59,7 +61,7 @@ export function readStoredModes(): VehicleMode[] {
   } catch {
     // private mode: use the default
   }
-  return [...VEHICLE_MODES];
+  return [...DEFAULT_MODES];
 }
 
 export function storeModes(modes: VehicleMode[]) {

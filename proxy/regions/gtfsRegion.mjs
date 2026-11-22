@@ -154,7 +154,12 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
     stops.set(r.stop_id, { name: r.stop_name, lat: Number(r.stop_lat), lng: Number(r.stop_lon) })
   );
   readCsv(path.join(dir, 'routes.txt'), (r) =>
-    routes.set(r.route_id, { short: r.route_short_name, long: r.route_long_name, color: r.route_color })
+    routes.set(r.route_id, {
+      short: r.route_short_name,
+      long: r.route_long_name,
+      color: r.route_color,
+      type: Number(r.route_type),
+    })
   );
   readCsv(path.join(dir, 'calendar.txt'), (r) =>
     services.set(r.service_id, {
@@ -240,14 +245,26 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
   }
 
   /** Browser-safe unique id of one run: middle part of the trip id plus the service day. */
+  const typeOf = (trip) => routes.get(trip.routeId)?.type ?? 2;
   function keyOf(trip, ymd) {
     const mid = trip.id.split('_')[1] ?? trip.id.replace(/\W/g, '').slice(-6);
-    return `p${mid}${ymd.slice(6)}`.slice(0, 12);
+    const type = typeOf(trip);
+    // trams and metro get a letter, so their numbers cannot meet a train's
+    const code = type === 2 ? '' : MODE_CODE[MODE_BY_TYPE[type]] ?? '';
+    return `p${mid}${ymd.slice(6)}${code}`.slice(0, 12);
   }
 
   let activeCache = { at: 0, list: [] };
-  /** Trips running at `nowMs`: { trip, key, midnight (epoch ms of local midnight of its service day) }. */
+  /**
+   * What is shown: the trips of the timetable that are running, but trams and metro only while the
+   * live feed reports them (a timetable-only tram would be a ghost; trains are shown either way).
+   */
   function active(nowMs = Date.now()) {
+    return scheduled(nowMs).filter((entry) => typeOf(entry.trip) === 2 || live.has(entry.key));
+  }
+
+  /** Every trip running at `nowMs` by the timetable: { trip, key, midnight (epoch ms of local midnight), ymd }. */
+  function scheduled(nowMs = Date.now()) {
     if (nowMs - activeCache.at < 10_000) return activeCache.list;
     const list = [];
     for (const dayShift of [-1, 0]) {
@@ -457,7 +474,7 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
       others = new Map(list.map(otherRow).map(([key, row], i) => [key, { v: list[i], row }]));
     },
     activeTrips(nowMs = Date.now()) {
-      return active(nowMs);
+      return scheduled(nowMs);
     },
     hasKey(key, nowMs = Date.now()) {
       return active(nowMs).some((e) => e.key === key);
@@ -484,6 +501,7 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
         rows.push({
           CisloVlaku: entry.key,
           TypVlaku: route?.short ?? 'S',
+          ...(typeOf(entry.trip) === 2 ? {} : { Rezim: MODE_BY_TYPE[typeOf(entry.trip)] ?? 'tram' }),
           NazovVlaku: route?.short ?? "S",
           Nazov: `${name(first.stopId)} – ${name(last.stopId)}`,
           Popis: `${name(first.stopId)} – ${name(last.stopId)}`,
@@ -570,6 +588,7 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
     stations() {
       const byName = new Map();
       trips.forEach((trip) => {
+        if (typeOf(trip) !== 2) return; // stations are the railway's
         const seen = new Set();
         trip.stops.forEach((s) => {
           const stop = stops.get(s.stopId);
@@ -591,7 +610,12 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
       const seen = new Set();
       const q = (v) => Math.round(v * 1e4);
       const ways = [];
+      const railShapes = new Set();
+      trips.forEach((trip) => {
+        if (typeOf(trip) === 2 && trip.shapeId) railShapes.add(trip.shapeId);
+      });
       shapesRaw.forEach((_, id) => {
+        if (!railShapes.has(id)) return; // the rail network is not the tram lines
         const shape = shapeOf(id);
         if (!shape) return;
         let chain = [];

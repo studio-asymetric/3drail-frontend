@@ -8,7 +8,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 
 /** Bumped when the cut-down timetable gains files, so older copies are rebuilt. */
-export const REGION_DATA_VERSION = 2;
+export const REGION_DATA_VERSION = 3;
 
 function splitCsv(line) {
   const out = [];
@@ -88,7 +88,8 @@ const railRoutes = new Set();
 const otherRoutes = new Set();
 // every route is kept (names and colours of buses, trams and metro lines are needed)
 await filterFile('routes.txt', (r) => {
-  (r.route_type === '2' ? railRoutes : otherRoutes).add(r.route_id);
+  // trains, metro and trams run on tracks: their trips, shapes and stop times are kept in full
+  (r.route_type === '2' || r.route_type === '0' || r.route_type === '1' ? railRoutes : otherRoutes).add(r.route_id);
   return true;
 }).then((n) => log(`routes: ${n}`));
 
