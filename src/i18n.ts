@@ -84,6 +84,8 @@ export type Copy = {
   mapStepMap: string;
   mapStepRails: string;
   mapStepTrains: string;
+  mapStepStations: string;
+  mapStepTimetables: string;
   mapReady: string;
   routeWarnings: string;
   gtfsLoaded: (shapes: number, trips: number, stops: number) => string;
@@ -166,6 +168,8 @@ const sk: Copy = {
   mapStepMap: 'Mapa',
   mapStepRails: 'Koľajnice',
   mapStepTrains: 'Vlaky',
+  mapStepStations: 'Stanice',
+  mapStepTimetables: 'Cestovné poriadky',
   mapReady: 'Pripravené',
   routeWarnings: 'Upozornenia trasy',
   gtfsLoaded: (shapes, trips, stops) =>
@@ -249,6 +253,8 @@ const en: Copy = {
   mapStepMap: 'Map',
   mapStepRails: 'Rails',
   mapStepTrains: 'Trains',
+  mapStepStations: 'Stations',
+  mapStepTimetables: 'Timetables',
   mapReady: 'Ready',
   routeWarnings: 'Route warnings',
   gtfsLoaded: (shapes, trips, stops) =>

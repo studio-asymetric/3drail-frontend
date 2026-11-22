@@ -118,8 +118,11 @@ const REGION_WAY_ID_OFFSET = 5_000_000;
 /** Extra pan room beyond Slovakia (degrees). */
 /** The least the view may pan past Slovakia; zoomed out it grows with the screen (fitViewBounds). */
 const MAP_VIEW_BOUNDS_PAD = { lng: 1.5, lat: 1.1 };
-const CENTER_LAT = (SLOVAKIA_BOUNDS.minLat + SLOVAKIA_BOUNDS.maxLat) / 2;
-const CENTER_LNG = (SLOVAKIA_BOUNDS.minLng + SLOVAKIA_BOUNDS.maxLng) / 2;
+/** The view the map opens on: all of Czechoslovakia (Czechia and Slovakia). */
+const INITIAL_VIEW: [[number, number], [number, number]] = [
+  [11.9, 47.6],
+  [22.8, 51.3],
+];
 const RAIL_FILL_COLOR = '#f4f7fb';
 const RAIL_MAIN_FILL_COLOR = '#b5bcc5';
 const RAIL_SIDE_FILL_COLOR = '#939aa3';
@@ -1374,6 +1377,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const trainMotionRafRef = useRef(0);
   const journeyAnimatorRef = useRef(new JourneyAnimator());
   const [journeysVersion, setJourneysVersion] = useState(0);
+  const [journeysTried, setJourneysTried] = useState(false);
   const startTrainMotionLoopRef = useRef<() => void>(() => undefined);
 
   const appendLoadingMessage = useCallback((_message: string) => {}, []);
@@ -1633,9 +1637,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       container: node,
       style: absoluteAppUrl(`/proxy/style?mode=style&theme=${themeRef.current}`),
       transformRequest: (url) => ({ url: absoluteAppUrl(url) }),
-      center: [CENTER_LNG, CENTER_LAT],
-      zoom: 7,
-      minZoom: 6,
+      bounds: INITIAL_VIEW,
+      fitBoundsOptions: { padding: 24 },
+      minZoom: 5.5,
       maxZoom: 16,
       bearing: 0,
       pitch: 0,
@@ -2593,6 +2597,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       controller = new AbortController();
       try {
         const journeys = await fetchJourneys(controller.signal);
+        if (!cancelled) {
+          setJourneysTried(true);
+        }
         if (cancelled || !journeys) {
           return;
         }
@@ -2601,6 +2608,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         setJourneysVersion((value) => value + 1);
       } catch {
         // keep showing reported positions
+        if (!cancelled) {
+          setJourneysTried(true);
+        }
       }
     };
     load();
@@ -3063,11 +3073,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       },
       resetToSlovakia: () => {
         map.stop();
-        map.easeTo({
-          center: [CENTER_LNG, CENTER_LAT],
-          zoom: 7,
-          duration: 650,
-        });
+        map.fitBounds(INITIAL_VIEW, { padding: 24, duration: 650 });
       },
       centerOn: (lng, lat, options) => {
         if (!mapReadyRef.current) {
@@ -3093,7 +3099,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const loadSteps = [
     { id: 'map', label: mapCopy.mapStepMap, ready: mapReady },
     { id: 'rails', label: mapCopy.mapStepRails, ready: railsReady },
+    { id: 'stations', label: mapCopy.mapStepStations, ready: dataset != null },
     { id: 'trains', label: mapCopy.mapStepTrains, ready: trainsLoaded },
+    { id: 'timetables', label: mapCopy.mapStepTimetables, ready: journeysTried },
   ];
   const pendingSteps = loadSteps.filter((step) => !step.ready);
   const overlayActive = pendingSteps.length > 0;
@@ -3102,11 +3110,6 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const progressPercentage = overlayActive
     ? Math.round(((readyCount + 0.18) / loadSteps.length) * 100)
     : 100;
-  const loadingLabel = pendingSteps[0]?.label ?? mapCopy.mapReady;
-  const loadingRest = pendingSteps
-    .slice(1)
-    .map((step) => step.label)
-    .join(' · ');
   useEffect(() => {
     onCanvasStateChange?.(canvasStateClass);
   }, [canvasStateClass, onCanvasStateChange]);
@@ -3123,23 +3126,41 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
             aria-hidden={!overlayActive}
           >
             <div className="map-loading-card" aria-live="polite">
-              <p className="map-loading-copy">
-                <span className="map-loading-kicker">{mapCopy.mapLoading}</span>
-                <strong className="map-loading-label">{loadingLabel}</strong>
-                {loadingRest ? <span className="map-loading-rest">{loadingRest}</span> : null}
-              </p>
+              <span className="map-loading-kicker">{mapCopy.mapLoading}</span>
+              <ul className="map-loading-list">
+                {loadSteps.map((step) => (
+                  <li
+                    key={step.id}
+                    className={`map-loading-item ${step.ready ? 'map-loading-item--done' : 'map-loading-item--pending'}`}
+                  >
+                    <span className="map-loading-icon" aria-hidden="true">
+                      {step.ready ? (
+                        <svg viewBox="0 0 16 16" width="16" height="16" fill="none">
+                          <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      ) : (
+                        <span className="map-loading-spinner" />
+                      )}
+                    </span>
+                    <span>{step.label}</span>
+                  </li>
+                ))}
+              </ul>
               <div
                 className="map-loading-bar"
                 role="progressbar"
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={progressPercentage}
-                aria-valuetext={pendingSteps.map((step) => step.label).join(', ') || mapCopy.mapReady}
+                aria-valuetext={`${readyCount}/${loadSteps.length}`}
               >
                 <div className="map-loading-bar__progress" style={{ width: `${progressPercentage}%` }} />
               </div>
-              </div>
-              </div>
+              <span className="map-loading-count">
+                {readyCount}/{loadSteps.length}
+              </span>
+            </div>
+          </div>
           <div className="map-basemap-credit">
             © OpenStreetMap · © OpenFreeMap · © OpenMapTiles
           </div>
