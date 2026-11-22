@@ -501,6 +501,11 @@ const DockTitle: React.FC<{ properName: string; to: string; fallback: string }> 
 
 /** "rj 273 METROPOLITAN" -> "rj 273": the pill carries the type and number, not the train's name. */
 function boardPillLabel(code?: string): string {
+  // Czech boards (idos.cz) name a train by its line, with the train in brackets: "S7 (Os 8870)" -> "S7"
+  const line = String(code ?? '').trim().match(/^(\S+)\s+\(/);
+  if (line) {
+    return line[1];
+  }
   const match = String(code ?? '').trim().match(/^(\S+)\s+(\d+)/);
   return match ? `${match[1]} ${match[2]}` : String(code ?? '').trim();
 }
@@ -2424,13 +2429,13 @@ const App: React.FC = () => {
             </DockScroller>
             <a
               className="dock__cp-link"
-              href={`https://cp.sk/vlakbusmhd/odchody/?f=${encodeURIComponent(displayStation.name)}&submit=true&changeShield=true${
+              href={`${REGION_ID === 'sk' ? 'https://cp.sk/vlakbusmhd/odchody/' : 'https://idos.cz/vlaky/odjezdy/'}?f=${encodeURIComponent(displayStation.name)}&submit=true&changeShield=true${
                 displayStationTab === 'arrivals' ? '&byarr=true' : ''
               }`}
               target="_blank"
               rel="noreferrer"
             >
-              {t.openOnCpSk}
+              {REGION_ID === 'sk' ? t.openOnCpSk : t.openOnIdos}
             </a>
             </div>
           </div>

@@ -32,7 +32,7 @@ import {
   ROUTE_ALGORITHM_VERSION,
   traceRoute,
 } from './railRoute.mjs';
-import { fetchStationBoard } from './cpStationBoard.mjs';
+import { fetchStationBoard, IDOS_BOARD_URL } from './cpStationBoard.mjs';
 import { createJourneyStore } from './journeys.mjs';
 import { createRegionHub, requestedRegions } from './regions/hub.mjs';
 import { ensureRailwayTunnels, mergeTunnelWays } from './osmTunnels.mjs';
@@ -1601,25 +1601,23 @@ async function handleDetail(reqUrl, res) {
 }
 
 async function handleStationBoard(reqUrl, res) {
-  if (requestedRegions(reqUrl).length > 0) {
-    // cp.sk only knows Slovak stations.
-    sendJson(res, 200, { rows: [], station: reqUrl.searchParams.get('station') ?? '', arrivals: false });
-    return;
-  }
+  // Prague's boards come from idos.cz, Slovakia's from cp.sk (same system, same page layout).
+  const regional = requestedRegions(reqUrl).length > 0;
+  const boardUrl = regional ? IDOS_BOARD_URL : undefined;
   const station = (reqUrl.searchParams.get('station') ?? reqUrl.searchParams.get('f') ?? '').trim();
   const arrivals = reqUrl.searchParams.get('byarr') === 'true' || reqUrl.searchParams.get('arrivals') === '1';
   if (!station || station.length > 120) {
     sendJson(res, 400, { error: 'Missing station', rows: [] });
     return;
   }
-  const cacheKey = `${arrivals ? 'arr' : 'dep'}:${station.toLowerCase()}`;
+  const cacheKey = `${regional ? 'pid:' : ''}${arrivals ? 'arr' : 'dep'}:${station.toLowerCase()}`;
   const cached = stationBoardCache.get(cacheKey);
   if (cached && Date.now() - cached.at < STATION_BOARD_CACHE_MS) {
     sendJson(res, 200, { ...cached.payload, status: 'cached' });
     return;
   }
   try {
-    const payload = await fetchStationBoard(station, arrivals);
+    const payload = await fetchStationBoard(station, arrivals, boardUrl);
     stationBoardCache.set(cacheKey, { at: Date.now(), payload });
     logMessage(`Station board ${arrivals ? 'arrivals' : 'departures'} for ${station}: ${payload.rows.length} rows`);
     sendJson(res, 200, payload);

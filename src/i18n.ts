@@ -98,6 +98,7 @@ export type Copy = {
   boardErrorDepartures: string;
   boardErrorArrivals: string;
   openOnCpSk: string;
+  openOnIdos: string;
   aboutPill: string;
   back: string;
   dockCloseAria: string;
@@ -206,6 +207,7 @@ const sk: Copy = {
   boardErrorDepartures: 'Pre túto stanicu nie sú odchody na cp.sk',
   boardErrorArrivals: 'Pre túto stanicu nie sú príchody na cp.sk',
   openOnCpSk: 'Otvoriť na cp.sk',
+  openOnIdos: 'Otvoriť na idos.cz',
   aboutPill: 'O aplikácii',
   back: 'Späť',
   dockCloseAria: 'Zavrieť a zrušiť výber',
@@ -315,6 +317,7 @@ const en: Copy = {
   boardErrorDepartures: 'No departures from cp.sk for this station',
   boardErrorArrivals: 'No arrivals from cp.sk for this station',
   openOnCpSk: 'Open on cp.sk',
+  openOnIdos: 'Open on idos.cz',
   aboutPill: 'About',
   back: 'Back',
   dockCloseAria: 'Close and clear selection',

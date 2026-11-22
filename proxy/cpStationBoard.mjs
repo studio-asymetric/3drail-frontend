@@ -1,4 +1,6 @@
 const CP_BOARD_URL = 'https://cp.sk/vlakbusmhd/odchody/';
+/** Czech trains (the same system and page layout as cp.sk): Prague's boards come from here. */
+export const IDOS_BOARD_URL = 'https://idos.cz/vlaky/odjezdy/';
 
 function decodeEntities(value) {
   return String(value ?? '')
@@ -61,12 +63,12 @@ export function parseStationBoard(html) {
   return rows;
 }
 
-export async function fetchStationBoard(stationName, arrivals) {
+export async function fetchStationBoard(stationName, arrivals, boardUrl = CP_BOARD_URL) {
   const name = String(stationName ?? '').trim();
   if (!name) {
     return { station: '', arrivals: Boolean(arrivals), rows: [], status: 'error', error: 'Missing station' };
   }
-  const url = new URL(CP_BOARD_URL);
+  const url = new URL(boardUrl);
   url.searchParams.set('f', name);
   url.searchParams.set('submit', 'true');
   url.searchParams.set('changeShield', 'true');
@@ -81,14 +83,14 @@ export async function fetchStationBoard(stationName, arrivals) {
     signal: AbortSignal.timeout(20000),
   });
   if (!response.ok) {
-    throw new Error(`cp.sk HTTP ${response.status}`);
+    throw new Error(`${new URL(boardUrl).hostname} HTTP ${response.status}`);
   }
   const html = await response.text();
   const rows = parseStationBoard(html);
   return {
     station: name,
     arrivals: Boolean(arrivals),
-    source: CP_BOARD_URL,
+    source: boardUrl,
     status: rows.length > 0 ? 'ok' : 'empty',
     rows,
   };
