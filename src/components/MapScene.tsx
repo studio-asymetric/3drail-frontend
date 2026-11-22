@@ -89,6 +89,8 @@ import {
 
 /** What the view may pan over: the region on this page (Slovakia, or Prague with /pid). */
 const VIEW_BOUNDS = REGION.bounds;
+/** A jump of the opened train bigger than this (metres) is announced with a notice. */
+const POSITION_UPDATE_METERS = 700;
 /** Extra pan room beyond Slovakia (degrees). */
 /** The least the view may pan past Slovakia; zoomed out it grows with the screen (fitViewBounds). */
 const MAP_VIEW_BOUNDS_PAD = { lng: 1.5, lat: 1.1 };
@@ -1236,6 +1238,8 @@ interface MapSceneProps {
   onTimelineProgress?: (progress: { train: string; from: number; fraction: number } | null) => void;
   /** A report moved the followed train far from where it was shown. */
   onFollowCorrection?: (correction: { train: string; meters: number }) => void;
+  /** The opened train's position changed a lot at once (a newer report): it is moving to the latest. */
+  onPositionUpdating?: (update: { train: string; meters: number }) => void;
   onTrainClick?: (trainNumber: string) => void;
   onStationClick?: (station: { id: string; name: string; lat: number; lng: number }) => void;
   onBackgroundClick?: () => void;
@@ -1261,6 +1265,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   onFollowBreak,
   onTimelineProgress,
   onFollowCorrection,
+  onPositionUpdating,
   onTrainClick,
   onStationClick,
   onBackgroundClick,
@@ -1331,6 +1336,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   onTimelineProgressRef.current = onTimelineProgress;
   const onFollowCorrectionRef = useRef(onFollowCorrection);
   onFollowCorrectionRef.current = onFollowCorrection;
+  const onPositionUpdatingRef = useRef(onPositionUpdating);
+  onPositionUpdatingRef.current = onPositionUpdating;
   const journeyStopsRef = useRef(journeyStops);
   journeyStopsRef.current = journeyStops;
   const lastTimelineRef = useRef('');
@@ -2566,8 +2573,14 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     if (!focusedTrainNumber || journeyStatus !== 'ready' || !journeyStops?.length) {
       return;
     }
+    const before = animator.modelAlong(focusedTrainNumber);
     animator.setEstimate(focusedTrainNumber, estimatedDelaySeconds(journeyStops));
     animator.update(trainsRef.current);
+    // Opening a train re-runs it on the delay its panel shows: if that moves it, say so.
+    const after = animator.modelAlong(focusedTrainNumber);
+    if (before != null && after != null && Math.abs(after - before) > POSITION_UPDATE_METERS) {
+      onPositionUpdatingRef.current?.({ train: focusedTrainNumber, meters: after - before });
+    }
     return () => {
       animator.setEstimate(focusedTrainNumber, null);
     };
@@ -2687,6 +2700,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       for (const correction of animator.takeCorrections()) {
         if (correction.train === followed && Math.abs(correction.meters) > 1500) {
           onFollowCorrectionRef.current?.(correction);
+        } else if (correction.train === focusedId && Math.abs(correction.meters) > POSITION_UPDATE_METERS) {
+          onPositionUpdatingRef.current?.(correction);
         }
       }
     };

@@ -653,6 +653,11 @@ export class JourneyAnimator {
     return Math.max(state.floor, along);
   }
 
+  /** Metres along its line where the timetable model puts the train now (not the eased drawn spot). */
+  modelAlong(train: string, nowMs = Date.now()): number | null {
+    return this.target(train, nowMs);
+  }
+
   /** Where the train is drawn right now, without advancing the animation. */
   peek(train: string, nowMs = Date.now()): JourneyPosition | null {
     const journey = this.journeys.get(train);

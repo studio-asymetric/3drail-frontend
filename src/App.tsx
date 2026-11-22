@@ -1297,6 +1297,12 @@ const App: React.FC = () => {
     },
     [locale, pushToast, t]
   );
+  const handlePositionUpdating = useCallback(
+    ({ train }: { train: string; meters: number }) => {
+      pushToast(t.toastPositionUpdating, `updating:${train}`, 25_000);
+    },
+    [pushToast, t]
+  );
   const panelOpen = Boolean(focusedTrain || focusedStation || aboutOpen);
   const leaveSnapshotRef = useRef<{
     train: TrainRenderState | null;
@@ -1478,14 +1484,28 @@ const App: React.FC = () => {
     )
   ) : null;
   const followButton = focusedTrain ? (
-    <button
-      type="button"
-      className={`dock__follow ${following ? 'is-active' : ''}`}
-      aria-pressed={following}
-      onClick={() => setFollowing((value) => !value)}
-    >
-      {following ? t.following : t.follow}
-    </button>
+    <span className="dock__actions">
+      <button
+        type="button"
+        className={`dock__follow ${following ? 'is-active' : ''}`}
+        aria-pressed={following}
+        onClick={() => setFollowing((value) => !value)}
+      >
+        {following ? t.following : t.follow}
+      </button>
+      {compositionUrl && (
+        <a
+          className="dock__follow dock__follow--link"
+          href={compositionUrl}
+          target="_blank"
+          rel="noopener"
+          title={t.trainCompositionTitle}
+        >
+          {t.trainCompositionButton}
+          <span aria-hidden="true">↗</span>
+        </a>
+      )}
+    </span>
   ) : null;
   const stopsHaveDelay = displayStops.some((stop) => stopTimesView(stop).actual != null);
   const properTrainName = isProperTrainName(displayTrain?.trainName)
@@ -1598,6 +1618,7 @@ const App: React.FC = () => {
           onFollowBreak={handleFollowBreak}
           onTimelineProgress={setTimelineProgress}
           onFollowCorrection={handleFollowCorrection}
+          onPositionUpdating={handlePositionUpdating}
           focusedTrainNumber={focusedTrainNumber}
           focusedRouteCursor={focusedTrain ? cursor : null}
           onTrainClick={handleTrainClick}
@@ -2136,23 +2157,6 @@ const App: React.FC = () => {
                   <div>
                     <dt>{t.operator}</dt>
                     <dd>{displayTrain.operator}</dd>
-                  </div>
-                )}
-                {compositionUrl && (
-                  <div>
-                    <dt>{t.trainComposition}</dt>
-                    <dd>
-                      <a
-                        className="dock__fact-link dock__fact-link--external"
-                        href={compositionUrl}
-                        target="_blank"
-                        rel="noopener"
-                        title={t.trainCompositionTitle}
-                      >
-                        {t.trainCompositionLink}
-                        <span aria-hidden="true"> ↗</span>
-                      </a>
-                    </dd>
                   </div>
                 )}
               </dl>

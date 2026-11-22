@@ -61,6 +61,8 @@ export type Copy = {
   following: string;
   toastPositionCorrected: (km: string, back: boolean) => string;
   toastTrainEnded: (trainNumber: string) => string;
+  toastPositionUpdating: string;
+  trainCompositionButton: string;
   toastFeedLost: string;
   toastFeedBack: string;
   replacementBus: string;
@@ -155,6 +157,8 @@ const sk: Copy = {
   toastPositionCorrected: (km, back) =>
     `Poloha vlaku upravená podľa nového hlásenia ŽSR (${km} km ${back ? 'späť' : 'dopredu'})`,
   toastTrainEnded: (trainNumber) => `Vlak ${trainNumber} dokončil jazdu, sledovanie skončilo`,
+  toastPositionUpdating: 'Poloha vlaku sa aktualizuje na najnovšiu',
+  trainCompositionButton: 'Zloženie',
   toastFeedLost: 'Živé dáta nie sú dostupné. Zobrazujú sa posledné známe polohy.',
   toastFeedBack: 'Živé dáta sú späť.',
   replacementBus: 'Náhradná autobusová doprava ',
@@ -250,6 +254,8 @@ const en: Copy = {
   toastPositionCorrected: (km, back) =>
     `Train position corrected after a new ŽSR report (${km} km ${back ? 'back' : 'ahead'})`,
   toastTrainEnded: (trainNumber) => `Train ${trainNumber} finished its journey. Following stopped.`,
+  toastPositionUpdating: "Updating the train's position to the latest",
+  trainCompositionButton: 'Composition',
   toastFeedLost: 'Live data unavailable. Showing the last known positions.',
   toastFeedBack: 'Live data is back.',
   replacementBus: 'Replacement bus service ',

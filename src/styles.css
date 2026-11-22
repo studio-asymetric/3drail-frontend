@@ -3459,3 +3459,21 @@ body,
     transform: none;
   }
 }
+
+/* "Sledovať" and the coach order (a link out to vagonWEB) side by side. */
+.dock__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dock__follow--link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+}
+
+.dock__follow--link:hover {
+  text-decoration: none;
+}
