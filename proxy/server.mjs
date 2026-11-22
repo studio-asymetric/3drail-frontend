@@ -34,6 +34,7 @@ import {
 } from './railRoute.mjs';
 import { fetchStationBoard } from './cpStationBoard.mjs';
 import { createJourneyStore } from './journeys.mjs';
+import { createRegionHub, requestedRegions } from './regions/hub.mjs';
 import { ensureRailwayTunnels, mergeTunnelWays } from './osmTunnels.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -454,9 +455,11 @@ function scheduleJourneySync() {
   setInterval(run, JOURNEY_SYNC_MS);
 }
 
-function handleJourneys(req, res) {
-  const body = journeyStore.payload();
-  const etag = journeyStore.etag();
+function handleJourneys(req, res, reqUrl) {
+  const { body, etag } = regionHub.journeys(requestedRegions(reqUrl), {
+    body: journeyStore.payload(),
+    etag: journeyStore.etag(),
+  });
   if (etag && req.headers['if-none-match'] === etag) {
     res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
     res.end();
@@ -783,7 +786,20 @@ function buildStationsBody() {
   });
 }
 
-function handleStations(res) {
+function sendRegionPending(res) {
+  sendJson(res, 202, { status: 'building', retryMs: 4000, elements: [], stations: [] });
+}
+
+function handleStations(res, reqUrl) {
+  if (requestedRegions(reqUrl).length > 0) {
+    const body = regionHub.stationsBody();
+    if (body) {
+      sendCompressed(res, 200, body, 'application/json; charset=utf-8', { 'Cache-Control': 'no-cache' });
+    } else {
+      sendRegionPending(res);
+    }
+    return;
+  }
   try {
     if (!stationsBody) {
       stationsBody = buildStationsBody();
@@ -959,6 +975,8 @@ async function refreshGtall({ force = false, ping = true } = {}) {
   return { state, now };
 }
 
+const regionHub = createRegionHub((message) => logMessage(message));
+
 async function handleGtall(reqUrl, res) {
   const { state, now } = await refreshGtall({ force: reqUrl.searchParams.has('refresh') });
   sendJson(res, 200, {
@@ -967,7 +985,7 @@ async function handleGtall(reqUrl, res) {
     idleSeconds: now - state.lastPing,
     status: state.status,
     error: state.error,
-    data: state.data ?? [],
+    data: [...(state.data ?? []), ...regionHub.trains(requestedRegions(reqUrl))],
   });
 }
 
@@ -1164,6 +1182,22 @@ out geom;`;
 async function handleOsm(reqUrl, res) {
   const level = reqUrl.searchParams.get('level') ?? 'tile';
   fs.mkdirSync(config.osmCacheDir, { recursive: true });
+
+  if (level === 'network' && requestedRegions(reqUrl).length > 0) {
+    const pack = regionHub.networkPack();
+    if (!pack) {
+      sendRegionPending(res);
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/octet-stream',
+      'Content-Encoding': 'gzip',
+      'Content-Length': String(pack.length),
+      'Cache-Control': 'no-cache',
+    });
+    res.end(pack);
+    return;
+  }
 
   if (level === 'network') {
     try {
@@ -1540,6 +1574,11 @@ async function handleDetail(reqUrl, res) {
     sendJson(res, 400, { error: 'Missing train number' });
     return;
   }
+  if (regionHub.isRegionKey(train)) {
+    const regionDetail = regionHub.detail(train);
+    sendJson(res, regionDetail ? 200 : 404, regionDetail ?? { error: 'train not running', train, stops: [] });
+    return;
+  }
   try {
     const { stops, status } = await fetchTrainDetailStops(train);
     // Only the browser's list gets the foreign stops: the journey store keeps the rows
@@ -1678,11 +1717,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (mode === 'journeys') {
-      handleJourneys(req, res);
+      handleJourneys(req, res, reqUrl);
       return;
     }
     if (mode === 'stations') {
-      handleStations(res);
+      handleStations(res, reqUrl);
       return;
     }
     if (mode === 'disruptions') {

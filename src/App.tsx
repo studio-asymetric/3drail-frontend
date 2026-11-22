@@ -25,6 +25,7 @@ import {
   stationPoints,
   trainTypeCallout,
 } from './data/trainService';
+import { activeRegions, subscribeRegions } from './region';
 import type { Coordinate, GtfsDataset } from './data/gtfsParser';
 import { buildGtfsDataset } from './data/gtfsParser';
 import {
@@ -684,6 +685,48 @@ const App: React.FC = () => {
         setDataset(EMPTY_DATASET);
         setStatusMessage(strings.stationDataUnavailable);
       });
+  }, []);
+  // Prague's stations: fetched once the map has been moved there, merged into the station list.
+  useEffect(() => {
+    let cancelled = false;
+    let started = false;
+    const load = async () => {
+      if (started || !activeRegions().includes('pid')) {
+        return;
+      }
+      started = true;
+      for (let attempt = 0; attempt < 24 && !cancelled; attempt += 1) {
+        const response = await fetch('/proxy/stations?mode=stations&regions=pid', { cache: 'no-store' }).catch(() => null);
+        if (response?.status === 202) {
+          await new Promise((resolve) => window.setTimeout(resolve, 4000));
+          continue;
+        }
+        if (!response?.ok) {
+          break;
+        }
+        const payload = (await response.json()) as {
+          stations?: Array<[string, string, number, number, number, string?, string?]>;
+        };
+        if (cancelled) {
+          return;
+        }
+        const added: GtfsDataset['stops'] = {};
+        (payload.stations ?? []).forEach(([stopId, name, lat, lng, tripCount]) => {
+          added[`pid:${stopId}`] = { stopId: `pid:${stopId}`, name, lat, lng, tripCount };
+        });
+        setDataset((previous) => (previous ? { ...previous, stops: { ...previous.stops, ...added } } : previous));
+        return;
+      }
+      started = false;
+    };
+    load();
+    const unsubscribe = subscribeRegions(() => {
+      load();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
   const focusedTrain = useMemo(
     () => trains.find((train) => train.trainNumber === focusedTrainNumber) ?? null,

@@ -1,3 +1,4 @@
+import { regionsQuery } from '../region';
 import type {
   Coordinate,
   GtfsDataset,
@@ -388,7 +389,7 @@ const pendingTrainFetches = new Map<string, Promise<TrainRosterItem[]>>();
 
 /** Overlapping callers (startup effects, retries) share one request instead of each downloading the feed. */
 export function fetchAllTrains(options?: LiveFetchOptions): Promise<TrainRosterItem[]> {
-  const key = `${options?.useProxy ? 'proxy' : 'live'}|${options?.proxyUrl ?? ''}|${options?.refresh ? 'r' : ''}`;
+  const key = `${options?.useProxy ? 'proxy' : 'live'}|${options?.proxyUrl ?? ''}|${options?.refresh ? 'r' : ''}|${regionsQuery()}`;
   const pending = pendingTrainFetches.get(key);
   if (pending) {
     return pending;
@@ -405,7 +406,7 @@ async function fetchAllTrainsOnce(options?: LiveFetchOptions): Promise<TrainRost
   const proxyUrl = options?.proxyUrl ?? '/proxy';
   const endpoint =
     isProxy
-      ? `${proxyUrl.replace(/\/$/, '')}/gtall?mode=gtall${options?.refresh ? '&refresh=1' : ''}`
+      ? `${proxyUrl.replace(/\/$/, '')}/gtall?mode=gtall${options?.refresh ? '&refresh=1' : ''}${regionsQuery()}`
       : '/api/action';
   
   try {

@@ -19,3 +19,6 @@ tmp
 proxy/journeys.json
 proxy/journeys.json.tmp
 proxy/stop-memory.json
+
+# generated regional timetable data (spike)
+region-data

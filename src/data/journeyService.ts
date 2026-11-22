@@ -1,4 +1,5 @@
 import { decodePolyline } from './routeService';
+import { regionsQuery } from '../region';
 
 /**
  * Timetable-driven train positions.
@@ -293,7 +294,7 @@ let lastJourneysEtag = '';
 /** All running trains' journeys, or null when the list has not changed since the last call. */
 export async function fetchJourneys(signal?: AbortSignal): Promise<Map<string, Journey> | null> {
   // no-cache: the browser revalidates with the ETag and gets a 304 when nothing changed.
-  const response = await fetch('/proxy/journeys?mode=journeys&v=2', { signal, cache: 'no-cache' });
+  const response = await fetch(`/proxy/journeys?mode=journeys&v=2${regionsQuery()}`, { signal, cache: 'no-cache' });
   if (!response.ok) {
     throw new Error(`Journeys HTTP ${response.status}`);
   }

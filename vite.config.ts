@@ -60,7 +60,7 @@ export default defineConfig({
   server: {
     // The proxy rewrites these every few seconds; watching them keeps Vite busy.
     watch: {
-      ignored: ['**/proxy/*.json', '**/proxy/*.log', '**/proxy/osm-cache/**', '**/dist/**', '**/.claude/**'],
+      ignored: ['**/proxy/*.json', '**/proxy/*.log', '**/proxy/osm-cache/**', '**/region-data/**', '**/dist/**', '**/.claude/**'],
     },
     proxy: {
       '/api': {

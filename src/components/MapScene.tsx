@@ -67,6 +67,7 @@ import { PILL_HEIGHT, TrainCanvasLayer } from './trainCanvas';
 import { screenProjection } from '../data/screenProjection';
 import { PERF_HUD, perfAdd, startPerfHud } from '../perfHud';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
+import { PID_BOUNDS, activateRegionAt, activeRegions, subscribeRegions } from '../region';
 import {
   clipWaysToOutline,
   isCoordinateInsideOutline,
@@ -92,6 +93,28 @@ const SLOVAKIA_BOUNDS = {
   minLng: 16.8331891,
   maxLng: 22.5657103,
 };
+/** What the view may pan over: Slovakia plus the extra regions (Prague), which load once the map gets there. */
+const VIEW_BOUNDS = {
+  minLat: Math.min(SLOVAKIA_BOUNDS.minLat, PID_BOUNDS.minLat),
+  maxLat: Math.max(SLOVAKIA_BOUNDS.maxLat, PID_BOUNDS.maxLat),
+  minLng: Math.min(SLOVAKIA_BOUNDS.minLng, PID_BOUNDS.minLng),
+  maxLng: Math.max(SLOVAKIA_BOUNDS.maxLng, PID_BOUNDS.maxLng),
+};
+/** Inside Slovakia's outline, or inside an extra region that has been switched on (Prague). */
+function isInsideShownArea(point: { lat: number; lng: number }, outline: LatLngPolygon[]): boolean {
+  if (isCoordinateInsideOutline(point, outline)) {
+    return true;
+  }
+  return (
+    activeRegions().includes('pid') &&
+    point.lat >= PID_BOUNDS.minLat &&
+    point.lat <= PID_BOUNDS.maxLat &&
+    point.lng >= PID_BOUNDS.minLng &&
+    point.lng <= PID_BOUNDS.maxLng
+  );
+}
+/** Rail way ids of extra regions start here, clear of Slovakia's. */
+const REGION_WAY_ID_OFFSET = 5_000_000;
 /** Extra pan room beyond Slovakia (degrees). */
 /** The least the view may pan past Slovakia; zoomed out it grows with the screen (fitViewBounds). */
 const MAP_VIEW_BOUNDS_PAD = { lng: 1.5, lat: 1.1 };
@@ -1493,6 +1516,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         filtered = classifyDisplayRails(stitched);
         pathfinding = stitched.filter(isPathfindingWay);
       }
+      // An extra region that loaded first is part of the picture too.
+      filtered = [...filtered, ...extraDisplayRef.current];
+      pathfinding = [...pathfinding, ...extraPathfindingRef.current];
       osmWaysRef.current = new Map();
       simplifiedWaysRef.current = filtered;
       filtered.forEach((way) => osmWaysRef.current.set(way.id, way));
@@ -1518,6 +1544,65 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       cancelled = true;
     };
   }, [appendLoadingMessage, osmRefreshTrigger, svgOutlinePolygons]);
+
+  /** Rails of extra regions (Prague), kept so a reload of Slovakia's network does not lose them. */
+  const extraDisplayRef = useRef<OSMWay[]>([]);
+  const extraPathfindingRef = useRef<OSMWay[]>([]);
+
+  // Prague's rails: fetched only once the map has been moved there.
+  useEffect(() => {
+    let cancelled = false;
+    let started = false;
+    const load = async () => {
+      if (started || !activeRegions().includes('pid')) {
+        return;
+      }
+      started = true;
+      const result = await fetchSimplifiedNetwork('pid');
+      if (cancelled || result.ways.length === 0) {
+        started = false;
+        return;
+      }
+      const box = [
+        { lat: PID_BOUNDS.minLat - 0.2, lng: PID_BOUNDS.minLng - 0.2 },
+        { lat: PID_BOUNDS.minLat - 0.2, lng: PID_BOUNDS.maxLng + 0.2 },
+        { lat: PID_BOUNDS.maxLat + 0.2, lng: PID_BOUNDS.maxLng + 0.2 },
+        { lat: PID_BOUNDS.maxLat + 0.2, lng: PID_BOUNDS.minLng - 0.2 },
+        { lat: PID_BOUNDS.minLat - 0.2, lng: PID_BOUNDS.minLng - 0.2 },
+      ];
+      const stitched = closeRailGaps(
+        clipWaysToOutline(
+          result.ways.map((way) => ({ ...way, id: way.id + REGION_WAY_ID_OFFSET })),
+          [box]
+        )
+      );
+      const display = classifyDisplayRails(stitched);
+      const pathfinding = stitched.filter(isPathfindingWay);
+      extraDisplayRef.current = display;
+      extraPathfindingRef.current = pathfinding;
+      if (simplifiedWaysRef.current.length > 0) {
+        // Slovakia is already on the map: add Prague to it.
+        simplifiedWaysRef.current = [...simplifiedWaysRef.current, ...display];
+        display.forEach((way) => osmWaysRef.current.set(way.id, way));
+        pathfindingWaysRef.current = [...pathfindingWaysRef.current, ...pathfinding];
+        osmGraphRef.current = new Map();
+        workerGraphPostedRef.current = false;
+        setOsmWayCount(simplifiedWaysRef.current.length);
+        const map = mapRef.current;
+        if (mapReadyRef.current && map) {
+          publishSimplifiedRails(map, simplifiedWaysRef.current);
+        }
+      }
+    };
+    load();
+    const unsubscribe = subscribeRegions(() => {
+      load();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
 
   const scheduleTrainMarkers = useCallback(() => {
     if (trainPublishRafRef.current) {
@@ -1560,8 +1645,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       dragRotate: false,
       touchPitch: false,
       maxBounds: [
-        [SLOVAKIA_BOUNDS.minLng - MAP_VIEW_BOUNDS_PAD.lng, SLOVAKIA_BOUNDS.minLat - MAP_VIEW_BOUNDS_PAD.lat],
-        [SLOVAKIA_BOUNDS.maxLng + MAP_VIEW_BOUNDS_PAD.lng, SLOVAKIA_BOUNDS.maxLat + MAP_VIEW_BOUNDS_PAD.lat],
+        [VIEW_BOUNDS.minLng - MAP_VIEW_BOUNDS_PAD.lng, VIEW_BOUNDS.minLat - MAP_VIEW_BOUNDS_PAD.lat],
+        [VIEW_BOUNDS.maxLng + MAP_VIEW_BOUNDS_PAD.lng, VIEW_BOUNDS.maxLat + MAP_VIEW_BOUNDS_PAD.lat],
       ],
       attributionControl: false,
       pixelRatio: RENDER_PIXEL_RATIO,
@@ -1596,10 +1681,14 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       const padEast = Math.max(MAP_VIEW_BOUNDS_PAD.lng, spanLng * 0.8);
       const padLat = Math.max(MAP_VIEW_BOUNDS_PAD.lat, spanLat * 0.55);
       map.setMaxBounds([
-        [SLOVAKIA_BOUNDS.minLng - padWest, SLOVAKIA_BOUNDS.minLat - padLat],
-        [SLOVAKIA_BOUNDS.maxLng + padEast, SLOVAKIA_BOUNDS.maxLat + padLat],
+        [VIEW_BOUNDS.minLng - padWest, VIEW_BOUNDS.minLat - padLat],
+        [VIEW_BOUNDS.maxLng + padEast, VIEW_BOUNDS.maxLat + padLat],
       ]);
     };
+    map.on('moveend', () => {
+      const centre = map.getCenter();
+      activateRegionAt(centre.lat, centre.lng);
+    });
     map.on('zoom', fitViewBounds);
     map.on('resize', () => fitViewBounds());
     map.once('load', () => fitViewBounds());
@@ -2112,7 +2201,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         return [];
       }
       if (
-        !isCoordinateInsideOutline(
+        !isInsideShownArea(
           { lat: position.lat, lng: position.lng },
           outlineRef.current
         )
@@ -2326,7 +2415,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     });
     const stops = mergeNearbyStations(
       Object.values(dataset.stops).filter((stop) =>
-        isCoordinateInsideOutline({ lat: stop.lat, lng: stop.lng }, svgOutlinePolygons)
+        isInsideShownArea({ lat: stop.lat, lng: stop.lng }, svgOutlinePolygons)
       ),
       (stop) => stop.tripCount ?? tripCountByStop.get(stop.stopId) ?? 0
     );
@@ -2515,11 +2604,27 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       }
     };
     load();
-    const timer = window.setInterval(load, 2 * 60 * 1000);
+    // Slovakia's timetables change slowly; with Prague on (its live delays move) ask more often.
+    // Unchanged answers cost a 304.
+    let timer = 0;
+    const schedule = () => {
+      timer = window.setTimeout(
+        () => {
+          load();
+          schedule();
+        },
+        activeRegions().length > 0 ? 20_000 : 2 * 60 * 1000
+      );
+    };
+    schedule();
+    const unsubscribe = subscribeRegions(() => {
+      load();
+    });
     return () => {
       cancelled = true;
       controller?.abort();
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
+      unsubscribe();
     };
   }, []);
 

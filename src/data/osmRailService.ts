@@ -127,10 +127,11 @@ export interface OsmFetchResult {
   meta?: OsmProxyMeta;
 }
 
-export async function fetchSimplifiedNetwork(): Promise<OsmFetchResult> {
+/** The simplified rail network: Slovakia's, or an extra region's pack (`regionId`, e.g. 'pid'). */
+export async function fetchSimplifiedNetwork(regionId?: string): Promise<OsmFetchResult> {
   try {
     for (let attempt = 0; attempt < 24; attempt += 1) {
-      const response = await fetch('/proxy/osm/network?mode=osm&level=network&v=12', {
+      const response = await fetch(`/proxy/osm/network?mode=osm&level=network&v=12${regionId ? `&regions=${regionId}` : ''}`, {
         cache: 'no-store',
         headers: { Accept: 'application/octet-stream' },
       });
