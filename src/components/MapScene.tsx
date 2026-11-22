@@ -827,9 +827,8 @@ function addTransitLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     filter: ['==', ['get', 'mode'], 'metro'],
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
-      // the line colours, toned down: part way to a grey, and a little transparent
-      'line-color': ['interpolate', ['linear'], 0.45, 0, ['get', 'color'], 1, theme === 'dark' ? '#6e7076' : '#9b9da3'],
-      'line-opacity': 0.72,
+      'line-color': ['get', 'color'],
+      'line-opacity': 0.9,
       'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1, 11, 2, 14, 3.4, 17, 6],
     },
   });
