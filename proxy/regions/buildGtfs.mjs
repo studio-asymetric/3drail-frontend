@@ -8,7 +8,10 @@ import path from 'node:path';
 import readline from 'node:readline';
 
 /** Bumped when the cut-down timetable gains files, so older copies are rebuilt. */
-export const REGION_DATA_VERSION = 3;
+export const REGION_DATA_VERSION = 4;
+
+/** GTFS route_type -> bit in stop_modes.txt. */
+const TYPE_BIT = { 0: 1, 1: 2, 2: 4, 3: 8, 4: 16, 7: 32, 11: 64 };
 
 function splitCsv(line) {
   const out = [];
@@ -86,9 +89,13 @@ export async function buildRailSubset(inDirArg, outDirArg, log = console.log) {
   fs.mkdirSync(outDir, { recursive: true });
 const railRoutes = new Set();
 const otherRoutes = new Set();
+const routeType = new Map();
+const tripType = new Map();
+const stopMask = new Map();
 // every route is kept (names and colours of buses, trams and metro lines are needed)
 await filterFile('routes.txt', (r) => {
   // trains, metro and trams run on tracks: their trips, shapes and stop times are kept in full
+  routeType.set(r.route_id, Number(r.route_type));
   (r.route_type === '2' || r.route_type === '0' || r.route_type === '1' ? railRoutes : otherRoutes).add(r.route_id);
   return true;
 }).then((n) => log(`routes: ${n}`));
@@ -98,6 +105,7 @@ const otherTrips = new Set();
 const services = new Set();
 const shapes = new Set();
 await filterFile('trips.txt', (r) => {
+  tripType.set(r.trip_id, routeType.get(r.route_id));
   if (otherRoutes.has(r.route_id)) {
     // not written: buses, trams and metro are shown from the live feed; only their stop times are kept
     otherTrips.add(r.trip_id);
@@ -121,6 +129,8 @@ const toSec = (text) => {
   let railRows = 0;
   let otherRows = 0;
   const header = await stream('stop_times.txt', (r, line) => {
+    const bit = TYPE_BIT[tripType.get(r.trip_id)] ?? 0;
+    if (bit) stopMask.set(r.stop_id, (stopMask.get(r.stop_id) ?? 0) | bit);
     if (trips.has(r.trip_id)) {
       railOut.write(`${line}\n`);
       stopIds.add(r.stop_id);
@@ -149,6 +159,10 @@ await filterFile('calendar_dates.txt', (r) => services.has(r.service_id)).then((
 for (const file of ['agency.txt', 'feed_info.txt']) {
   fs.copyFileSync(path.join(inDir, file), path.join(outDir, file));
 }
+fs.writeFileSync(
+  path.join(outDir, 'stop_modes.txt'),
+  `${[...stopMask.entries()].map(([id, mask]) => `${id},${mask}`).join('\n')}\n`
+);
 fs.writeFileSync(path.join(outDir, 'region.version'), String(REGION_DATA_VERSION));
 log(`written to ${outDir}`);
 }

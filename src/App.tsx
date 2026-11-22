@@ -32,6 +32,7 @@ import { REGION_ID, readStoredModes, regionsQuery, storeModes, vehicleModeOf, ty
 import { MainMenu } from './components/MainMenu';
 import { MetroLogo } from './components/MetroLogo';
 import { fetchTransitLines } from './data/transitLines';
+import { fetchTransitStops, stopKindsOf } from './data/transitStops';
 import type { FeatureCollection } from 'geojson';
 import type { Coordinate, GtfsDataset } from './data/gtfsParser';
 import { buildGtfsDataset } from './data/gtfsParser';
@@ -578,6 +579,16 @@ const App: React.FC = () => {
     });
     return () => controller.abort();
   }, []);
+  // Tram, metro and bus stops of the kinds that are switched on
+  const [transitStops, setTransitStops] = useState<FeatureCollection | null>(null);
+  const stopKinds = stopKindsOf(modes);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchTransitStops(stopKinds, controller.signal).then((stops) => {
+      if (!controller.signal.aborted) setTransitStops(stops);
+    });
+    return () => controller.abort();
+  }, [stopKinds]);
   // tracks of the kinds that are switched on
   const transitLines = useMemo(
     () =>
@@ -956,7 +967,7 @@ const App: React.FC = () => {
       const controller = new AbortController();
       stationBoardAbortRef.current = controller;
       setStationBoardStatus('loading');
-      fetchStationBoard(station.name, tab === 'arrivals', controller.signal)
+      fetchStationBoard(station.name, tab === 'arrivals', controller.signal, station.id.startsWith('stop:'))
         .then((payload) => {
           if (controller.signal.aborted) {
             return;
@@ -1748,6 +1759,7 @@ const App: React.FC = () => {
           locale={locale}
           mapViewRef={mapViewRef}
           transitLines={transitLines}
+          transitStops={transitStops}
           userLocation={userLocation}
         />
       </div>
@@ -2431,7 +2443,7 @@ const App: React.FC = () => {
             </DockScroller>
             <a
               className="dock__cp-link"
-              href={`${REGION_ID === 'sk' ? 'https://cp.sk/vlakbusmhd/odchody/' : 'https://idos.cz/vlaky/odjezdy/'}?f=${encodeURIComponent(displayStation.name)}&submit=true&changeShield=true${
+              href={`${REGION_ID === 'sk' ? 'https://cp.sk/vlakbusmhd/odchody/' : displayStation.id.startsWith('stop:') ? 'https://idos.cz/vlakyautobusymhdvse/odjezdy/' : 'https://idos.cz/vlaky/odjezdy/'}?f=${encodeURIComponent(displayStation.name)}&submit=true&changeShield=true${
                 displayStationTab === 'arrivals' ? '&byarr=true' : ''
               }`}
               target="_blank"

@@ -607,6 +607,34 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
       return [...byName.values()].map((st) => [st.id, st.name, st.lat / st.n, st.lng / st.n, st.n]);
     },
 
+    /**
+     * Tram, metro, bus and trolleybus stops: [[name, lat, lng, kinds]], kinds 1 tram, 2 metro, 4 bus
+     * (buses, trolleybuses, ferries). Platforms of one name that are close together are one stop.
+     */
+    transitStops() {
+      const file = path.join(dir, 'stop_modes.txt');
+      if (!fs.existsSync(file)) return [];
+      const BIT = { tram: 1, metro: 2, bus: 8 | 16 | 64 };
+      const groups = new Map(); // name|cell -> { name, lat, lng, n, kinds }
+      for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+        if (!line) continue;
+        const comma = line.indexOf(',');
+        const stop = stops.get(line.slice(0, comma));
+        const mask = Number(line.slice(comma + 1));
+        if (!stop || !Number.isFinite(stop.lat)) continue;
+        const kinds = (mask & BIT.tram ? 1 : 0) | (mask & BIT.metro ? 2 : 0) | (mask & BIT.bus ? 4 : 0);
+        if (!kinds) continue; // a stop only trains call at is a station, not here
+        const key = `${stop.name}|${Math.round(stop.lat * 300)}|${Math.round(stop.lng * 190)}`;
+        let group = groups.get(key);
+        if (!group) groups.set(key, (group = { name: stop.name, lat: 0, lng: 0, n: 0, kinds: 0 }));
+        group.lat += stop.lat;
+        group.lng += stop.lng;
+        group.n += 1;
+        group.kinds |= kinds;
+      }
+      return [...groups.values()].map((g) => [g.name, Number((g.lat / g.n).toFixed(5)), Number((g.lng / g.n).toFixed(5)), g.kinds]);
+    },
+
     /** Tram and metro tracks as a GeoJSON FeatureCollection (each stretch once, metro in its line colours). */
     transitLines() {
       const q = (v) => Math.round(v * 1e4);

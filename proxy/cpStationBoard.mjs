@@ -1,6 +1,8 @@
 const CP_BOARD_URL = 'https://cp.sk/vlakbusmhd/odchody/';
 /** Czech trains (the same system and page layout as cp.sk): Prague's boards come from here. */
 export const IDOS_BOARD_URL = 'https://idos.cz/vlaky/odjezdy/';
+/** The same for every kind of vehicle (trams, metro, buses): the boards of Prague's other stops. */
+export const IDOS_ALL_BOARD_URL = 'https://idos.cz/vlakyautobusymhdvse/odjezdy/';
 
 function decodeEntities(value) {
   return String(value ?? '')

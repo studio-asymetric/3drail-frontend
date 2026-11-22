@@ -32,7 +32,7 @@ import {
   ROUTE_ALGORITHM_VERSION,
   traceRoute,
 } from './railRoute.mjs';
-import { fetchStationBoard, IDOS_BOARD_URL } from './cpStationBoard.mjs';
+import { fetchStationBoard, IDOS_ALL_BOARD_URL, IDOS_BOARD_URL } from './cpStationBoard.mjs';
 import { createJourneyStore } from './journeys.mjs';
 import { createRegionHub, requestedRegions } from './regions/hub.mjs';
 import { ensureRailwayTunnels, mergeTunnelWays } from './osmTunnels.mjs';
@@ -1603,14 +1603,16 @@ async function handleDetail(reqUrl, res) {
 async function handleStationBoard(reqUrl, res) {
   // Prague's boards come from idos.cz, Slovakia's from cp.sk (same system, same page layout).
   const regional = requestedRegions(reqUrl).length > 0;
-  const boardUrl = regional ? IDOS_BOARD_URL : undefined;
+  // a tram, metro or bus stop (all=1) gets the board of every kind of vehicle
+  const allKinds = regional && reqUrl.searchParams.get('all') === '1';
+  const boardUrl = regional ? (allKinds ? IDOS_ALL_BOARD_URL : IDOS_BOARD_URL) : undefined;
   const station = (reqUrl.searchParams.get('station') ?? reqUrl.searchParams.get('f') ?? '').trim();
   const arrivals = reqUrl.searchParams.get('byarr') === 'true' || reqUrl.searchParams.get('arrivals') === '1';
   if (!station || station.length > 120) {
     sendJson(res, 400, { error: 'Missing station', rows: [] });
     return;
   }
-  const cacheKey = `${regional ? 'pid:' : ''}${arrivals ? 'arr' : 'dep'}:${station.toLowerCase()}`;
+  const cacheKey = `${regional ? (allKinds ? 'pid-all:' : 'pid:') : ''}${arrivals ? 'arr' : 'dep'}:${station.toLowerCase()}`;
   const cached = stationBoardCache.get(cacheKey);
   if (cached && Date.now() - cached.at < STATION_BOARD_CACHE_MS) {
     sendJson(res, 200, { ...cached.payload, status: 'cached' });
@@ -1730,6 +1732,17 @@ const server = http.createServer(async (req, res) => {
     }
     if (mode === 'journeys') {
       handleJourneys(req, res, reqUrl);
+      return;
+    }
+    if (mode === 'stops') {
+      const body = requestedRegions(reqUrl).length > 0 ? regionHub.stopsBody(Number(reqUrl.searchParams.get('kinds') ?? 7)) : null;
+      if (body) {
+        sendCompressed(res, 200, body, 'application/json; charset=utf-8', { 'Cache-Control': 'public, max-age=600' }, `stops${reqUrl.searchParams.get('kinds') ?? ''}`);
+      } else if (requestedRegions(reqUrl).length > 0) {
+        sendRegionPending(res);
+      } else {
+        sendJson(res, 404, { error: 'no stops for this region' });
+      }
       return;
     }
     if (mode === 'lines') {

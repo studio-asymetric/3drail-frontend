@@ -30,14 +30,16 @@ export type FocusedStation = {
 export async function fetchStationBoard(
   station: string,
   arrivals: boolean,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  /** A tram, metro or bus stop: the board of every kind of vehicle, not just trains. */
+  allKinds = false
 ): Promise<StationBoardResponse> {
   const query = new URLSearchParams({
     mode: 'station',
     station,
     byarr: arrivals ? 'true' : 'false',
   });
-  const response = await fetch(`/proxy/station?${query.toString()}${regionsQuery()}`, { signal });
+  const response = await fetch(`/proxy/station?${query.toString()}${regionsQuery()}${allKinds ? '&all=1' : ''}`, { signal });
   if (!response.ok) {
     throw new Error(`Station board HTTP ${response.status}`);
   }
