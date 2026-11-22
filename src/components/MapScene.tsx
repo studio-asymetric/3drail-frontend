@@ -92,10 +92,10 @@ import {
 /** What the view may pan over: the region on this page (Slovakia, or Prague with /pid). */
 const VIEW_BOUNDS = REGION.bounds;
 /**
- * Buses, trams and metro: zoomed in to this level they are full pills like the trains. Further out,
- * where more than DOT_DENSITY of them are on screen (a city) they shrink to small dots, and out
- * beyond DOT_MIN_ZOOM they are left out; where there are few (the countryside) they stay full
- * pills at any zoom, so they can be seen from far away.
+ * Buses, trams and metro: zoomed in to DOT_ZOOM they are full pills like the trains. Between
+ * DOT_MIN_ZOOM and DOT_ZOOM, with more than DOT_DENSITY of them in view (a city), they are tiny
+ * dots; with fewer (the countryside) they stay full pills. Further out than DOT_MIN_ZOOM none of
+ * them is drawn.
  */
 const DOT_ZOOM = 13.4;
 /** Also where the tram and metro tracks start to show. */
@@ -2343,13 +2343,25 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     const crowded = otherOnScreen > DOT_DENSITY;
     const dotted = new Set<string>();
     const hidden = new Set<string>();
-    if (crowded && zoom < DOT_ZOOM) {
+    if (zoom < DOT_MIN_ZOOM) {
+      // further out than the dots: no buses, trams or metro at all
       measured.forEach((point) => {
-        if (!point.mode || point.selected) return;
-        (zoom < DOT_MIN_ZOOM ? hidden : dotted).add(point.id);
+        if (point.mode && !point.selected) hidden.add(point.id);
+      });
+    } else if (crowded && zoom < DOT_ZOOM) {
+      measured.forEach((point) => {
+        if (point.mode && !point.selected) dotted.add(point.id);
       });
     }
     const pillPoints = measured.filter((point) => !dotted.has(point.id) && !hidden.has(point.id));
+    if (import.meta.env.DEV) {
+      (window as unknown as { __pillStats?: unknown }).__pillStats = {
+        zoom,
+        dots: dotted.size,
+        hidden: hidden.size,
+        pills: measured.length - dotted.size - hidden.size,
+      };
+    }
     const dotPoints = measured.filter((point) => dotted.has(point.id));
     const packIterations = packingIterationsForZoom(zoom);
     // Only pills on (or just off) screen can overlap anything the user sees: packing all
