@@ -25,7 +25,8 @@ RUN mkdir -p /data/osm-cache
 
 ENV PROXY_PORT=80 \
     STATIC_ROOT=/app/dist \
-    OSM_CACHE_DIR=/data/osm-cache \n    REGION_DATA_DIR=/data/region/pid \
+    OSM_CACHE_DIR=/data/osm-cache \
+    REGION_DATA_DIR=/data/region/pid \
     PROXY_CACHE_FILE=/data/cache.json \
     PROXY_LOG_FILE=/data/proxy.log \
     NODE_ENV=production
