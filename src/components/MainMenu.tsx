@@ -190,6 +190,9 @@ export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocal
               <button type="button" role="radio" aria-checked={locale === 'sk'} onClick={() => onLocale('sk')}>
                 SK
               </button>
+              <button type="button" role="radio" aria-checked={locale === 'cs'} onClick={() => onLocale('cs')}>
+                CZ
+              </button>
               <button type="button" role="radio" aria-checked={locale === 'en'} onClick={() => onLocale('en')}>
                 EN
               </button>

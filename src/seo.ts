@@ -9,6 +9,11 @@ const DEFAULTS: Record<AppLocale, { title: string; description: string }> = {
     description:
       'Mapa vlakov Slovenska: poloha vlakov ZSSK naživo, meškanie, zastávky, odchody zo staníc a mimoriadnosti na trati. Kde je váš vlak práve teraz.',
   },
+  cs: {
+    title: 'Mapa vlaků a poloha vlaků ZSSK živě | Môj Vlak',
+    description:
+      'Mapa vlaků Slovenska: poloha vlaků ZSSK živě, zpoždění, zastávky, odjezdy ze stanic a mimořádnosti na trati. Kde je váš vlak právě teď.',
+  },
   en: {
     title: 'Live train map of Slovakia – train positions | Môj Vlak',
     description:
@@ -24,42 +29,48 @@ export type SeoState =
 
 export function seoFor(locale: AppLocale, state: SeoState): { title: string; description: string } {
   const base = DEFAULTS[locale];
-  const sk = locale === 'sk';
+  /** The phrase for the language in use. */
+  const pick = (sk: string, cs: string, en: string) => (locale === 'sk' ? sk : locale === 'cs' ? cs : en);
   if (state.kind === 'train') {
     const route = state.destination ? ` → ${state.destination}` : '';
     return {
-      title: `${state.label}${route} – ${sk ? 'poloha vlaku a meškanie' : 'train position and delay'} | ${SITE_NAME}`,
-      description: sk
-        ? `Živá poloha vlaku ${state.label}${route} na mape: meškanie, zastávky a plánované aj skutočné časy. ${SITE_NAME}.`
-        : `Live position of train ${state.label}${route}: delay, stops and scheduled and actual times. ${SITE_NAME}.`,
+      title: `${state.label}${route} – ${pick('poloha vlaku a meškanie', 'poloha vlaku a zpoždění', 'train position and delay')} | ${SITE_NAME}`,
+      description: pick(
+        `Živá poloha vlaku ${state.label}${route} na mape: meškanie, zastávky a plánované aj skutočné časy. ${SITE_NAME}.`,
+        `Živá poloha vlaku ${state.label}${route} na mapě: zpoždění, zastávky a plánované i skutečné časy. ${SITE_NAME}.`,
+        `Live position of train ${state.label}${route}: delay, stops and scheduled and actual times. ${SITE_NAME}.`
+      ),
     };
   }
   if (state.kind === 'station') {
     return {
-      title: `${state.name} – ${sk ? 'odchody vlakov a poloha vlakov' : 'train departures and arrivals'} | ${SITE_NAME}`,
-      description: sk
-        ? `Odchody a príchody vlakov zo stanice ${state.name}, s meškaním a polohou vlakov na mape. ${SITE_NAME}.`
-        : `Train departures and arrivals at ${state.name}, with delays and live positions on the map. ${SITE_NAME}.`,
+      title: `${state.name} – ${pick('odchody vlakov a poloha vlakov', 'odjezdy vlaků a poloha vlaků', 'train departures and arrivals')} | ${SITE_NAME}`,
+      description: pick(
+        `Odchody a príchody vlakov zo stanice ${state.name}, s meškaním a polohou vlakov na mape. ${SITE_NAME}.`,
+        `Odjezdy a příjezdy vlaků ze stanice ${state.name}, se zpožděním a polohou vlaků na mapě. ${SITE_NAME}.`,
+        `Train departures and arrivals at ${state.name}, with delays and live positions on the map. ${SITE_NAME}.`
+      ),
     };
   }
   if (state.kind === 'about') {
     return {
-      title: `${sk ? 'O aplikácii' : 'About'} | ${SITE_NAME}`,
+      title: `${pick('O aplikácii', 'O aplikaci', 'About')} | ${SITE_NAME}`,
       description: base.description,
     };
   }
   if (REGION_ID === 'pid') {
-    return sk
-      ? {
-          title: 'Mapa vlakov Prahy a okolia (PID) naživo | Môj Vlak',
-          description:
-            'Poloha vlakov v Prahe a Stredočeskom kraji naživo: mapa vlakov PID s meškaním, zastávkami a trasou každého vlaku.',
-        }
-      : {
-          title: 'Live train map of Prague and surroundings (PID) | Môj Vlak',
-          description:
-            'Where the trains of Prague and Central Bohemia are right now: live PID train positions with delays, stops and the route of each train.',
-        };
+    return {
+      title: pick(
+        'Mapa vlakov Prahy a okolia (PID) naživo | Môj Vlak',
+        'Mapa vlaků Prahy a okolí (PID) živě | Môj Vlak',
+        'Live train map of Prague and surroundings (PID) | Môj Vlak'
+      ),
+      description: pick(
+        'Poloha vlakov v Prahe a Stredočeskom kraji naživo: mapa vlakov PID s meškaním, zastávkami a trasou každého vlaku.',
+        'Poloha vlaků v Praze a Středočeském kraji živě: mapa vlaků PID se zpožděním, zastávkami a trasou každého vlaku.',
+        'Where the trains of Prague and Central Bohemia are right now: live PID train positions with delays, stops and the route of each train.'
+      ),
+    };
   }
   return base;
 }
@@ -86,5 +97,5 @@ export function applySeo(locale: AppLocale, state: SeoState) {
   setMeta('property', 'og:description', description);
   setMeta('name', 'twitter:title', title);
   setMeta('name', 'twitter:description', description);
-  setMeta('property', 'og:locale', locale === 'sk' ? 'sk_SK' : 'en_US');
+  setMeta('property', 'og:locale', locale === 'sk' ? 'sk_SK' : locale === 'cs' ? 'cs_CZ' : 'en_US');
 }

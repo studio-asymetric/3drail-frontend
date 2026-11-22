@@ -1,14 +1,50 @@
-export type AppLocale = 'sk' | 'en';
+export type AppLocale = 'sk' | 'cs' | 'en';
 
 export const LOCALE_STORAGE_KEY = 'railatlas-locale';
 
+/**
+ * The language a first-time visitor gets: Slovak from Slovakia, Czech from Czechia, English from
+ * anywhere else or when it cannot be told. The country is read from the browser's time zone and
+ * language list (nothing is sent anywhere); a choice made in the menu is remembered and wins.
+ */
+export function detectLocale(): AppLocale {
+  try {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? '';
+    if (zone === 'Europe/Bratislava') {
+      return 'sk';
+    }
+    if (zone === 'Europe/Prague') {
+      return 'cs';
+    }
+    const languages = (navigator.languages?.length ? navigator.languages : [navigator.language]).map((tag) =>
+      String(tag ?? '').toLowerCase()
+    );
+    if (languages.some((tag) => tag === 'sk' || tag.startsWith('sk-'))) {
+      return 'sk';
+    }
+    if (languages.some((tag) => tag === 'cs' || tag.startsWith('cs-'))) {
+      return 'cs';
+    }
+  } catch {
+    // unknown: English
+  }
+  return 'en';
+}
+
 export function readStoredLocale(): AppLocale {
   try {
-    return window.localStorage.getItem(LOCALE_STORAGE_KEY) === 'en' ? 'en' : 'sk';
+    const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+    if (stored === 'sk' || stored === 'cs' || stored === 'en') {
+      return stored;
+    }
   } catch {
-    return 'sk';
+    // no storage: detect
   }
+  return detectLocale();
 }
+
+/** Intl / HTML language tag of a locale. */
+export const LOCALE_TAG: Record<AppLocale, string> = { sk: 'sk-SK', cs: 'cs-CZ', en: 'en-GB' };
 
 export type Copy = {
   trainComposition: string;
@@ -337,6 +373,119 @@ const en: Copy = {
   studioBy: 'by Studio Asymetric',
 };
 
+
+const czechPlural = (count: number, one: string, few: string, many: string) =>
+  count === 1 ? one : count >= 2 && count <= 4 ? few : many;
+
+const cs: Copy = {
+  trainComposition: 'Řazení vlaku',
+  trainCompositionLink: 'vagonWEB',
+  trainCompositionTitle: 'Řazení vozů vlaku na vagonWEB (vagonweb.cz) – otevře se v novém okně',
+  alertsTitle: 'Mimořádnosti',
+  alertsAria: 'Mimořádnosti na trati',
+  alertsEmpty: 'Teď žádné mimořádnosti.',
+  alertsSource: 'Zdroj: ZSSK mimořádnosti',
+  alertsGroupClosures: 'Výluky',
+  alertsGroupCancelled: 'Zrušené vlaky',
+  alertsGroupDelays: 'Zpoždění',
+  alertsGroupNotes: 'Upozornění',
+  alertCancelledFull: 'Zrušen v celém úseku',
+  alertCancelledSection: (from, to) => `Zrušen v úseku ${from} – ${to}`,
+  alertNoReplacement: 'bez náhrady',
+  alertReplacement: (text) => `náhrada: ${text}`,
+  alertDelay: (minutes, station, forecast) =>
+    `${forecast ? 'Předpokládané zpoždění' : 'Zpoždění'} ${minutes} min ze stanice ${station}`,
+  alertBusReplacement: 'Náhradní autobusová doprava',
+  alertTimeAgo: (minutes) => (minutes < 1 ? 'právě teď' : minutes < 60 ? `před ${minutes} min` : `před ${Math.round(minutes / 60)} h`),
+  aboutRailatlas: 'O aplikaci Môj Vlak',
+  loadingTrains: 'Načítám vlaky',
+  trainsCount: (count) => `${count} ${czechPlural(count, 'vlak', 'vlaky', 'vlaků')}`,
+  searchPlaceholder: 'Hledat vlak nebo stanici',
+  searchCloseAria: 'Zavřít vyhledávání',
+  searchNoResults: 'Nic nenalezeno',
+  searchMobileHint: 'Zadejte číslo vlaku nebo název stanice',
+  searchRecent: 'Nedávná hledání',
+  searchClearRecent: 'Vymazat',
+  station: 'Stanice',
+  zoomIn: 'Přiblížit mapu',
+  zoomOut: 'Oddálit mapu',
+  locateAria: 'Moje poloha',
+  locateDenied: 'Poloha není povolena. Povolte ji v nastavení prohlížeče.',
+  locateFailed: 'Polohu se nepodařilo zjistit.',
+  themeToLight: 'Přepnout na světlý režim',
+  themeToDark: 'Přepnout na tmavý režim',
+  themeLight: 'Světlý režim',
+  themeDark: 'Tmavý režim',
+  langSwitchTo: 'EN',
+  langSwitchAria: 'Přepnout jazyk na angličtinu',
+  menuOpen: 'Otevřít menu',
+  menuClose: 'Zavřít menu',
+  menuRegion: 'Oblast',
+  menuLanguage: 'Jazyk',
+  menuAppearance: 'Vzhled',
+  regionSk: 'Slovensko',
+  regionPid: 'Praha a okolí (PID)',
+  menuDarkMode: 'Tmavý režim',
+  menuAbout: 'O aplikaci',
+  menuShow: 'Zobrazit',
+  modeRail: 'Vlaky',
+  modeMetro: 'Metro',
+  modeTram: 'Tramvaje',
+  modeTrolley: 'Trolejbusy',
+  modeBus: 'Autobusy',
+  menuStudio: 'Autor',
+  regionSkMeta: 'ZSSK · živě',
+  regionPidMeta: 'PID · živě',
+  follow: 'Sledovat',
+  following: 'Sleduji',
+  toastPositionCorrected: (km, back) =>
+    `Poloha vlaku upravena podle nového hlášení ŽSR (${km} km ${back ? 'zpět' : 'dopředu'})`,
+  toastTrainEnded: (trainNumber) => `Vlak ${trainNumber} dokončil jízdu, sledování skončilo`,
+  toastPositionUpdating: 'Poloha vlaku se aktualizuje na nejnovější',
+  alertsPill: 'ZSSK',
+  trainCompositionButton: 'Řazení',
+  toastFeedLost: 'Živá data nejsou dostupná. Zobrazují se poslední známé polohy.',
+  toastFeedBack: 'Živá data jsou zpět.',
+  replacementBus: 'Náhradní autobusová doprava ',
+  operator: 'Dopravce',
+  lastPosition: 'Poslední poloha',
+  train: 'Vlak',
+  onTime: 'Včas',
+  delayMinutes: (minutes) => `${minutes} min zpoždění`,
+  delayMinutesShort: (minutes) => `${minutes} min`,
+  loadingGtfs: 'Načítám údaje GTFS…',
+  loadingGtfsFrom: 'Načítám GTFS z public/gtfs…',
+  stationDataUnavailable: 'Údaje o stanicích nejsou dostupné',
+  trainListUnavailable: 'Seznam vlaků není dostupný',
+  loadingStations: 'Načítám zastávky',
+  stationListUnavailable: 'Seznam zastávek není dostupný',
+  departures: 'Odjezdy',
+  arrivals: 'Příjezdy',
+  stationBoard: 'Tabule stanice',
+  loadingDepartures: 'Načítám odjezdy',
+  loadingArrivals: 'Načítám příjezdy',
+  boardErrorDepartures: 'Pro tuto stanici nejsou odjezdy',
+  boardErrorArrivals: 'Pro tuto stanici nejsou příjezdy',
+  openOnCpSk: 'Otevřít na cp.sk',
+  openOnIdos: 'Otevřít na idos.cz',
+  aboutPill: 'O aplikaci',
+  back: 'Zpět',
+  dockCloseAria: 'Zavřít a zrušit výběr',
+  approachingStation: 'Další zastávka',
+  dockExpandSheet: 'Rozbalit panel',
+  loadingAbout: 'Načítám',
+  mapLoading: 'Načítá se',
+  mapStepMap: 'Mapa',
+  mapStepRails: 'Koleje',
+  mapStepTrains: 'Vlaky',
+  mapStepStations: 'Stanice',
+  mapStepTimetables: 'Jízdní řády',
+  mapReady: 'Připraveno',
+  routeWarnings: 'Upozornění trasy',
+  gtfsLoaded: (shapes, trips, stops) => `✓ GTFS: ${shapes} tratí, ${trips} spojů, ${stops} zastávek`,
+  studioBy: 'od Studio Asymetric',
+};
+
 export function copyFor(locale: AppLocale): Copy {
-  return locale === 'en' ? en : sk;
+  return locale === 'en' ? en : locale === 'cs' ? cs : sk;
 }

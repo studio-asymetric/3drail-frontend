@@ -21,8 +21,8 @@ const AboutArticleEn = () => (
     <p>
       Coloured pills are live trains. Open one for the journey list, planned vs actual times, and
       the next stop. Stations open a cp.sk departure or arrival board. The centre search field
-      finds trains and stations. Top-right tools: zoom, this about panel (info icon), light / dark
-      theme, and SK / EN language. The Môj Vlak mark in the header opens the same about view.
+      finds trains and stations. The menu button holds the region (Slovakia or Prague), the language and the light / dark
+      theme; the other tools zoom, find your position and open this panel. The Môj Vlak mark in the header opens the same about view.
     </p>
     <p>
       Pathfinding uses a simplified rail graph so trains snap to tracks. Detailed track geometry
@@ -71,7 +71,7 @@ const AboutArticleSk = () => (
     <p>
       Farebné značky sú živé vlaky. Klik otvorí zoznam zastávok, plánované a skutočné časy a ďalšiu
       zastávku. Stanica ukáže odchody alebo príchody z cp.sk. Stredové vyhľadávanie nájde vlaky aj
-      stanice. Vpravo hore: priblíženie, tento panel (ikona info), svetlý / tmavý režim a SK / EN.
+      stanice. Tlačidlo menu ukrýva oblasť (Slovensko alebo Praha), jazyk a svetlý / tmavý režim; ďalšie nástroje približujú, nájdu vašu polohu a otvárajú tento panel.
       Logo Môj Vlak v hlavičke otvorí rovnaký text O aplikácii.
     </p>
     <p>
@@ -97,6 +97,74 @@ const AboutArticleSk = () => (
       <li>Súradnice zastávok z balíka <code>public/gtfs</code></li>
     </ul>
     <AboutApiSk />
+  </article>
+);
+
+
+const AboutArticleCs = () => (
+  <article className="about__copy">
+    <p>
+      <strong>Môj Vlak</strong> je mapa vlaků s živou polohou vlaků na Slovensku a v Praze a okolí: všechny
+      vlaky na slovenské síti a vlaky, metro, tramvaje a autobusy PID na nakloněné mapě MapLibre. Polohy,
+      zpoždění a trasa po zastávkách leží na kolejích z OpenStreetMap. Podklad je vlastní styl Môj Vlak na
+      OpenFreeMap (OpenMapTiles / OSM) s tlumeným reliéfem z veřejných dlaždic Mapzen / AWS — bez podkladu
+      SBB ani geOps.
+    </p>
+    <p>
+      Autor:{' '}
+      <a href="https://asymetric.studio" target="_blank" rel="noreferrer">
+        Studio Asymetric
+      </a>
+      . Vývoj s pomocí AI v Cursoru; produkt, mapu a UI řídil člověk.
+    </p>
+    <h3>Co vidíte</h3>
+    <p>
+      Barevné značky jsou živé vlaky. Klik otevře seznam zastávek, plánované a skutečné časy a další
+      zastávku. Stanice ukáže odjezdy nebo příjezdy z cp.sk (na Slovensku) nebo idos.cz (v Praze). Vyhledávání
+      uprostřed najde vlaky i stanice. Tlačítko menu skrývá oblast (Slovensko nebo Praha), jazyk a světlý /
+      tmavý režim; další nástroje přibližují, najdou vaši polohu a otevírají tento panel. Logo Môj Vlak v
+      hlavičce otevře stejný text O aplikaci.
+    </p>
+    <p>
+      Pathfinding jede po zjednodušeném grafu, aby vlak seděl na kolejích. Detailní geometrie se kreslí až po
+      přiblížení. Dvoukolejný úsek je v grafu záměrně sjednocen.
+    </p>
+    <p>Atribuce mapy (OSM, OpenFreeMap, terén) zůstává v rohu mapy.</p>
+    <h3>Řazení vlaků</h3>
+    <p>
+      Řazení vlaku (jaké vozy má a v jakém pořadí) ukazuje{' '}
+      <a href="https://www.vagonweb.cz" target="_blank" rel="noopener">
+        vagonWEB
+      </a>{' '}
+      (vagonweb.cz), databáze českých a slovenských osobních železničních vozů. Môj Vlak odkazuje na
+      příslušnou stránku vlaku na vagonWEB se souhlasem týmu vagonWEB a děkuje mu za to. Všechna data o
+      řazení patří vagonWEB a jeho přispěvatelům.
+    </p>
+    <h3>Technologie</h3>
+    <ul>
+      <li>Vite 7, React 19, MapLibre GL 6</li>
+      <li>Node proxy na portu 3001 ve vývoji, v produkci stejný proces jako statické soubory</li>
+      <li>Vlastní posuvník v dock panelu</li>
+      <li>Souřadnice zastávek z balíku <code>public/gtfs</code></li>
+    </ul>
+    <h3>Zdrojová data</h3>
+    <p>
+      Polohy vlaků na Slovensku nejsou otevřená data. Proxy opakuje volání <code>gtall</code> a{' '}
+      <code>TrainDetail</code> z{' '}
+      <a href="https://mapa.zsr.sk" target="_blank" rel="noreferrer">
+        mapa.zsr.sk
+      </a>{' '}
+      po cookie handshake. Tabule stanic jsou z cp.sk a idos.cz. Pražská data jsou z otevřených dat PID
+      (jízdní řády, licence CC BY) a živých poloh přes Golemio API. Podklad OpenFreeMap (OSM) a terén přes
+      proxy. Geometrie kolejí © OpenStreetMap (ODbL). Vlakové feedy nepřeposílejte dál — aplikace jen
+      zobrazuje to, co už ukazují veřejné mapy provozovatelů.
+    </p>
+    <h3>Licence</h3>
+    <p>
+      Zdroják MIT (repozitář). Geist SIL OFL. Podklad © OSM přes OpenFreeMap, terén © Mapzen / AWS. Logo
+      pražského metra: Wikimedia Commons (volné dílo). Vlaková a jízdní data zůstávají u ŽSR, cp.sk, idos.cz,
+      PID a dalších provozovatelů.
+    </p>
   </article>
 );
 
@@ -255,4 +323,4 @@ function ApiEntry({ path, text }: { path: string; text: string }) {
 }
 
 export const AboutArticle: React.FC<{ locale: AppLocale }> = ({ locale }) =>
-  locale === 'en' ? <AboutArticleEn /> : <AboutArticleSk />;
+  locale === 'en' ? <AboutArticleEn /> : locale === 'cs' ? <AboutArticleCs /> : <AboutArticleSk />;

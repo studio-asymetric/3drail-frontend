@@ -52,6 +52,7 @@ import { ChromeSearchIcon } from './components/ChromeSearchIcon';
 import {
   copyFor,
   LOCALE_STORAGE_KEY,
+  LOCALE_TAG,
   readStoredLocale,
   type AppLocale,
 } from './i18n';
@@ -414,7 +415,7 @@ async function loadGtfsDataset(): Promise<GtfsDataset> {
 }
 
 /** The header clock, ticking on its own so the rest of the page does not re-render each second. */
-function ClockLabel() {
+function ClockLabel({ locale }: { locale: AppLocale }) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
@@ -422,7 +423,7 @@ function ClockLabel() {
   }, []);
   return (
     <>
-      {now.toLocaleTimeString('sk-SK', {
+      {now.toLocaleTimeString(LOCALE_TAG[locale], {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
@@ -706,7 +707,7 @@ const App: React.FC = () => {
   }, [theme]);
 
   useEffect(() => {
-    document.documentElement.lang = locale === 'en' ? 'en' : 'sk';
+    document.documentElement.lang = locale;
     try {
       window.localStorage.setItem(LOCALE_STORAGE_KEY, locale);
     } catch {
@@ -1383,7 +1384,7 @@ const App: React.FC = () => {
   const handleFollowCorrection = useCallback(
     ({ train, meters }: { train: string; meters: number }) => {
       pushToast(
-        t.toastPositionCorrected((Math.abs(meters) / 1000).toFixed(1).replace('.', locale === 'sk' ? ',' : '.'), meters < 0),
+        t.toastPositionCorrected((Math.abs(meters) / 1000).toFixed(1).replace('.', locale === 'en' ? '.' : ','), meters < 0),
         `correct:${train}`,
         25_000
       );
@@ -1694,7 +1695,7 @@ const App: React.FC = () => {
         }
         const leftLabel = left.kind === 'train' ? left.train.trainNumber : left.station.name;
         const rightLabel = right.kind === 'train' ? right.train.trainNumber : right.station.name;
-        return leftLabel.localeCompare(rightLabel, 'sk');
+        return leftLabel.localeCompare(rightLabel, LOCALE_TAG[locale]);
       })
       .slice(0, 8);
   }, [dataset, searchQuery, trains]);
@@ -1764,7 +1765,7 @@ const App: React.FC = () => {
           <small className="chrome__brand-meta">
             {loading ? t.loadingTrains : t.trainsCount(trains.length)}
             {' · '}
-            <ClockLabel />
+            <ClockLabel locale={locale} />
             {' · '}
             <a
               className="chrome__brand-studio"

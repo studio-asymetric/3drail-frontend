@@ -3240,8 +3240,8 @@ body,
 .menu__segment {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  width: 116px;
+  grid-template-columns: repeat(3, 1fr);
+  width: 168px;
   padding: 3px;
   border: 1px solid var(--menu-line);
   border-radius: 999px;
@@ -3253,14 +3253,18 @@ body,
   top: 3px;
   bottom: 3px;
   left: 3px;
-  width: calc(50% - 3px);
+  width: calc((100% - 6px) / 3);
   border-radius: 999px;
   background: var(--menu-ink);
   transition: transform 220ms var(--ease);
 }
 
-.menu__segment[data-value='en'] .menu__thumb {
+.menu__segment[data-value='cs'] .menu__thumb {
   transform: translateX(100%);
+}
+
+.menu__segment[data-value='en'] .menu__thumb {
+  transform: translateX(200%);
 }
 
 .menu__segment button {
