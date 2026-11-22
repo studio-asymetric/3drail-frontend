@@ -1,4 +1,4 @@
-import type { Feature, LineString } from 'geojson';
+import type { Feature, Polygon } from 'geojson';
 
 export interface StationPoint {
   id: string;
@@ -32,14 +32,52 @@ const SAME_SPOT_METERS = 3;
 const meters = (a: StationPoint, b: StationPoint) =>
   Math.hypot((a.lat - b.lat) * 111_000, (a.lng - b.lng) * 111_000 * Math.cos((((a.lat + b.lat) / 2) * Math.PI) / 180));
 
+/** How far the shape reaches beyond the outermost dots. */
+const SHAPE_MARGIN_METERS = 26;
+
+const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
+  (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+
+/** Convex hull (monotone chain) of [x, y] points. */
+function convexHull(points: Array<[number, number]>): Array<[number, number]> {
+  const sorted = [...points].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (sorted.length < 3) return sorted;
+  const half = (list: Array<[number, number]>) => {
+    const chain: Array<[number, number]> = [];
+    list.forEach((point) => {
+      while (chain.length >= 2 && cross(chain[chain.length - 2], chain[chain.length - 1], point) <= 0) chain.pop();
+      chain.push(point);
+    });
+    chain.pop();
+    return chain;
+  };
+  return [...half(sorted), ...half([...sorted].reverse())];
+}
+
+/** A closed ring [lng, lat] round all the dots, rounded: their hull grown by SHAPE_MARGIN_METERS. */
+function hullAround(dots: StationPoint[]): Array<[number, number]> {
+  const lat0 = dots[0].lat;
+  const kx = 111_000 * Math.cos((lat0 * Math.PI) / 180);
+  const ky = 111_000;
+  const ring: Array<[number, number]> = [];
+  dots.forEach((dot) => {
+    for (let step = 0; step < 20; step += 1) {
+      const angle = (step / 20) * Math.PI * 2;
+      ring.push([dot.lng + (Math.cos(angle) * SHAPE_MARGIN_METERS) / kx, dot.lat + (Math.sin(angle) * SHAPE_MARGIN_METERS) / ky]);
+    }
+  });
+  const hull = convexHull(ring);
+  return [...hull, hull[0]];
+}
+
 /**
  * Stops of one name that lie apart (the two platforms of a tram stop, "Bratislava-Vinohrady" and
- * "Bratislava-Vinohrady 2") are one place: they keep a dot each and share one light pill drawn behind
- * them (a big circle when they are close, longer when they are further apart), and one label. A group
+ * "Bratislava-Vinohrady 2") are one place: they keep a dot each and share one light shape drawn behind
+ * them (their rounded outline), and one label. A group
  * wider than GROUP_MAX_SPREAD_METERS is not joined. Returns the points (with group, pill and
  * hideLabel set) and the pill lines.
  */
-export function groupStations<T extends StationPoint>(points: T[]): { points: T[]; pills: Array<Feature<LineString>> } {
+export function groupStations<T extends StationPoint>(points: T[]): { points: T[]; pills: Array<Feature<Polygon>> } {
   const out: T[] = points.map((point) => ({ ...point }));
   const buckets = new Map<string, number[]>();
   out.forEach((point, index) => {
@@ -50,7 +88,7 @@ export function groupStations<T extends StationPoint>(points: T[]): { points: T[
     else buckets.set(key, [index]);
   });
 
-  const pills: Array<Feature<LineString>> = [];
+  const pills: Array<Feature<Polygon>> = [];
   buckets.forEach((indexes, key) => {
     if (indexes.length < 2) return;
     // single linkage within the radius
@@ -90,17 +128,11 @@ export function groupStations<T extends StationPoint>(points: T[]): { points: T[
         out[index].pill = true;
         out[index].hideLabel = index !== labelIndex;
       });
-      // the pill runs along the dots: ordered by the longer direction of their spread
-      const lats = spots.map((index) => out[index].lat);
-      const lngs = spots.map((index) => out[index].lng);
-      const latSpan = (Math.max(...lats) - Math.min(...lats)) * 111_000;
-      const lngSpan = (Math.max(...lngs) - Math.min(...lngs)) * 111_000 * Math.cos((out[spots[0]].lat * Math.PI) / 180);
-      const ordered = [...spots].sort((a, b) => (lngSpan >= latSpan ? out[a].lng - out[b].lng : out[a].lat - out[b].lat));
       pills.push({
         type: 'Feature',
         id: group,
         properties: { group },
-        geometry: { type: 'LineString', coordinates: ordered.map((index) => [out[index].lng, out[index].lat]) },
+        geometry: { type: 'Polygon', coordinates: [hullAround(spots.map((index) => out[index]))] },
       });
     });
   });

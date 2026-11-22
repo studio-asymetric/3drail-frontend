@@ -1179,14 +1179,12 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   // between them (about a circle when they are close).
   upsertLayer({
     id: 'stations-pill',
-    type: 'line',
+    type: 'fill',
     source: 'stations-pill',
     minzoom: STATION_DOT_MIN_ZOOM,
-    layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
-      'line-width': stationCircleRadius([12.8, 16.8, 24, 1.35]),
-      'line-color': fillColor,
-      'line-opacity': stationFade([
+      'fill-color': fillColor,
+      'fill-opacity': stationFade([
         'case',
         ['boolean', ['feature-state', 'hover'], false],
         0.42,
@@ -1194,7 +1192,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
         0.3,
         0.13,
       ]),
-      'line-blur': 0.18,
+
     },
   });
   upsertLayer({
@@ -1202,7 +1200,6 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     type: 'circle',
     source: 'stations',
     minzoom: STATION_DOT_MIN_ZOOM,
-    filter: ['!=', ['get', 'pill'], true],
     paint: {
       'circle-radius': stationCircleRadius([6.4, 8.4, 12, 1.35]),
       'circle-color': fillColor,
