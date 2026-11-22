@@ -65,7 +65,12 @@ const SNAP_METERS = 6000;
 const BACKTRACK_METERS = 4000;
 /** With live GPS a train drawn this far ahead of its fix is pulled back, and may run no further ahead of it. */
 const LIVE_BACKTRACK_METERS = 150;
-const LIVE_MAX_LEAD_METERS = 700;
+const LIVE_MAX_LEAD_METERS = 900;
+/** A live train runs on at the speed its last two fixes show for at most this long (s) before the next one. */
+const LIVE_EXTRAPOLATE_SECONDS = 45;
+/** Seconds for a live train's drawn spot to close most of the gap to where it should be (forward / back). */
+const LIVE_CHASE_SECONDS = 2.5;
+const LIVE_CHASE_BACK_SECONDS = 3;
 /** Seconds a train shown too far on takes to slide back to where ZSR puts it. */
 const EASE_BACK_SECONDS = 4;
 /**
@@ -479,6 +484,10 @@ type TrainModelState = {
   hold?: boolean;
   /** The reports are live GPS fixes (a region feed): the model stays close to them. */
   live?: boolean;
+  /** Live fixes: when the newest one was taken, where it put the train, and the speed the last two imply (m/s). */
+  fixMs?: number;
+  fixFloor?: number;
+  speed?: number;
   /** Metres along the line of the last reported checkpoint. */
   floor: number;
   shownAlong: number | null;
@@ -493,6 +502,8 @@ export interface LiveTrainInput {
   rosterOrderCurrentStation?: number;
   /** The position is a live GPS fix: the train is never shown behind it. */
   rosterLiveGps?: boolean;
+  /** When that fix was taken (epoch ms). */
+  rosterLiveAt?: number;
   /** ZSR's PotvrdenyOdj: false while the train has not left its reported station. */
   departureConfirmed?: boolean;
   /** Delay from ZSR's newer report at a later station; preferred over `delayMinutes`. */
@@ -600,6 +611,29 @@ export class JourneyAnimator {
           modelDelay = Math.max(modelDelay, feedDelay + stay - (stop.dep - stop.arr));
         }
       }
+      // Live GPS: remember when the fix was taken and how fast the train went between the last two.
+      let fixMs: number | undefined;
+      let fixFloor: number | undefined;
+      let speed: number | undefined;
+      if (train.rosterLiveGps) {
+        const prior = this.states.get(train.trainNumber);
+        const prev = prior && prior.sig === journey.sig ? prior : null;
+        const takenAt = train.rosterLiveAt ?? Date.now();
+        if (prev?.fixMs != null && takenAt > prev.fixMs + 1500) {
+          const seconds = (takenAt - prev.fixMs) / 1000;
+          const v = seconds < 120 ? Math.max(0, Math.min(28, (floor - (prev.fixFloor ?? floor)) / seconds)) : 0;
+          speed = prev.speed != null ? prev.speed * 0.4 + v * 0.6 : v;
+          fixMs = takenAt;
+          fixFloor = floor;
+        } else if (prev?.fixMs != null) {
+          fixMs = prev.fixMs;
+          fixFloor = prev.fixFloor;
+          speed = prev.speed;
+        } else {
+          fixMs = takenAt;
+          fixFloor = floor;
+        }
+      }
       let delaySeconds = modelDelay;
       const sameReport =
         previous?.active &&
@@ -630,6 +664,9 @@ export class JourneyAnimator {
         unconfirmed: train.departureConfirmed === false,
         hold: Boolean(train.rosterLiveGps && train.departureConfirmed === false),
         live: Boolean(train.rosterLiveGps),
+        fixMs,
+        fixFloor,
+        speed: train.departureConfirmed === false && train.rosterLiveGps ? 0 : speed,
         floor,
         shownAlong: previous && previous.sig === journey.sig ? previous.shownAlong : null,
         lastMs: previous?.lastMs ?? 0,
@@ -664,6 +701,12 @@ export class JourneyAnimator {
     const grace = state.unconfirmed ? UNCONFIRMED_GRACE_SECONDS : 0;
     if (state.hold) {
       return state.floor;
+    }
+    if (state.live && state.speed != null && state.fixMs != null) {
+      // Between two live fixes: carry on at the speed the train was going, instead of the timetable
+      // (which a tram held at a signal soon disagrees with).
+      const age = Math.min(LIVE_EXTRAPOLATE_SECONDS, Math.max(0, (nowMs - state.fixMs) / 1000));
+      return Math.min(state.floor + state.speed * age, state.floor + LIVE_MAX_LEAD_METERS);
     }
     const scheduled = alongAtTime(journey, nowMs / 1000 - state.delaySeconds - grace);
     const along = scheduled ?? state.floor;
@@ -734,7 +777,25 @@ export class JourneyAnimator {
     state.lastMs = nowMs;
     let shown = state.shownAlong ?? target;
     const gap = target - shown;
-    if (gap < -(state.live ? LIVE_BACKTRACK_METERS : BACKTRACK_METERS)) {
+    if (state.live && gap <= SNAP_METERS) {
+      // Always moving, never pinging: a new fix shows how far off the guess was, and that is taken
+      // up gradually (a limit on how much faster than the train itself the drawn spot may go).
+      const pace = state.speed ?? 8;
+      if (gap >= 0) {
+        const limit = (pace * 1.5 + 5) * dt;
+        // close the gap, at least as fast as the train itself moves and at most `limit`
+        const wanted = Math.max(gap * (1 - Math.exp(-dt / LIVE_CHASE_SECONDS)), pace * dt);
+        shown += Math.min(wanted, Math.max(limit, pace * dt), gap);
+      } else {
+        // ahead of where it should be: slow down to wait, and slide back only gently when far ahead
+        const slow = Math.max(0.2, 1 + gap / LIVE_BACKTRACK_METERS);
+        shown += pace * dt * slow;
+        if (gap < -LIVE_BACKTRACK_METERS) {
+          shown -= Math.min(-gap * (1 - Math.exp(-dt / LIVE_CHASE_BACK_SECONDS)), 8 * dt);
+          this.noteCorrection(train, gap);
+        }
+      }
+    } else if (gap < -(state.live ? LIVE_BACKTRACK_METERS : BACKTRACK_METERS)) {
       // The train was shown further on than ZSR says it can be: slide it back
       // instead of teleporting it.
       shown += gap * Math.min(1, dt / EASE_BACK_SECONDS);

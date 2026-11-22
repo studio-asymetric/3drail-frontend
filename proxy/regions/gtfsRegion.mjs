@@ -521,6 +521,7 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
           PotvrdenyOdj: departed,
           // the position is a real GPS fix, not the last station: the browser never draws behind it
           PositionLive: lv?.lat != null,
+          PositionAt: lv?.lat != null ? lv.at : undefined,
         });
       }
       others.forEach((entry) => rows.push(entry.row));

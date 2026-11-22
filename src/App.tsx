@@ -857,7 +857,8 @@ const App: React.FC = () => {
       setStatusMessage(t.trainListUnavailable);
     };
     refresh();
-    const interval = setInterval(refresh, 45_000);
+    // a region's live feed moves every 15 s; Slovakia's source is slower
+    const interval = setInterval(refresh, REGION_ID === 'sk' ? 45_000 : 10_000);
     return () => {
       mounted = false;
       clearInterval(interval);
