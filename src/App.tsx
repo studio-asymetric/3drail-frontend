@@ -4,6 +4,7 @@ import { abbreviationSteps, townOf } from './data/placeName';
 import { applySeo } from './seo';
 import { vagonwebTrainUrl } from './data/vagonweb';
 import { DisruptionsPanel, describeDisruption } from './components/DisruptionsPanel';
+import { DockInfoPanel } from './components/DockInfoPanel';
 import { eventsForTrain, fetchDisruptions, type DisruptionPayload } from './data/disruptionService';
 import { DockScroller } from './components/DockScroller';
 import { DockPanelControls } from './components/DockPanelControls';
@@ -1100,6 +1101,7 @@ const App: React.FC = () => {
       stopStationBoardLoad();
       setStationBoard([]);
       setStationBoardStatus('idle');
+      setAlertsOpen(false);
       const next = trainNumber || null;
       // Following belongs to one train: picking another ends it, and the map
       // flies to the new train (MapScene) instead of drifting off.
@@ -1120,6 +1122,7 @@ const App: React.FC = () => {
   );
   const handleStationClick = useCallback(
     (station: FocusedStation) => {
+      setAlertsOpen(false);
       setAboutOpen(false);
       setFocusedTrainNumber(null);
       setFollowing(false);
@@ -1217,8 +1220,22 @@ const App: React.FC = () => {
       return;
     }
     setDockLeaving(false);
+    setAlertsOpen(false);
     setAboutOpen(true);
   }, [aboutOpen, handleAboutBack]);
+
+  const handleAlertsToggle = useCallback(() => {
+    if (alertsOpen) {
+      setAlertsOpen(false);
+      return;
+    }
+    setFocusedTrainNumber(null);
+    setFocusedStation(null);
+    setFollowing(false);
+    setAboutOpen(false);
+    setDockLeaving(false);
+    setAlertsOpen(true);
+  }, [alertsOpen]);
 
   const panelBitsRef = useRef({ aboutOpen, focusedTrainNumber, focusedStation });
   panelBitsRef.current = { aboutOpen, focusedTrainNumber, focusedStation };
@@ -1303,7 +1320,7 @@ const App: React.FC = () => {
     },
     [pushToast, t]
   );
-  const panelOpen = Boolean(focusedTrain || focusedStation || aboutOpen);
+  const panelOpen = Boolean(focusedTrain || focusedStation || aboutOpen || alertsOpen);
   const leaveSnapshotRef = useRef<{
     train: TrainRenderState | null;
     station: FocusedStation | null;
@@ -1337,11 +1354,12 @@ const App: React.FC = () => {
   }
 
   const leaveSnap = dockLeaving ? leaveSnapshotRef.current : null;
+  const displayAlerts = alertsOpen;
   const displayAbout =
-    aboutOpen || Boolean(leaveSnap?.about && !leaveSnap.train && !leaveSnap.station);
-  const displayTrain = displayAbout ? null : focusedTrain ?? leaveSnap?.train ?? null;
+    !displayAlerts && (aboutOpen || Boolean(leaveSnap?.about && !leaveSnap.train && !leaveSnap.station));
+  const displayTrain = displayAbout || displayAlerts ? null : focusedTrain ?? leaveSnap?.train ?? null;
   const displayStation =
-    displayAbout || displayTrain != null
+    displayAbout || displayAlerts || displayTrain != null
       ? null
       : focusedStation ?? leaveSnap?.station ?? null;
   const displayStops = focusedTrain ? journeyStops : leaveSnap?.stops ?? journeyStops;
@@ -1378,18 +1396,36 @@ const App: React.FC = () => {
     (event) => event.kind !== 'delay' || event.forecast
   );
   const alertBadge = disruptionEvents.filter((event) => event.kind === 'cancel' || event.kind === 'closure').length;
-  const showDock = Boolean(displayTrain || displayStation || displayAbout);
+  const showDock = Boolean(displayTrain || displayStation || displayAbout || displayAlerts);
   const bootLocked = mapBooting || statusKind === 'loading';
 
+  // The text panels (About, Mimoriadnosti) have no small version on a phone: they open full size,
+  // and pulling them down closes them. Trains and stations open small and can be pulled up.
+  const textPanelOpen = displayAlerts || displayAbout;
   useEffect(() => {
-    setMobileDockExpanded(false);
-  }, [focusedTrainNumber, focusedStation?.id, aboutOpen]);
+    setMobileDockExpanded(isMobile && (alertsOpen || aboutOpen));
+  }, [focusedTrainNumber, focusedStation?.id, aboutOpen, alertsOpen, isMobile]);
 
-  const mobileSheetEnabled = isMobile && showDock && !displayAbout;
+  const handleSheetExpandedChange = useCallback(
+    (next: boolean) => {
+      setMobileDockExpanded(next);
+      if (next || !isMobile) {
+        return;
+      }
+      if (alertsOpen) {
+        setAlertsOpen(false);
+      } else if (aboutOpen) {
+        handleAboutBack();
+      }
+    },
+    [alertsOpen, aboutOpen, handleAboutBack, isMobile]
+  );
+
+  const mobileSheetEnabled = isMobile && showDock;
   const mobileSheet = useMobileDockSheet(
     mobileSheetEnabled,
     mobileDockExpanded,
-    setMobileDockExpanded
+    handleSheetExpandedChange
   );
   const mobileSheetOpen =
     mobileSheetEnabled &&
@@ -1635,18 +1671,6 @@ const App: React.FC = () => {
           mapViewRef={mapViewRef}
         />
       </div>
-      {alertsOpen && (
-        <DisruptionsPanel
-          events={disruptionEvents}
-          t={t}
-          liveTrains={liveTrainNumbers}
-          sourceName={disruptions?.source.name ?? ''}
-          sourceUrl={disruptions?.source.url ?? 'https://mastodon.social/@zssk_mimoriadne'}
-          onTrain={openAlertTrain}
-          onSection={openAlertSection}
-          onClose={() => setAlertsOpen(false)}
-        />
-      )}
       <header className="chrome">
         <div className={`chrome__brand ${panelOpen ? 'is-active' : ''}`}>
           <button
@@ -1873,7 +1897,7 @@ const App: React.FC = () => {
             aria-pressed={alertsOpen}
             aria-label={t.alertsAria}
             title={t.alertsAria}
-            onClick={() => setAlertsOpen((open) => !open)}
+            onClick={handleAlertsToggle}
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
               <path d="M8 2 14.2 12.8H1.8L8 2Z" stroke="currentColor" strokeWidth="1.35" strokeLinejoin="round" />
@@ -1943,7 +1967,7 @@ const App: React.FC = () => {
           mobileSheetEnabled ? ' dock--mobile-interactive' : ''
         }${
           mobileSheet.dragging ? ' dock--dragging' : ''
-        }${displayAbout ? ' dock--about' : ''}`}
+        }${textPanelOpen ? ' dock--about' : ''}`}
         style={
           {
             '--accent': accent,
@@ -2308,9 +2332,46 @@ const App: React.FC = () => {
             </a>
             </div>
           </div>
+        ) : displayAlerts ? (
+          <DockInfoPanel
+            isMobile={isMobile}
+            sheet={mobileSheet}
+            open={mobileSheetOpen}
+            revealed={mobileSheetRevealed}
+            onExpandedChange={handleSheetExpandedChange}
+            expandLabel={t.dockExpandSheet}
+            pill={t.alertsPill}
+            title={t.alertsTitle}
+            backLabel={t.back}
+            onBack={() => setAlertsOpen(false)}
+            contentKey={`alerts-${locale}`}
+            loadingLabel={t.loadingAbout}
+          >
+            <DisruptionsPanel
+              events={disruptionEvents}
+              t={t}
+              liveTrains={liveTrainNumbers}
+              sourceName={disruptions?.source.name ?? ''}
+              sourceUrl={disruptions?.source.url ?? 'https://mastodon.social/@zssk_mimoriadne'}
+              onTrain={openAlertTrain}
+              onSection={openAlertSection}
+            />
+          </DockInfoPanel>
         ) : displayAbout ? (
           <Suspense fallback={null}>
-            <AboutPanel onBack={handleAboutBack} copy={t} locale={locale} />
+            <AboutPanel
+              onBack={handleAboutBack}
+              copy={t}
+              locale={locale}
+              sheet={{
+              isMobile,
+              sheet: mobileSheet,
+              open: mobileSheetOpen,
+              revealed: mobileSheetRevealed,
+              onExpandedChange: handleSheetExpandedChange,
+              expandLabel: t.dockExpandSheet,
+            }}
+            />
           </Suspense>
         ) : null}
       </aside>

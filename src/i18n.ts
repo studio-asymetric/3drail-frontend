@@ -62,6 +62,7 @@ export type Copy = {
   toastPositionCorrected: (km: string, back: boolean) => string;
   toastTrainEnded: (trainNumber: string) => string;
   toastPositionUpdating: string;
+  alertsPill: string;
   trainCompositionButton: string;
   toastFeedLost: string;
   toastFeedBack: string;
@@ -105,7 +106,7 @@ export type Copy = {
 };
 
 const sk: Copy = {
-  trainComposition: 'Zloženie vlaku',
+  trainComposition: 'Radenie vlaku',
   trainCompositionLink: 'vagonWEB',
   trainCompositionTitle: 'Rad vozňov vlaku na vagonWEB (vagonweb.cz) – otvorí sa v novom okne',
   alertsTitle: 'Mimoriadnosti',
@@ -158,7 +159,8 @@ const sk: Copy = {
     `Poloha vlaku upravená podľa nového hlásenia ŽSR (${km} km ${back ? 'späť' : 'dopredu'})`,
   toastTrainEnded: (trainNumber) => `Vlak ${trainNumber} dokončil jazdu, sledovanie skončilo`,
   toastPositionUpdating: 'Poloha vlaku sa aktualizuje na najnovšiu',
-  trainCompositionButton: 'Zloženie',
+  alertsPill: 'ZSSK',
+  trainCompositionButton: 'Radenie',
   toastFeedLost: 'Živé dáta nie sú dostupné. Zobrazujú sa posledné známe polohy.',
   toastFeedBack: 'Živé dáta sú späť.',
   replacementBus: 'Náhradná autobusová doprava ',
@@ -255,6 +257,7 @@ const en: Copy = {
     `Train position corrected after a new ŽSR report (${km} km ${back ? 'back' : 'ahead'})`,
   toastTrainEnded: (trainNumber) => `Train ${trainNumber} finished its journey. Following stopped.`,
   toastPositionUpdating: "Updating the train's position to the latest",
+  alertsPill: 'ZSSK',
   trainCompositionButton: 'Composition',
   toastFeedLost: 'Live data unavailable. Showing the last known positions.',
   toastFeedBack: 'Live data is back.',

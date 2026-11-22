@@ -2249,11 +2249,23 @@ body,
     cursor: grab;
   }
 
-  .dock--collapsed .dock__body:not(.dock__body--train) .dock__sheet-main {
+  /* Text panels (About, Mimoriadnosti) show only their header while collapsed. */
+  .dock--collapsed .dock__body.dock__info .dock__sheet-main {
     display: none;
   }
 
-  .dock--about .dock__peek {
+  /* A station keeps the layout of the open sheet (name, Odchody / Príchody tabs, rows) and only
+     shows fewer rows, so expanding just lets the list grow. The tabs' own label replaces the
+     peek's "Odchody" line. */
+  .dock--collapsed .dock__body:not(.dock__body--train):not(.dock__info) .dock__peek-meta {
+    display: none;
+  }
+
+  .dock--collapsed .dock__body:not(.dock__body--train):not(.dock__info) .dock__board > li:nth-child(n + 3) {
+    display: none;
+  }
+
+  .dock--collapsed .dock__cp-link {
     display: none;
   }
 
@@ -2278,14 +2290,15 @@ body,
     padding-top: 4px;
   }
 
-  .dock--about .dock__sheet-handle {
-    display: none;
+  /* A station / text panel keeps its open-sheet spacing while collapsed, so expanding moves nothing. */
+  .dock--mobile-interactive.dock--collapsed .dock__body:not(.dock__body--train) {
+    gap: 8px;
+    padding-top: 4px;
   }
 
-  /* About is not a pull-up sheet, so nothing sets its height; with height: auto its scrolling
-     article collapsed to zero and only the header row showed. Give it the open-sheet height. */
-  .dock--about {
-    height: min(72svh, calc(100svh - var(--chrome-control-height) - 16px));
+  /* (the open sheet has no gap between the name and the tabs) */
+  .dock--mobile-interactive.dock--collapsed .dock__body:not(.dock__body--train) .dock__sheet-main {
+    margin-top: -8px;
   }
 
   .dock__body {
@@ -2434,6 +2447,8 @@ body,
   /* Not scrollable when small: just the stretch of track the train is on. */
   .dock--collapsed .dock__pane-viewport {
     overflow: hidden;
+    /* Not scrollable while collapsed: a drag on it belongs to the sheet. */
+    touch-action: none;
   }
 
   .dock--collapsed .dock__scrollbar {
@@ -3476,4 +3491,20 @@ body,
 
 .dock__follow--link:hover {
   text-decoration: none;
+}
+
+/* Mimoriadnosti inside the dock: the list only, the dock supplies the header. */
+.alerts--dock {
+  position: static;
+  z-index: auto;
+  width: auto;
+  max-height: none;
+  box-shadow: none;
+  background: transparent;
+  overflow: visible;
+}
+
+.alerts--dock .alerts__body {
+  overflow: visible;
+  padding: 0 4px 8px 0;
 }

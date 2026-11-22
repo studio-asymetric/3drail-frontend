@@ -19,6 +19,8 @@ const COLLAPSED_LIST_PX = 98;
 const LIST_SCROLL_SLOP_PX = 6;
 /** Sheet height progress above this reveals list content while dragging open. */
 export const SHEET_CONTENT_REVEAL = 0.08;
+/** Space around the two departures a station shows when collapsed (px). */
+const STATION_ROWS_GAP_PX = 40;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -59,6 +61,9 @@ export function useMobileDockSheet(
   const handleTapRef = useRef<{ y: number; t: number; from: number } | null>(null);
   const captureElRef = useRef<HTMLElement | null>(null);
   const pendingListRef = useRef<{ startY: number; pointerId: number } | null>(null);
+  /** A touch that began on the (not yet scrollable) list of a collapsed sheet: becomes a drag once it moves. */
+  const pendingCollapsedRef = useRef<{ startY: number; pointerId: number; element: HTMLElement } | null>(null);
+  const stopWatchingRef = useRef<(() => void) | null>(null);
   const [progress, setProgress] = useState(expanded ? 1 : 0);
   const [dragging, setDragging] = useState(false);
   const [settling, setSettling] = useState(false);
@@ -111,8 +116,19 @@ export function useMobileDockSheet(
       sheetMain && pane && pane.offsetParent === sheetMain.offsetParent
         ? pane.offsetTop - sheetMain.offsetTop
         : head?.offsetHeight ?? 0;
+    // A station's collapsed sheet is its peek plus the first two departures.
+    const boardRows = Array.from(
+      dock.querySelectorAll<HTMLElement>('.dock__body:not(.dock__body--train) .dock__board > li')
+    ).slice(0, 2);
+    const stationHead = dock.querySelector('.dock__body:not(.dock__body--train) .dock__head') as HTMLElement | null;
+    const boardPx =
+      boardRows.length > 0
+        ? boardRows.reduce((sum, row) => sum + row.offsetHeight, 0) +
+          (stationHead?.offsetHeight ?? 0) +
+          STATION_ROWS_GAP_PX
+        : 0;
     const collapsed =
-      (head ? aboveList + COLLAPSED_LIST_PX : peek?.offsetHeight ?? 0) +
+      (head ? aboveList + COLLAPSED_LIST_PX : (peek?.offsetHeight ?? 0) + boardPx) +
       (handle?.offsetHeight ?? 0) +
       (parseFloat(getComputedStyle(body).paddingTop) || 0) +
       (parseFloat(getComputedStyle(body).paddingBottom) || 0);
@@ -420,7 +436,56 @@ export function useMobileDockSheet(
         const viewport = listViewport();
         const target = event.target;
         const inList = viewport && target instanceof Node && viewport.contains(target);
-        if (inList) {
+        // The station tabs are taps too while the sheet is collapsed (the sheet does not capture them).
+        const inTabs =
+          target instanceof Element && target.closest('.dock__tabs') != null && progressRef.current < SHEET_CONTENT_REVEAL;
+        if (inList || inTabs) {
+          // While the sheet is collapsed its list cannot scroll, so a drag from the list is a drag
+          // of the sheet. A plain tap stays a tap on the row: capture is taken only once it moves.
+          if (progressRef.current < SHEET_CONTENT_REVEAL) {
+            const element = event.currentTarget;
+            const pending = { startY: event.clientY, pointerId: event.pointerId, element };
+            pendingCollapsedRef.current = pending;
+            stopWatchingRef.current?.();
+            // Watch the whole window: a quick swipe leaves the (small) sheet before the first move.
+            const onMove = (moveEvent: PointerEvent) => {
+              if (moveEvent.pointerId !== pending.pointerId || pendingCollapsedRef.current !== pending) {
+                return;
+              }
+              if (Math.abs(moveEvent.clientY - pending.startY) <= 8) {
+                return;
+              }
+              stop();
+              pendingCollapsedRef.current = null;
+              handleTapRef.current = null;
+              try {
+                element.setPointerCapture(pending.pointerId);
+              } catch {
+                // the pointer is gone
+                return;
+              }
+              beginDrag(pending.startY, element);
+              moveDrag(moveEvent.clientY);
+            };
+            const onEnd = (endEvent: PointerEvent) => {
+              if (endEvent.pointerId === pending.pointerId) {
+                stop();
+                if (pendingCollapsedRef.current === pending) {
+                  pendingCollapsedRef.current = null;
+                }
+              }
+            };
+            const stop = () => {
+              window.removeEventListener('pointermove', onMove);
+              window.removeEventListener('pointerup', onEnd);
+              window.removeEventListener('pointercancel', onEnd);
+              stopWatchingRef.current = null;
+            };
+            stopWatchingRef.current = stop;
+            window.addEventListener('pointermove', onMove);
+            window.addEventListener('pointerup', onEnd);
+            window.addEventListener('pointercancel', onEnd);
+          }
           return;
         }
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -438,6 +503,7 @@ export function useMobileDockSheet(
         moveDrag(event.clientY);
       },
       onPointerUp: (event) => {
+        pendingCollapsedRef.current = null;
         if (!dragRef.current) {
           return;
         }
@@ -452,6 +518,7 @@ export function useMobileDockSheet(
       },
       onPointerCancel: (event) => {
         handleTapRef.current = null;
+        pendingCollapsedRef.current = null;
         if (!dragRef.current) {
           return;
         }

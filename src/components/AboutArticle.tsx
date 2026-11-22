@@ -79,15 +79,15 @@ const AboutArticleSk = () => (
       kreslí až po priblížení. Dvojkoľajný úsek je v grafe zámerne zjednotený.
     </p>
     <p>Atribúcia mapy (OSM, OpenFreeMap, terén) zostáva v rohu mapy.</p>
-    <h3>Zloženie vlakov</h3>
+    <h3>Radenie vlakov</h3>
     <p>
-      Zloženie vlaku (aké vozne má a v akom poradí) ukazuje{' '}
+      Radenie vlaku (aké vozne má a v akom poradí) ukazuje{' '}
       <a href="https://www.vagonweb.cz" target="_blank" rel="noopener">
         vagonWEB
       </a>{' '}
       (vagonweb.cz), databáza českých a slovenských osobných železničných vozňov. Môj Vlak odkazuje
       na príslušnú stránku vlaku na vagonWEB so súhlasom tímu vagonWEB a ďakuje mu za to. Všetky údaje
-      o zložení patria vagonWEB a jeho prispievateľom.
+      o radení patria vagonWEB a jeho prispievateľom.
     </p>
     <h3>Technológie</h3>
     <ul>

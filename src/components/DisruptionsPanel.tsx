@@ -33,7 +33,6 @@ type Props = {
   sourceUrl: string;
   onTrain: (trainNumber: string) => void;
   onSection: (stationName: string) => void;
-  onClose: () => void;
 };
 
 export const DisruptionsPanel: React.FC<Props> = ({
@@ -44,7 +43,6 @@ export const DisruptionsPanel: React.FC<Props> = ({
   sourceUrl,
   onTrain,
   onSection,
-  onClose,
 }) => {
   const groups: Array<{ title: string; items: DisruptionEvent[] }> = [
     { title: t.alertsGroupClosures, items: events.filter((event) => event.kind === 'closure') },
@@ -57,15 +55,7 @@ export const DisruptionsPanel: React.FC<Props> = ({
   ].filter((group) => group.items.length > 0);
 
   return (
-    <section className="alerts" aria-label={t.alertsAria}>
-      <header className="alerts__head">
-        <h2 className="alerts__title">{t.alertsTitle}</h2>
-        <button type="button" className="alerts__close" onClick={onClose} aria-label={t.alertsAria}>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <path d="M2.8 2.8l8.4 8.4M11.2 2.8l-8.4 8.4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-        </button>
-      </header>
+    <section className="alerts alerts--dock" aria-label={t.alertsAria}>
       <div className="alerts__body">
         {groups.length === 0 && <p className="alerts__empty">{t.alertsEmpty}</p>}
         {groups.map((group) => (
