@@ -63,6 +63,9 @@ const EASE_SECONDS = 2.5;
 const SNAP_METERS = 6000;
 /** A target this far behind the shown position is applied; smaller ones wait in place. */
 const BACKTRACK_METERS = 4000;
+/** With live GPS a train drawn this far ahead of its fix is pulled back, and may run no further ahead of it. */
+const LIVE_BACKTRACK_METERS = 150;
+const LIVE_MAX_LEAD_METERS = 700;
 /** Seconds a train shown too far on takes to slide back to where ZSR puts it. */
 const EASE_BACK_SECONDS = 4;
 /**
@@ -472,6 +475,10 @@ type TrainModelState = {
   reportedDelay: number;
   /** ZSR lists the train as not yet departed from its reported station. */
   unconfirmed: boolean;
+  /** A live GPS report says the train is still standing at its station: keep it there. */
+  hold?: boolean;
+  /** The reports are live GPS fixes (a region feed): the model stays close to them. */
+  live?: boolean;
   /** Metres along the line of the last reported checkpoint. */
   floor: number;
   shownAlong: number | null;
@@ -484,6 +491,8 @@ export interface LiveTrainInput {
   delayMinutes: number;
   position?: { lat: number; lng: number };
   rosterOrderCurrentStation?: number;
+  /** The position is a live GPS fix: the train is never shown behind it. */
+  rosterLiveGps?: boolean;
   /** ZSR's PotvrdenyOdj: false while the train has not left its reported station. */
   departureConfirmed?: boolean;
   /** Delay from ZSR's newer report at a later station; preferred over `delayMinutes`. */
@@ -553,6 +562,9 @@ export class JourneyAnimator {
         if (floor == null) {
           floor = fix.along;
           checkpoint = journey.at.findIndex((along) => along != null && along > fix.along + 30) - 1;
+        } else if (train.rosterLiveGps && fix.along > floor) {
+          // A real fix ahead of the last stop: the train has moved on, so draw it at least there.
+          floor = fix.along;
         }
       }
       if (floor == null) {
@@ -616,6 +628,8 @@ export class JourneyAnimator {
         delaySeconds,
         reportedDelay,
         unconfirmed: train.departureConfirmed === false,
+        hold: Boolean(train.rosterLiveGps && train.departureConfirmed === false),
+        live: Boolean(train.rosterLiveGps),
         floor,
         shownAlong: previous && previous.sig === journey.sig ? previous.shownAlong : null,
         lastMs: previous?.lastMs ?? 0,
@@ -648,9 +662,13 @@ export class JourneyAnimator {
     // ZSR often raises the delay of a train it still lists as waiting: give it a
     // short grace after departure + delay before the pill leaves the station.
     const grace = state.unconfirmed ? UNCONFIRMED_GRACE_SECONDS : 0;
+    if (state.hold) {
+      return state.floor;
+    }
     const scheduled = alongAtTime(journey, nowMs / 1000 - state.delaySeconds - grace);
     const along = scheduled ?? state.floor;
-    return Math.max(state.floor, along);
+    const target = Math.max(state.floor, along);
+    return state.live ? Math.min(target, state.floor + LIVE_MAX_LEAD_METERS) : target;
   }
 
   /** Metres along its line where the timetable model puts the train now (not the eased drawn spot). */
@@ -716,7 +734,7 @@ export class JourneyAnimator {
     state.lastMs = nowMs;
     let shown = state.shownAlong ?? target;
     const gap = target - shown;
-    if (gap < -BACKTRACK_METERS) {
+    if (gap < -(state.live ? LIVE_BACKTRACK_METERS : BACKTRACK_METERS)) {
       // The train was shown further on than ZSR says it can be: slide it back
       // instead of teleporting it.
       shown += gap * Math.min(1, dt / EASE_BACK_SECONDS);

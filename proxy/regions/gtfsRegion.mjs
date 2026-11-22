@@ -342,11 +342,15 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
         const delaySec = lv?.delaySec ?? 0;
         const sim = simulate(entry, nowMs, delaySec);
         if (!sim) continue;
+        // With a live report the vehicle's own last stop and "standing at it" decide, not the clock.
+        const liveIdx = lv?.lastSeq != null ? entry.trip.stops.findIndex((stop) => stop.seq === lv.lastSeq) : -1;
+        const lastIdx = liveIdx >= 0 ? liveIdx : sim.lastIdx;
+        const departed = liveIdx >= 0 ? !lv.atStop : sim.t >= (entry.trip.stops[lastIdx].dep ?? 0);
         const route = routes.get(entry.trip.routeId);
         const first = entry.trip.stops[0];
         const last = entry.trip.stops[entry.trip.stops.length - 1];
         const name = (id) => stops.get(id)?.name ?? '';
-        const next = entry.trip.stops[Math.min(sim.lastIdx + 1, entry.trip.stops.length - 1)];
+        const next = entry.trip.stops[Math.min(lastIdx + 1, entry.trip.stops.length - 1)];
         const delayMin = Math.round(delaySec / 60);
         rows.push({
           CisloVlaku: entry.key,
@@ -359,15 +363,17 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
           Meska: delayMin,
           MeskaSkutocne: delayMin,
           MeskaColor: delayMin > 5 ? 'red' : delayMin > 1 ? 'orange' : 'green',
-          InfoZoStanice: name(entry.trip.stops[sim.lastIdx].stopId),
+          InfoZoStanice: name(entry.trip.stops[lastIdx].stopId),
           NextStation: name(next.stopId),
           Cas: '',
           CasPlan: '',
           Dopravca: route?.long ?? 'PID',
           Angle: sim.heading,
           Narusenie: false,
-          OrderCurrentStation: sim.lastIdx,
-          PotvrdenyOdj: sim.t >= (entry.trip.stops[sim.lastIdx].dep ?? 0),
+          OrderCurrentStation: lastIdx,
+          PotvrdenyOdj: departed,
+          // the position is a real GPS fix, not the last station: the browser never draws behind it
+          PositionLive: lv?.lat != null,
         });
       }
       return rows;

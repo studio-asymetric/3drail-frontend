@@ -31,6 +31,9 @@ export function parseFeatures(features, tripKey, now = Date.now()) {
     const delay = Number(last.delay?.actual);
     out.set(key, {
       delaySec: Number.isFinite(delay) ? delay : 0,
+      /** GTFS stop_sequence of the last stop it served, and whether it is standing there now. */
+      lastSeq: Number.isFinite(Number(last.last_stop?.sequence)) ? Number(last.last_stop.sequence) : null,
+      atStop: last.state_position === 'at_stop',
       lat: Array.isArray(coords) ? Number(coords[1]) : undefined,
       lng: Array.isArray(coords) ? Number(coords[0]) : undefined,
       at: Number.isFinite(stamp) ? stamp : now,
