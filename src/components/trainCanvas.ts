@@ -1,5 +1,6 @@
 import type { Map as MapLibreMap, MapMouseEvent } from 'maplibre-gl';
 import { contrastInk } from '../data/trainService';
+import { METRO_LOGO_HEIGHT, METRO_LOGO_PATH, METRO_LOGO_WIDTH } from '../data/metroLogo';
 import { stadiumEdgePoint, TRAIN_ARROW_INSET_PX } from '../data/trainPill';
 import { RENDER_PIXEL_RATIO } from '../perf';
 import { screenProjection } from '../data/screenProjection';
@@ -26,6 +27,8 @@ export interface CanvasPill {
   label: string;
   /** Drawn as a small dot, with no arrow and no label (crowded buses, trams and metro seen from afar). */
   dot?: boolean;
+  /** A small logo before the label: the Prague metro's. */
+  icon?: 'metro';
   /** Where the train really is, before overlapping pills were pushed apart (lng/lat is where it is drawn). */
   homeLng?: number;
   homeLat?: number;
@@ -42,6 +45,11 @@ const ARROW_STEPS = 360 / ARROW_STEP_DEG;
 const ARROW_BOX = ARROW_SIZE * 2 + 2;
 /** Extra pixels around each pill that still count as a hit (fingers need more). */
 const DOT_RADIUS = 2.4;
+/** The metro logo before the line letter: its height, and the gap to the letter (CSS px). */
+const ICON_HEIGHT = 8;
+const ICON_WIDTH = (ICON_HEIGHT * METRO_LOGO_WIDTH) / METRO_LOGO_HEIGHT;
+const ICON_GAP = 3;
+const metroLogoPath = typeof Path2D === 'undefined' ? null : new Path2D(METRO_LOGO_PATH);
 const HIT_PAD_MOUSE = 9;
 const HIT_PAD_TOUCH = 14;
 /** How quickly pills settle after a neighbour moved them (time constant, seconds). */
@@ -353,7 +361,7 @@ export class TrainCanvasLayer {
   }
 
   private sprite(pill: CanvasPill, hovered: boolean): Sprite {
-    const key = `${pill.type}|${pill.color}|${pill.selected ? 1 : 0}|${hovered ? 1 : 0}|${this.dpr}`;
+    const key = `${pill.type}|${pill.color}|${pill.icon ?? ''}|${pill.selected ? 1 : 0}|${hovered ? 1 : 0}|${this.dpr}`;
     const cached = this.sprites.get(key);
     if (cached) {
       return cached;
@@ -361,7 +369,8 @@ export class TrainCanvasLayer {
     const measure = this.ctx;
     measure.font = FONT;
     const textWidth = Math.ceil(measure.measureText(pill.type).width);
-    const pillWidth = Math.max(PILL_HEIGHT + 4, textWidth + PILL_PADDING_X * 2);
+    const iconSpace = pill.icon && metroLogoPath ? ICON_WIDTH + ICON_GAP : 0;
+    const pillWidth = Math.max(PILL_HEIGHT + 4, textWidth + iconSpace + PILL_PADDING_X * 2);
     const ring = pill.selected ? 6 : hovered ? 4 : 0;
     const shadow = 4;
     const margin = ring + shadow + 2;
@@ -404,7 +413,19 @@ export class TrainCanvasLayer {
     ctx.fillStyle = contrastInk(pill.color);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(pill.type, x + pillWidth / 2, y + PILL_HEIGHT / 2 + 0.5);
+    if (pill.icon && metroLogoPath) {
+      // logo, then the letter, together centred in the pill
+      const contentWidth = ICON_WIDTH + ICON_GAP + textWidth;
+      const left = x + (pillWidth - contentWidth) / 2;
+      ctx.save();
+      ctx.translate(left, y + (PILL_HEIGHT - ICON_HEIGHT) / 2);
+      ctx.scale(ICON_HEIGHT / METRO_LOGO_HEIGHT, ICON_HEIGHT / METRO_LOGO_HEIGHT);
+      ctx.fill(metroLogoPath);
+      ctx.restore();
+      ctx.fillText(pill.type, left + ICON_WIDTH + ICON_GAP + textWidth / 2, y + PILL_HEIGHT / 2 + 0.5);
+    } else {
+      ctx.fillText(pill.type, x + pillWidth / 2, y + PILL_HEIGHT / 2 + 0.5);
+    }
     ctx.restore();
     const sprite = { sx, sy, sw, sh, gen: this.atlasGen, width, height, pillWidth };
     this.sprites.set(key, sprite);

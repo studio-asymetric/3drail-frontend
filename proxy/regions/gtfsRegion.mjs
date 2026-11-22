@@ -501,7 +501,9 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
         rows.push({
           CisloVlaku: entry.key,
           TypVlaku: route?.short ?? 'S',
-          ...(typeOf(entry.trip) === 2 ? {} : { Rezim: MODE_BY_TYPE[typeOf(entry.trip)] ?? 'tram' }),
+          ...(typeOf(entry.trip) === 2
+            ? {}
+            : { Rezim: MODE_BY_TYPE[typeOf(entry.trip)] ?? 'tram', Farba: route?.color ? `#${route.color}` : '' }),
           NazovVlaku: route?.short ?? "S",
           Nazov: `${name(first.stopId)} – ${name(last.stopId)}`,
           Popis: `${name(first.stopId)} – ${name(last.stopId)}`,

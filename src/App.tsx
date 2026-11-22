@@ -29,6 +29,7 @@ import {
 } from './data/trainService';
 import { REGION_ID, readStoredModes, regionsQuery, storeModes, vehicleModeOf, type VehicleMode } from './region';
 import { MainMenu } from './components/MainMenu';
+import { MetroLogo } from './components/MetroLogo';
 import { fetchTransitLines } from './data/transitLines';
 import type { FeatureCollection } from 'geojson';
 import type { Coordinate, GtfsDataset } from './data/gtfsParser';
@@ -1888,6 +1889,7 @@ const App: React.FC = () => {
                         }}
                         aria-hidden="true"
                       >
+                        {hit.train.mode === 'metro' && <MetroLogo height={10} />}
                         {trainTypeCallout(hit.train.trainType) || 'Os'}
                       </span>
                     ) : (
@@ -2126,7 +2128,10 @@ const App: React.FC = () => {
                 }
               >
                 <p className="dock__identity">
-                  <span className="dock__pill">{`${trainLabel(displayTrain)}`}</span>
+                  <span className="dock__pill">
+                    {displayTrain.mode === 'metro' && <MetroLogo />}
+                    {`${trainLabel(displayTrain)}`}
+                  </span>
                   <DockTitle properName={properTrainName} to={routeEnds?.to ?? ''} fallback={t.train} />
                 </p>
                 <p className="dock__status">

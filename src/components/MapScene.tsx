@@ -2406,6 +2406,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           heading: point.heading ?? null,
           label: `${shownType} ${point.number}`,
           dot: dotted.has(point.id) || undefined,
+          icon: point.mode === 'metro' ? ('metro' as const) : undefined,
         };
       })
     );

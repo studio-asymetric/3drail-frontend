@@ -3685,3 +3685,11 @@ body,
   outline: 1px solid var(--menu-ink);
   outline-offset: 2px;
 }
+
+/* The Prague metro logo before a line letter in a DOM pill. */
+.metro-logo {
+  display: inline-block;
+  flex: none;
+  margin-right: 0.3em;
+  vertical-align: -0.1em;
+}

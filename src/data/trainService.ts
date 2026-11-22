@@ -52,6 +52,8 @@ interface MapaZsrTrain {
   PositionAt?: number;
   /** Region feeds: 'tram', 'metro', 'bus', 'trolley' (absent for trains). */
   Rezim?: string;
+  /** Region feeds: the line's own colour (metro A, B, C). */
+  Farba?: string;
 }
 
 export interface RouteSegment {
@@ -112,6 +114,7 @@ export interface TrainRosterItem {
   liveGps?: boolean;
   liveAt?: number;
   mode?: string;
+  lineColor?: string;
   summary?: string;
   operator?: string;
   delayText?: string;
@@ -715,6 +718,7 @@ function convertTrainsToRosterItems(trains: MapaZsrTrain[]): TrainRosterItem[] {
       liveGps: train.PositionLive === true ? true : undefined,
       liveAt: typeof train.PositionAt === 'number' ? train.PositionAt : undefined,
       mode: train.Rezim || undefined,
+      lineColor: /^#[0-9a-f]{6}$/i.test(train.Farba ?? '') ? train.Farba : undefined,
       summary: train.Popis || train.Nazov || undefined,
       operator: train.Dopravca || undefined,
       delayText: train.MeskaTextEn || train.MeskaText || undefined,
@@ -806,7 +810,7 @@ export function buildTrainRenderState(
       position: roster.position,
       progress: 0.5,
       delayMinutes,
-      color: roster.mode ? VEHICLE_PILL_COLOR : getDelayColor(delayMinutes),
+      color: roster.mode ? (roster.mode === 'metro' && roster.lineColor ? roster.lineColor : VEHICLE_PILL_COLOR) : getDelayColor(delayMinutes),
       nextStation,
       currentStation,
       reportedAt,
@@ -868,7 +872,7 @@ export function buildTrainRenderState(
     position: interpolateShape(shape.points, progress),
     progress,
     delayMinutes,
-    color: roster.mode ? VEHICLE_PILL_COLOR : getDelayColor(delayMinutes),
+    color: roster.mode ? (roster.mode === 'metro' && roster.lineColor ? roster.lineColor : VEHICLE_PILL_COLOR) : getDelayColor(delayMinutes),
     nextStation,
     currentStation,
     reportedAt,
