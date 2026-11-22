@@ -67,7 +67,7 @@ import { PILL_HEIGHT, TrainCanvasLayer } from './trainCanvas';
 import { screenProjection } from '../data/screenProjection';
 import { PERF_HUD, perfAdd, startPerfHud } from '../perfHud';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
-import { PID_BOUNDS, activateRegionAt, activeRegions, subscribeRegions } from '../region';
+import { PID_BOUNDS, activateRegion, activateRegionAt, activeRegions, subscribeRegions } from '../region';
 import {
   clipWaysToOutline,
   isCoordinateInsideOutline,
@@ -3110,6 +3110,12 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const progressPercentage = overlayActive
     ? Math.round(((readyCount + 0.18) / loadSteps.length) * 100)
     : 100;
+  // Slovakia is up and the page is open: bring Prague in behind it, in the background.
+  useEffect(() => {
+    if (!overlayActive) {
+      activateRegion('pid');
+    }
+  }, [overlayActive]);
   useEffect(() => {
     onCanvasStateChange?.(canvasStateClass);
   }, [canvasStateClass, onCanvasStateChange]);
