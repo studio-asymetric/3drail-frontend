@@ -25,7 +25,8 @@ import {
   stationPoints,
   trainTypeCallout,
 } from './data/trainService';
-import { activeRegions, subscribeRegions } from './region';
+import { REGION_ID, regionsQuery } from './region';
+import { MainMenu } from './components/MainMenu';
 import type { Coordinate, GtfsDataset } from './data/gtfsParser';
 import { buildGtfsDataset } from './data/gtfsParser';
 import {
@@ -353,9 +354,17 @@ function loadStationDataset(): Promise<GtfsDataset> {
 }
 
 async function fetchStationDataset(): Promise<GtfsDataset> {
-  const response = await fetch('/proxy/stations?mode=stations&v=1');
-  if (!response.ok) {
-    throw new Error(`Stations HTTP ${response.status}`);
+  let response: Response | null = null;
+  // A region still reading its timetable answers 202: ask again shortly.
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    response = await fetch(`/proxy/stations?mode=stations&v=1${regionsQuery()}`);
+    if (response.status !== 202) {
+      break;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 4000));
+  }
+  if (!response?.ok) {
+    throw new Error(`Stations HTTP ${response?.status}`);
   }
   const payload = (await response.json()) as {
     stations?: Array<[string, string, number, number, number, string?, string?]>;
@@ -544,6 +553,7 @@ const App: React.FC = () => {
   
   const service = useMemo(() => new TrainService(dataset ?? EMPTY_DATASET), [dataset]);
   const [locale, setLocale] = useState<AppLocale>(readStoredLocale);
+  const [menuOpen, setMenuOpen] = useState(false);
   const t = useMemo(() => copyFor(locale), [locale]);
   const [statusMessage, setStatusMessage] = useState(() => copyFor(readStoredLocale()).loadingGtfs);
   const [statusKind, setStatusKind] = useState<'loading' | 'success' | 'error'>(
@@ -685,48 +695,6 @@ const App: React.FC = () => {
         setDataset(EMPTY_DATASET);
         setStatusMessage(strings.stationDataUnavailable);
       });
-  }, []);
-  // Prague's stations: fetched once the map has been moved there, merged into the station list.
-  useEffect(() => {
-    let cancelled = false;
-    let started = false;
-    const load = async () => {
-      if (started || !activeRegions().includes('pid')) {
-        return;
-      }
-      started = true;
-      for (let attempt = 0; attempt < 24 && !cancelled; attempt += 1) {
-        const response = await fetch('/proxy/stations?mode=stations&regions=pid', { cache: 'no-store' }).catch(() => null);
-        if (response?.status === 202) {
-          await new Promise((resolve) => window.setTimeout(resolve, 4000));
-          continue;
-        }
-        if (!response?.ok) {
-          break;
-        }
-        const payload = (await response.json()) as {
-          stations?: Array<[string, string, number, number, number, string?, string?]>;
-        };
-        if (cancelled) {
-          return;
-        }
-        const added: GtfsDataset['stops'] = {};
-        (payload.stations ?? []).forEach(([stopId, name, lat, lng, tripCount]) => {
-          added[`pid:${stopId}`] = { stopId: `pid:${stopId}`, name, lat, lng, tripCount };
-        });
-        setDataset((previous) => (previous ? { ...previous, stops: { ...previous.stops, ...added } } : previous));
-        return;
-      }
-      started = false;
-    };
-    load();
-    const unsubscribe = subscribeRegions(() => {
-      load();
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
   }, []);
   const focusedTrain = useMemo(
     () => trains.find((train) => train.trainNumber === focusedTrainNumber) ?? null,
@@ -1823,6 +1791,18 @@ const App: React.FC = () => {
         <div className="chrome__tools">
           <button
             type="button"
+            className={`chrome__tool chrome__tool--menu${menuOpen ? ' is-active' : ''}`}
+            aria-label={t.menuOpen}
+            aria-expanded={menuOpen}
+            title={t.menuOpen}
+            onClick={() => setMenuOpen(true)}
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M2 4.5h12M2 8h12M2 11.5h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+          <button
+            type="button"
             className="chrome__tool"
             aria-label={t.zoomIn}
             title={t.zoomIn}
@@ -1857,6 +1837,7 @@ const App: React.FC = () => {
               />
             </svg>
           </button>
+          {REGION_ID === 'sk' && (
           <button
             type="button"
             className={`chrome__tool chrome__tool--alerts${alertsOpen ? ' is-active' : ''}`}
@@ -1871,43 +1852,7 @@ const App: React.FC = () => {
             </svg>
             {alertBadge > 0 && <span className="chrome__badge">{alertBadge > 9 ? '9+' : alertBadge}</span>}
           </button>
-          <button
-            type="button"
-            className="chrome__tool chrome__theme"
-            aria-label={theme === 'dark' ? t.themeToLight : t.themeToDark}
-            title={theme === 'dark' ? t.themeLight : t.themeDark}
-            onClick={() => setTheme((current) => (current === 'dark' ? 'light' : 'dark'))}
-          >
-            {theme === 'dark' ? (
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <circle cx="8" cy="8" r="3.1" stroke="currentColor" strokeWidth="1.4" />
-                <path
-                  d="M8 1.4v1.6M8 13v1.6M1.4 8h1.6M13 8h1.6M3.1 3.1l1.1 1.1M11.8 11.8l1.1 1.1M3.1 12.9l1.1-1.1M11.8 4.2l1.1-1.1"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                />
-              </svg>
-            ) : (
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path
-                  d="M13.2 9.3A5.4 5.4 0 1 1 6.7 2.8 4.3 4.3 0 0 0 13.2 9.3Z"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            )}
-          </button>
-          <button
-            type="button"
-            className="chrome__tool chrome__tool--lang"
-            aria-label={t.langSwitchAria}
-            title={t.langSwitchAria}
-            onClick={() => setLocale((current) => (current === 'sk' ? 'en' : 'sk'))}
-          >
-            <span aria-hidden="true">{t.langSwitchTo}</span>
-          </button>
+          )}
           <button
             type="button"
             className={`chrome__tool chrome__tool--search${searchMobileOpen ? ' is-active' : ''}`}
@@ -1926,6 +1871,24 @@ const App: React.FC = () => {
           </button>
         </div>
       </header>
+      <MainMenu
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        logo={theme === 'dark' ? logoMarkDark : logoMarkLight}
+        locale={locale}
+        onLocale={setLocale}
+        theme={theme}
+        onTheme={setTheme}
+        copy={{
+          menuClose: t.menuClose,
+          menuRegion: t.menuRegion,
+          menuLanguage: t.menuLanguage,
+          menuAppearance: t.menuAppearance,
+          menuDarkMode: t.menuDarkMode,
+          regionNames: { sk: t.regionSk, pid: t.regionPid },
+          regionMeta: { sk: t.regionSkMeta, pid: t.regionPidMeta },
+        }}
+      />
       {toasts.length > 0 && (
         <div className="toasts" role="status" aria-live="polite">
           {toasts.map((toast) => (

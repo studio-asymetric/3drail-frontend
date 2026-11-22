@@ -1,3 +1,4 @@
+import { regionsQuery } from '../region';
 export type StationBoardRow = {
   time: string;
   datetime?: string;
@@ -36,7 +37,7 @@ export async function fetchStationBoard(
     station,
     byarr: arrivals ? 'true' : 'false',
   });
-  const response = await fetch(`/proxy/station?${query.toString()}`, { signal });
+  const response = await fetch(`/proxy/station?${query.toString()}${regionsQuery()}`, { signal });
   if (!response.ok) {
     throw new Error(`Station board HTTP ${response.status}`);
   }

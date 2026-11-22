@@ -456,10 +456,14 @@ function scheduleJourneySync() {
 }
 
 function handleJourneys(req, res, reqUrl) {
-  const { body, etag } = regionHub.journeys(requestedRegions(reqUrl), {
-    body: journeyStore.payload(),
-    etag: journeyStore.etag(),
-  });
+  const { body, etag } = regionHub.journeys(
+    requestedRegions(reqUrl),
+    {
+      body: journeyStore.payload(),
+      etag: journeyStore.etag(),
+    },
+    onlyRegions(reqUrl)
+  );
   if (etag && req.headers['if-none-match'] === etag) {
     res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-cache' });
     res.end();
@@ -977,6 +981,9 @@ async function refreshGtall({ force = false, ping = true } = {}) {
 
 const regionHub = createRegionHub((message) => logMessage(message));
 
+/** `only=1`: the page shows just the requested region, so Slovakia's data is left out. */
+const onlyRegions = (reqUrl) => requestedRegions(reqUrl).length > 0 && reqUrl.searchParams.get('only') === '1';
+
 async function handleGtall(reqUrl, res) {
   const { state, now } = await refreshGtall({ force: reqUrl.searchParams.has('refresh') });
   sendJson(res, 200, {
@@ -985,7 +992,9 @@ async function handleGtall(reqUrl, res) {
     idleSeconds: now - state.lastPing,
     status: state.status,
     error: state.error,
-    data: [...(state.data ?? []), ...regionHub.trains(requestedRegions(reqUrl))],
+    data: onlyRegions(reqUrl)
+      ? regionHub.trains(requestedRegions(reqUrl))
+      : [...(state.data ?? []), ...regionHub.trains(requestedRegions(reqUrl))],
   });
 }
 
@@ -1592,6 +1601,11 @@ async function handleDetail(reqUrl, res) {
 }
 
 async function handleStationBoard(reqUrl, res) {
+  if (requestedRegions(reqUrl).length > 0) {
+    // cp.sk only knows Slovak stations.
+    sendJson(res, 200, { rows: [], station: reqUrl.searchParams.get('station') ?? '', arrivals: false });
+    return;
+  }
   const station = (reqUrl.searchParams.get('station') ?? reqUrl.searchParams.get('f') ?? '').trim();
   const arrivals = reqUrl.searchParams.get('byarr') === 'true' || reqUrl.searchParams.get('arrivals') === '1';
   if (!station || station.length > 120) {

@@ -1,3 +1,4 @@
+import { REGION_ID } from '../region';
 /** ZSSK mimoriadnosti as the proxy serves them (parsed from @zssk_mimoriadne, see proxy/mimoriadnosti.mjs). */
 export interface DisruptionEvent {
   id: string;
@@ -32,6 +33,9 @@ export interface DisruptionPayload {
 }
 
 export async function fetchDisruptions(signal?: AbortSignal): Promise<DisruptionPayload | null> {
+  if (REGION_ID !== 'sk') {
+    return null; // ZSSK notices only concern Slovakia
+  }
   try {
     const response = await fetch('/proxy/disruptions', { signal, headers: { Accept: 'application/json' } });
     if (!response.ok) {

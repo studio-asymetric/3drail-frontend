@@ -1,4 +1,5 @@
 import type { AppLocale } from './i18n';
+import { REGION_ID } from './region';
 
 const SITE_NAME = 'Môj Vlak';
 
@@ -46,6 +47,19 @@ export function seoFor(locale: AppLocale, state: SeoState): { title: string; des
       title: `${sk ? 'O aplikácii' : 'About'} | ${SITE_NAME}`,
       description: base.description,
     };
+  }
+  if (REGION_ID === 'pid') {
+    return sk
+      ? {
+          title: 'Mapa vlakov Prahy a okolia (PID) naživo | Môj Vlak',
+          description:
+            'Poloha vlakov v Prahe a Stredočeskom kraji naživo: mapa vlakov PID s meškaním, zastávkami a trasou každého vlaku.',
+        }
+      : {
+          title: 'Live train map of Prague and surroundings (PID) | Môj Vlak',
+          description:
+            'Where the trains of Prague and Central Bohemia are right now: live PID train positions with delays, stops and the route of each train.',
+        };
   }
   return base;
 }

@@ -3002,3 +3002,329 @@ body,
 .dock__alert--delay {
   color: #d9822b;
 }
+
+/* Hamburger menu: a full-screen sheet in the style of the chrome (region, language, appearance). */
+.menu {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  display: flex;
+  flex-direction: column;
+  background: rgba(19, 19, 19, 0.97);
+  color: #ffffff;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  animation: menu-in 200ms var(--ease) both;
+  --menu-line: rgba(255, 255, 255, 0.14);
+  --menu-card: rgba(255, 255, 255, 0.05);
+  --menu-card-hover: rgba(255, 255, 255, 0.09);
+  --menu-ink: #ffffff;
+  --menu-ink-invert: #131313;
+}
+
+.shell[data-theme='light'] .menu {
+  background: rgba(245, 245, 245, 0.97);
+  color: #111111;
+  --menu-line: rgba(17, 17, 17, 0.14);
+  --menu-card: rgba(17, 17, 17, 0.045);
+  --menu-card-hover: rgba(17, 17, 17, 0.08);
+  --menu-ink: #111111;
+  --menu-ink-invert: #f5f5f5;
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.menu__head {
+  display: flex;
+  align-items: center;
+  height: calc(var(--chrome-inset) * 2 + var(--chrome-control-height));
+  padding: 0 var(--chrome-inset);
+  border-bottom: 1px solid var(--menu-line);
+}
+
+.menu__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 560;
+  letter-spacing: -0.02em;
+}
+
+.menu__close {
+  position: absolute;
+  top: var(--chrome-inset);
+  right: var(--chrome-inset);
+}
+
+.menu__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 560px;
+  box-sizing: border-box;
+  padding: 0 var(--chrome-inset) calc(var(--chrome-inset) + env(safe-area-inset-bottom, 0px));
+}
+
+.menu__group {
+  padding: 20px 0 18px;
+  border-bottom: 1px solid var(--menu-line);
+}
+
+.menu__group:last-child {
+  border-bottom: 0;
+}
+
+.menu__label {
+  margin: 0 0 12px;
+  color: var(--ui-muted);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.menu__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.menu__row .menu__label {
+  margin: 0;
+}
+
+/* Region cards: a sketch of the region's rails above its name. */
+.menu__regions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.menu__region {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--menu-line);
+  border-radius: 10px;
+  background: var(--menu-card);
+  color: inherit;
+  text-decoration: none;
+  transition:
+    background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    transform var(--press-dur) var(--ease);
+}
+
+.menu__region:hover {
+  background: var(--menu-card-hover);
+}
+
+.menu__region:active {
+  transform: scale(0.985);
+}
+
+.menu__region:focus-visible {
+  outline: 1px solid var(--menu-ink);
+  outline-offset: 3px;
+}
+
+.menu__region.is-current {
+  border-color: var(--menu-ink);
+}
+
+.menu__map {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 5 / 3;
+  border-radius: 6px;
+  background: var(--menu-card);
+}
+
+.menu__map path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.5;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.menu__region:hover .menu__map path,
+.menu__region.is-current .menu__map path {
+  opacity: 0.95;
+}
+
+.menu__region-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.menu__region-name {
+  font-size: 17px;
+  font-weight: 560;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.menu__region-meta {
+  color: var(--ui-muted);
+  font-size: 12px;
+  letter-spacing: -0.01em;
+}
+
+.menu__tick {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--menu-ink);
+  color: var(--menu-ink-invert);
+}
+
+.menu__region.is-current .menu__tick {
+  display: inline-flex;
+}
+
+/* Language: a two-way switch with a sliding thumb. */
+.menu__segment {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 116px;
+  padding: 3px;
+  border: 1px solid var(--menu-line);
+  border-radius: 999px;
+  background: var(--menu-card);
+}
+
+.menu__thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 999px;
+  background: var(--menu-ink);
+  transition: transform 220ms var(--ease);
+}
+
+.menu__segment[data-value='en'] .menu__thumb {
+  transform: translateX(100%);
+}
+
+.menu__segment button {
+  position: relative;
+  z-index: 1;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: color 220ms var(--ease);
+}
+
+.menu__segment button[aria-checked='true'] {
+  color: var(--menu-ink-invert);
+}
+
+.menu__segment button:focus-visible,
+.menu__switch:focus-visible {
+  outline: 1px solid var(--menu-ink);
+  outline-offset: 2px;
+}
+
+/* Colour mode: a toggle with a sun and a moon. */
+.menu__switch {
+  position: relative;
+  width: 64px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--menu-line);
+  border-radius: 999px;
+  background: var(--menu-card);
+  color: inherit;
+  cursor: pointer;
+}
+
+.menu__switch-icon {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  opacity: 0.6;
+  transition:
+    opacity 220ms var(--ease),
+    color 220ms var(--ease);
+}
+
+.menu__switch-icon--sun {
+  left: 0;
+}
+
+.menu__switch-icon--moon {
+  right: 0;
+}
+
+.menu__switch-knob {
+  position: absolute;
+  z-index: 0;
+  top: 3px;
+  left: 3px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--menu-ink);
+  transition: transform 220ms var(--ease);
+}
+
+.menu__switch-icon {
+  z-index: 1;
+}
+
+.menu__switch[aria-checked='true'] .menu__switch-knob {
+  transform: translateX(30px);
+}
+
+.menu__switch[aria-checked='false'] .menu__switch-icon--sun,
+.menu__switch[aria-checked='true'] .menu__switch-icon--moon {
+  opacity: 1;
+  color: var(--menu-ink-invert);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .menu,
+  .menu__thumb,
+  .menu__switch-knob {
+    animation: none;
+    transition: none;
+  }
+}

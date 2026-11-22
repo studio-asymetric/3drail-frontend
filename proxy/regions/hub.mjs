@@ -135,11 +135,12 @@ export function createRegionHub(log = () => undefined) {
     trains(ids) {
       return ids.length > 0 ? (touch()?.trains() ?? []) : [];
     },
-    /** Slovak journeys `{ body, etag }` merged with the region's. */
-    journeys(ids, sk) {
+    /** Slovak journeys `{ body, etag }` merged with the region's (or the region's alone with `only`). */
+    journeys(ids, sk, only = false) {
       const r = ids.length > 0 ? touch() : null;
-      if (!r) return sk;
+      if (!r) return only ? { body: '{"v":2,"routes":{},"journeys":[]}', etag: '"building"' } : sk;
       const extra = r.journeys();
+      if (only) return extra;
       const key = `${sk.etag}|${extra.etag}`;
       if (merged.key !== key) {
         const base = JSON.parse(sk.body);

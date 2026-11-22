@@ -9,14 +9,14 @@ import { clipWaysToOutline, type LatLngPolygon } from '../data/slovakiaClip';
 import { closeRailGaps } from '../data/railStitch';
 import { classifyDisplayRails } from '../data/railGeoJson';
 
-type Request = { outline: LatLngPolygon[] };
+type Request = { outline: LatLngPolygon[]; region?: string };
 
 self.onmessage = async (event: MessageEvent<Request>) => {
   try {
     let ways: OSMWay[] = [];
     let meta: unknown;
     for (let attempt = 0; attempt < 3 && ways.length === 0; attempt += 1) {
-      const result = await fetchSimplifiedNetwork();
+      const result = await fetchSimplifiedNetwork(event.data.region && event.data.region !== 'sk' ? event.data.region : undefined);
       ways = result.ways;
       meta = result.meta;
       if (ways.length === 0 && attempt < 2) {

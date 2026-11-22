@@ -47,6 +47,16 @@ export type Copy = {
   themeDark: string;
   langSwitchTo: string;
   langSwitchAria: string;
+  menuOpen: string;
+  menuClose: string;
+  menuRegion: string;
+  menuLanguage: string;
+  menuAppearance: string;
+  regionSk: string;
+  regionPid: string;
+  menuDarkMode: string;
+  regionSkMeta: string;
+  regionPidMeta: string;
   follow: string;
   following: string;
   toastPositionCorrected: (km: string, back: boolean) => string;
@@ -130,6 +140,16 @@ const sk: Copy = {
   themeDark: 'Tmavý režim',
   langSwitchTo: 'EN',
   langSwitchAria: 'Prepnúť jazyk na angličtinu',
+  menuOpen: 'Otvoriť menu',
+  menuClose: 'Zavrieť menu',
+  menuRegion: 'Oblasť',
+  menuLanguage: 'Jazyk',
+  menuAppearance: 'Vzhľad',
+  regionSk: 'Slovensko',
+  regionPid: 'Praha a okolie (PID)',
+  menuDarkMode: 'Tmavý režim',
+  regionSkMeta: 'ZSSK · naživo',
+  regionPidMeta: 'PID · naživo',
   follow: 'Sledovať',
   following: 'Sledujem',
   toastPositionCorrected: (km, back) =>
@@ -215,6 +235,16 @@ const en: Copy = {
   themeDark: 'Dark mode',
   langSwitchTo: 'SK',
   langSwitchAria: 'Switch language to Slovak',
+  menuOpen: 'Open menu',
+  menuClose: 'Close menu',
+  menuRegion: 'Region',
+  menuLanguage: 'Language',
+  menuAppearance: 'Appearance',
+  regionSk: 'Slovakia',
+  regionPid: 'Prague and surroundings (PID)',
+  menuDarkMode: 'Dark mode',
+  regionSkMeta: 'ZSSK · live',
+  regionPidMeta: 'PID · live',
   follow: 'Follow',
   following: 'Following',
   toastPositionCorrected: (km, back) =>
