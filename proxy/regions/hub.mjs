@@ -69,6 +69,7 @@ export function createRegionHub(log = () => undefined) {
   let stopPolling = null;
   let idleTimer = null;
   let packBody = null;
+  let linesBody = null;
   let stationsBody = null;
   const merged = { key: '', body: '', etag: '' };
 
@@ -99,6 +100,7 @@ export function createRegionHub(log = () => undefined) {
       loadedAt = Date.now();
       packBody = null;
       stationsBody = null;
+      linesBody = null;
     } catch (error) {
       log(`PID: not available: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -168,6 +170,13 @@ export function createRegionHub(log = () => undefined) {
       if (!r) return null;
       stationsBody ??= JSON.stringify({ stations: r.stations() });
       return stationsBody;
+    },
+    /** Tram and metro tracks (GeoJSON string); null while the region is still loading. */
+    linesBody() {
+      const r = touch();
+      if (!r) return null;
+      linesBody ??= JSON.stringify(r.transitLines());
+      return linesBody;
     },
     /** Gzipped RNET pack of the region's rails; null while it is still loading. */
     networkPack() {

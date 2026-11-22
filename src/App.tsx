@@ -29,6 +29,8 @@ import {
 } from './data/trainService';
 import { REGION_ID, readStoredModes, regionsQuery, storeModes, vehicleModeOf, type VehicleMode } from './region';
 import { MainMenu } from './components/MainMenu';
+import { fetchTransitLines } from './data/transitLines';
+import type { FeatureCollection } from 'geojson';
 import type { Coordinate, GtfsDataset } from './data/gtfsParser';
 import { buildGtfsDataset } from './data/gtfsParser';
 import {
@@ -560,6 +562,27 @@ const App: React.FC = () => {
   const [modes, setModes] = useState<VehicleMode[]>(readStoredModes);
   const modesRef = useRef(modes);
   modesRef.current = modes;
+  const [allTransitLines, setAllTransitLines] = useState<FeatureCollection | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchTransitLines(controller.signal).then((lines) => {
+      if (!controller.signal.aborted) setAllTransitLines(lines);
+    });
+    return () => controller.abort();
+  }, []);
+  // tracks of the kinds that are switched on
+  const transitLines = useMemo(
+    () =>
+      allTransitLines
+        ? {
+            ...allTransitLines,
+            features: allTransitLines.features.filter((feature) =>
+              modes.includes((feature.properties as { mode?: VehicleMode } | null)?.mode ?? 'tram')
+            ),
+          }
+        : null,
+    [allTransitLines, modes]
+  );
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locating, setLocating] = useState(false);
   const t = useMemo(() => copyFor(locale), [locale]);
@@ -1715,6 +1738,7 @@ const App: React.FC = () => {
           theme={theme}
           locale={locale}
           mapViewRef={mapViewRef}
+          transitLines={transitLines}
           userLocation={userLocation}
         />
       </div>

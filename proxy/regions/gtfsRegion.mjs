@@ -604,6 +604,53 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
       return [...byName.values()].map((st) => [st.id, st.name, st.lat / st.n, st.lng / st.n, st.n]);
     },
 
+    /** Tram and metro tracks as a GeoJSON FeatureCollection (each stretch once, metro in its line colours). */
+    transitLines() {
+      const q = (v) => Math.round(v * 1e4);
+      const seen = { tram: new Set(), metro: new Set() };
+      const groups = new Map(); // "mode|color" -> [[lng,lat]...][]
+      const doneShapes = new Set();
+      trips.forEach((trip) => {
+        const type = typeOf(trip);
+        if ((type !== 0 && type !== 1) || !trip.shapeId || doneShapes.has(trip.shapeId)) return;
+        doneShapes.add(trip.shapeId);
+        const shape = shapeOf(trip.shapeId);
+        if (!shape) return;
+        const mode = type === 1 ? 'metro' : 'tram';
+        const color = mode === 'metro' ? `#${routes.get(trip.routeId)?.color || '888888'}` : '#d9a441';
+        const key = `${mode}|${color}`;
+        if (!groups.has(key)) groups.set(key, []);
+        const lines = groups.get(key);
+        let chain = [];
+        const flush = () => {
+          if (chain.length >= 2) lines.push(chain);
+          chain = [];
+        };
+        for (let i = 0; i < shape.line.length - 1; i += 1) {
+          const a = shape.line[i];
+          const b = shape.line[i + 1];
+          const ka = `${q(a[0])},${q(a[1])}`;
+          const kb = `${q(b[0])},${q(b[1])}`;
+          const segment = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+          if (seen[mode].has(segment)) {
+            flush();
+            continue;
+          }
+          seen[mode].add(segment);
+          if (chain.length === 0) chain.push([Number(a[1].toFixed(5)), Number(a[0].toFixed(5))]);
+          chain.push([Number(b[1].toFixed(5)), Number(b[0].toFixed(5))]);
+        }
+        flush();
+      });
+      return {
+        type: 'FeatureCollection',
+        features: [...groups.entries()].map(([key, lines]) => {
+          const [mode, color] = key.split('|');
+          return { type: 'Feature', properties: { mode, color }, geometry: { type: 'MultiLineString', coordinates: lines } };
+        }),
+      };
+    },
+
     /** Gzipped RNET pack of every shape (the "simplified network" the app expects). */
     networkPack() {
       // Shapes run once per direction and share their trunk lines: keep each stretch of track once.

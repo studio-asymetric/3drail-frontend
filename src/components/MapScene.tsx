@@ -795,6 +795,33 @@ function placeRailsHighlightAboveTracks(map: MapLibreMap) {
   }
 }
 
+/**
+ * Metro tracks in their line colours, visible from a wide view (the base map only draws them when
+ * zoomed in). Tram tracks are drawn with the railway's own style in addRailLayers.
+ */
+function addTransitLayers(map: MapLibreMap, theme: MapTheme = 'light') {
+  if (!map.getSource('transit-lines')) {
+    map.addSource('transit-lines', { type: 'geojson', data: EMPTY_COLLECTION, tolerance: 0.6, buffer: 16 });
+  }
+  const remove = (id: string) => {
+    if (map.getLayer(id)) map.removeLayer(id);
+  };
+  remove('transit-metro');
+  map.addLayer({
+    id: 'transit-metro',
+    type: 'line',
+    source: 'transit-lines',
+    minzoom: 7,
+    filter: ['==', ['get', 'mode'], 'metro'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': ['get', 'color'],
+      'line-opacity': 0.9,
+      'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1, 11, 2, 14, 3.4, 17, 6],
+    },
+  });
+}
+
 function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   const {
     fill: fillColor,
@@ -1046,6 +1073,11 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     color: mainFillColor,
     maxzoom: simplifiedMaxZoom,
   });
+  // Prague's tram tracks, drawn like the railway's branch lines
+  addPair('transit-lines', 'transit-tram', RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, productOpacity(SIMPLIFIED_RAIL_FADE, RAIL_BRANCH_OPACITY), {
+    filter: ['==', ['get', 'mode'], 'tram'],
+    maxzoom: simplifiedMaxZoom,
+  });
 
   const upsertLayer = (layer: Parameters<MapLibreMap['addLayer']>[0]) => {
     if (map.getLayer(layer.id)) {
@@ -1259,6 +1291,8 @@ interface MapSceneProps {
   mapViewRef?: React.MutableRefObject<MapViewControls | null>;
   /** The visitor's position (from the locate button), drawn as a dot. It never leaves the browser. */
   userLocation?: { lat: number; lng: number } | null;
+  /** Tram and metro tracks to draw under the rails (Prague). */
+  transitLines?: FeatureCollection | null;
 }
 
 export const MapScene: React.FC<MapSceneProps> = React.memo(({
@@ -1286,6 +1320,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   locale = 'sk',
   mapViewRef,
   userLocation = null,
+  transitLines = null,
 }) => {
   const mapCopy = useMemo(() => copyFor(locale), [locale]);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1332,6 +1367,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const trainPublishRafRef = useRef(0);
   const rebuildTrainPointsRef = useRef<() => void>(() => undefined);
   const outlineRef = useRef<LatLngPolygon[]>([]);
+  const transitLinesRef = useRef<FeatureCollection | null>(transitLines);
+  transitLinesRef.current = transitLines;
   const onTrainClickRef = useRef(onTrainClick);
   onTrainClickRef.current = onTrainClick;
   const onStationClickRef = useRef(onStationClick);
@@ -1648,7 +1685,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     const hydrateOverlay = () => {
       try {
         emphasizeRelief(map, themeRef.current);
+        addTransitLayers(map, themeRef.current);
         addRailLayers(map, themeRef.current);
+        setSourceData(map, 'transit-lines', transitLinesRef.current ?? EMPTY_COLLECTION);
       } catch (error) {
         console.error('Failed to add rail layers', error);
         return;
@@ -3053,6 +3092,14 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       mapViewRef.current = null;
     };
   }, [mapViewRef, terrainLoaded]);
+
+  // tram / metro tracks follow the "Show" switches
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map && terrainLoaded) {
+      setSourceData(map, 'transit-lines', transitLines ?? EMPTY_COLLECTION);
+    }
+  }, [transitLines, terrainLoaded, overlayEpoch]);
 
   useEffect(() => {
     const map = mapRef.current;

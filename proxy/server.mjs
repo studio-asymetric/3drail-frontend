@@ -1734,6 +1734,17 @@ const server = http.createServer(async (req, res) => {
       handleJourneys(req, res, reqUrl);
       return;
     }
+    if (mode === 'lines') {
+      const body = requestedRegions(reqUrl).length > 0 ? regionHub.linesBody() : null;
+      if (body) {
+        sendCompressed(res, 200, body, 'application/json; charset=utf-8', { 'Cache-Control': 'public, max-age=600' }, 'lines');
+      } else if (requestedRegions(reqUrl).length > 0) {
+        sendRegionPending(res);
+      } else {
+        sendJson(res, 404, { error: 'no lines for this region' });
+      }
+      return;
+    }
     if (mode === 'stations') {
       handleStations(res, reqUrl);
       return;
