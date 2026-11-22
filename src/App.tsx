@@ -26,6 +26,7 @@ import {
   stationPoints,
   trainTypeCallout,
   trainLabel,
+  vehicleInk,
 } from './data/trainService';
 import { REGION_ID, readStoredModes, regionsQuery, storeModes, vehicleModeOf, type VehicleMode } from './region';
 import { MainMenu } from './components/MainMenu';
@@ -1532,7 +1533,7 @@ const App: React.FC = () => {
   ]);
 
   const accent =
-    displayTrain?.color || getDelayColor(displayTrain?.delayMinutes ?? focusedTrain?.delayMinutes ?? 0);
+    vehicleInk(displayTrain?.color, theme) || getDelayColor(displayTrain?.delayMinutes ?? focusedTrain?.delayMinutes ?? 0);
   const nextStopIndex = journeyNextIndex(
     displayStops,
     displayTrain,

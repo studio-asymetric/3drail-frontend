@@ -338,6 +338,11 @@ export function formatTrainDisplayName(name: string): string {
 
 /** Buses, trams and metro are drawn white: the delay colours belong to the trains. */
 export const VEHICLE_PILL_COLOR = '#ffffff';
+/** A vehicle's own colour is white, which is invisible on the light theme: dark ink there. */
+export function vehicleInk(color: string | undefined, theme: 'light' | 'dark'): string | undefined {
+  return color && color.toLowerCase() === VEHICLE_PILL_COLOR && theme === 'light' ? VEHICLE_MAP_PILL_COLOR : color;
+}
+
 /** On the map they are black pills with a white outline and white text, like the station pill. */
 export const VEHICLE_MAP_PILL_COLOR = '#151515';
 

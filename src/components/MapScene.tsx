@@ -27,6 +27,7 @@ import {
   type RouteCursor,
   type TrainRenderState,
   VEHICLE_MAP_PILL_COLOR,
+  vehicleInk,
 } from '../data/trainService';
 import {
   headingFromPoints,
@@ -2845,7 +2846,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       routed = split.solid.filter((path) => path.length > 1);
       busPaths = split.bus;
     }
-    const color = trains.find((train) => train.trainNumber === focusedTrainNumber)?.color ?? '#ffffff';
+    const color =
+      vehicleInk(trains.find((train) => train.trainNumber === focusedTrainNumber)?.color, themeRef.current) ?? '#ffffff';
     const painted = (paths: Coordinate[][]) => {
       const collection = paths.length > 0 ? pathsToLineCollection(paths) : EMPTY_COLLECTION;
       collection.features.forEach((feature) => {
@@ -2856,7 +2858,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     setSourceData(map, 'rails-highlight', painted(routed));
     setSourceData(map, 'rails-highlight-bus', painted(busPaths));
     placeRailsHighlightAboveTracks(map);
-  }, [networkRoute, focusedTrainNumber, trains, terrainLoaded, overlayEpoch, journeysVersion]);
+  }, [networkRoute, focusedTrainNumber, trains, terrainLoaded, overlayEpoch, journeysVersion, theme]);
 
   const lastFlownTrainRef = useRef<string | null>(null);
   useEffect(() => {
