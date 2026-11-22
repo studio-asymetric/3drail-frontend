@@ -1,4 +1,5 @@
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
+import { baseStationName } from './stationGroups';
 import { isSideRailwayTrack, isTransitRailway, type OSMWay } from './osmRailService';
 import type { Coordinate } from './gtfsParser';
 
@@ -634,6 +635,9 @@ export function pointsToCollection(
     selected?: boolean;
     name?: string;
     rank?: number;
+    group?: string;
+    pill?: boolean;
+    hideLabel?: boolean;
   }>
 ): FeatureCollection<Point> {
   return {
@@ -647,6 +651,7 @@ export function pointsToCollection(
         color: point.color,
         selected: Boolean(point.selected),
         rank: point.rank ?? 1,
+        ...(point.group ? { group: point.group, pill: Boolean(point.pill), hideLabel: Boolean(point.hideLabel) } : {}),
       },
       geometry: {
         type: 'Point',
@@ -659,9 +664,11 @@ export function pointsToCollection(
 
 /**
  * Stations that are one place in the real world but two stops in the timetable
- * (Bratislava-Vinohrady / Vinohrady2, Sanok / Sanok Miasto, ...) would each get a
- * dot and a label, drawn on top of one another. Keep the busier one of each pair:
- * within 30 m regardless of name, or within 150 m when one name starts with the other.
+ * (Sanok / Sanok Miasto, ...) would each get a dot and a label, drawn on top of one another.
+ * Keep the busier one of each pair: within 30 m regardless of name, or within 150 m when one
+ * name starts with the other. Names that differ only by a number (Bratislava-Vinohrady /
+ * Vinohrady2) are kept apart: they are two stops side by side, drawn as two dots in one pill
+ * (see groupStations).
  */
 export function mergeNearbyStations<T extends { name: string; lat: number; lng: number }>(
   stations: T[],
@@ -691,7 +698,9 @@ export function mergeNearbyStations<T extends { name: string; lat: number; lng: 
       const dx =
         (stations[b].lng - stations[a].lng) * 111_320 * Math.cos((stations[a].lat * Math.PI) / 180);
       const meters = Math.hypot(dx, dy);
-      const related = folded[a].startsWith(folded[b]) || folded[b].startsWith(folded[a]);
+      const related =
+        (folded[a].startsWith(folded[b]) || folded[b].startsWith(folded[a])) &&
+        baseStationName(stations[a].name) !== baseStationName(stations[b].name);
       if (meters < 30 || (meters < 150 && related)) {
         dropped.add(weight(stations[a]) >= weight(stations[b]) ? b : a);
       }

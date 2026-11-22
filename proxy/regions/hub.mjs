@@ -181,8 +181,8 @@ export function createRegionHub(log = () => undefined) {
       if (!stopsBodies.has(key)) {
         const rows = r
           .transitStops()
-          .filter((row) => row[3] & key)
-          .map(([name, lat, lng, kinds]) => [name, lat, lng, kinds & key]);
+          .filter((row) => row[1] & key)
+          .map(([name, kinds, spots]) => [name, kinds & key, spots]);
         stopsBodies.set(key, JSON.stringify({ stops: rows }));
       }
       return stopsBodies.get(key);

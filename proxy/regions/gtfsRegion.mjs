@@ -608,14 +608,15 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
     },
 
     /**
-     * Tram, metro, bus and trolleybus stops: [[name, lat, lng, kinds]], kinds 1 tram, 2 metro, 4 bus
-     * (buses, trolleybuses, ferries). Platforms of one name that are close together are one stop.
+     * Tram, metro, bus and trolleybus stops: [[name, kinds, [[lat, lng], ...]]], kinds 1 tram, 2 metro,
+     * 4 bus (buses, trolleybuses, ferries). Platforms of one name close together are one stop with
+     * several spots (spots within 14 m count as one).
      */
     transitStops() {
       const file = path.join(dir, 'stop_modes.txt');
       if (!fs.existsSync(file)) return [];
       const BIT = { tram: 1, metro: 2, bus: 8 | 16 | 64 };
-      const groups = new Map(); // name|cell -> { name, lat, lng, n, kinds }
+      const groups = new Map(); // name|cell -> { name, kinds, spots: [[lat, lng]] }
       for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
         if (!line) continue;
         const comma = line.indexOf(',');
@@ -626,13 +627,16 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
         if (!kinds) continue; // a stop only trains call at is a station, not here
         const key = `${stop.name}|${Math.round(stop.lat * 300)}|${Math.round(stop.lng * 190)}`;
         let group = groups.get(key);
-        if (!group) groups.set(key, (group = { name: stop.name, lat: 0, lng: 0, n: 0, kinds: 0 }));
-        group.lat += stop.lat;
-        group.lng += stop.lng;
-        group.n += 1;
+        if (!group) groups.set(key, (group = { name: stop.name, kinds: 0, spots: [] }));
         group.kinds |= kinds;
+        const near = group.spots.some(([lat, lng]) => meters(lat, lng, stop.lat, stop.lng) < 14);
+        if (!near) group.spots.push([stop.lat, stop.lng]);
       }
-      return [...groups.values()].map((g) => [g.name, Number((g.lat / g.n).toFixed(5)), Number((g.lng / g.n).toFixed(5)), g.kinds]);
+      return [...groups.values()].map((g) => [
+        g.name,
+        g.kinds,
+        g.spots.map(([lat, lng]) => [Number(lat.toFixed(5)), Number(lng.toFixed(5))]),
+      ]);
     },
 
     /** Tram and metro tracks as a GeoJSON FeatureCollection (each stretch once, metro in its line colours). */

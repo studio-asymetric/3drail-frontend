@@ -32,7 +32,7 @@ import { REGION_ID, readStoredModes, regionsQuery, storeModes, vehicleModeOf, ty
 import { MainMenu } from './components/MainMenu';
 import { MetroLogo } from './components/MetroLogo';
 import { fetchTransitLines } from './data/transitLines';
-import { fetchTransitStops, stopKindsOf } from './data/transitStops';
+import { fetchTransitStops, stopKindsOf, type TransitStop } from './data/transitStops';
 import type { FeatureCollection } from 'geojson';
 import type { Coordinate, GtfsDataset } from './data/gtfsParser';
 import { buildGtfsDataset } from './data/gtfsParser';
@@ -580,7 +580,7 @@ const App: React.FC = () => {
     return () => controller.abort();
   }, []);
   // Tram, metro and bus stops of the kinds that are switched on
-  const [transitStops, setTransitStops] = useState<FeatureCollection | null>(null);
+  const [transitStops, setTransitStops] = useState<TransitStop[] | null>(null);
   const stopKinds = stopKindsOf(modes);
   useEffect(() => {
     const controller = new AbortController();

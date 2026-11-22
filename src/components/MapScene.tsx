@@ -69,6 +69,8 @@ import { PILL_HEIGHT, TrainCanvasLayer } from './trainCanvas';
 import { screenProjection } from '../data/screenProjection';
 import { PERF_HUD, perfAdd, startPerfHud } from '../perfHud';
 import { fetchSlovakiaOutline } from '../data/slovakiaOutlineService';
+import type { TransitStop } from '../data/transitStops';
+import { groupStations } from '../data/stationGroups';
 import { REGION, REGION_ID } from '../region';
 import {
   clipWaysToOutline,
@@ -737,7 +739,9 @@ function publishSimplifiedRails(map: MapLibreMap | null, ways: OSMWay[]) {
 }
 
 /** Station features by id, for the one-feature source that draws the selected station. */
-const stationFeatureById = new Map<string, FeatureCollection['features'][number]>();
+const stationFeatureById = new Map<string, Array<FeatureCollection['features'][number]>>();
+/** The group circle currently drawn as selected. */
+let selectedGroupId: string | null = null;
 
 function applyStationSelection(
   map: MapLibreMap | null,
@@ -748,7 +752,23 @@ function applyStationSelection(
     return previousId;
   }
   const selected = nextId ? stationFeatureById.get(nextId) : undefined;
-  setSourceData(map, 'station-selected', selected ? { type: 'FeatureCollection', features: [selected] } : EMPTY_COLLECTION);
+  setSourceData(map, 'station-selected', selected ? { type: 'FeatureCollection', features: selected } : EMPTY_COLLECTION);
+  if (selectedGroupId) {
+    try {
+      map.setFeatureState({ source: 'stations-pill', id: selectedGroupId }, { selected: false });
+    } catch {
+      // the group may be gone after a data refresh
+    }
+  }
+  const group = selected?.[0]?.properties?.group;
+  selectedGroupId = typeof group === 'string' ? group : null;
+  if (selectedGroupId) {
+    try {
+      map.setFeatureState({ source: 'stations-pill', id: selectedGroupId }, { selected: true });
+    } catch {
+      // retried after the next setData
+    }
+  }
   if (previousId && previousId !== nextId) {
     try {
       map.setFeatureState({ source: 'stations', id: previousId }, { selected: false });
@@ -1087,6 +1107,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
 
   ensureSource('stations', { maxzoom: 14, tolerance: 0, buffer: 16, promoteId: 'id' });
   ensureSource('stations-hover', { maxzoom: 16, tolerance: 0, buffer: 64 });
+  ensureSource('stations-pill', { maxzoom: 16, tolerance: 0, buffer: 32, promoteId: 'group' });
   // Just the selected station, so its ring and label do not need a copy of every station.
   ensureSource('station-selected', { maxzoom: 16, tolerance: 0, buffer: 64 });
   ensureSource('rails-highlight', { maxzoom: 16, tolerance: 0.35 });
@@ -1132,7 +1153,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   const labelFont = stationLabelFont(map);
   const labelLayout = {
     'text-font': labelFont,
-    'text-field': ['coalesce', ['get', 'name'], ''],
+    'text-field': ['case', ['==', ['get', 'hideLabel'], true], '', ['coalesce', ['get', 'name'], '']],
     'text-size': ['interpolate', ['linear'], ['zoom'], STATION_DOT_MIN_ZOOM, 10, 12.8, 10.5, 14, 12, 16, 13],
     'text-anchor': 'left' as const,
     'text-offset': [1.15, 0],
@@ -1154,11 +1175,34 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     1,
   ];
 
+  // Stops of one name that lie apart share one light pill behind their dots: the halo, stretched
+  // between them (about a circle when they are close).
+  upsertLayer({
+    id: 'stations-pill',
+    type: 'line',
+    source: 'stations-pill',
+    minzoom: STATION_DOT_MIN_ZOOM,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-width': stationCircleRadius([12.8, 16.8, 24, 1.35]),
+      'line-color': fillColor,
+      'line-opacity': stationFade([
+        'case',
+        ['boolean', ['feature-state', 'hover'], false],
+        0.42,
+        ['boolean', ['feature-state', 'selected'], false],
+        0.3,
+        0.13,
+      ]),
+      'line-blur': 0.18,
+    },
+  });
   upsertLayer({
     id: 'stations-halo',
     type: 'circle',
     source: 'stations',
     minzoom: STATION_DOT_MIN_ZOOM,
+    filter: ['!=', ['get', 'pill'], true],
     paint: {
       'circle-radius': stationCircleRadius([6.4, 8.4, 12, 1.35]),
       'circle-color': fillColor,
@@ -1333,7 +1377,7 @@ interface MapSceneProps {
   /** Tram and metro tracks to draw under the rails (Prague). */
   transitLines?: FeatureCollection | null;
   /** Tram, metro and bus stops to draw (Prague). */
-  transitStops?: FeatureCollection | null;
+  transitStops?: TransitStop[] | null;
 }
 
 export const MapScene: React.FC<MapSceneProps> = React.memo(({
@@ -1810,7 +1854,18 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       scheduleTrainMarkers();
     });
     let hoveredStationId: string | null = null;
+    let hoveredGroupId: string | null = null;
+    const setGroupHover = (groupId: string | null, on: boolean) => {
+      if (!groupId) return;
+      try {
+        map.setFeatureState({ source: 'stations-pill', id: groupId }, { hover: on });
+      } catch {
+        // stale id after a data refresh
+      }
+    };
     const clearStationHover = () => {
+      setGroupHover(hoveredGroupId, false);
+      hoveredGroupId = null;
       if (hoveredStationId) {
         try {
           map.setFeatureState({ source: 'stations', id: hoveredStationId }, { hover: false });
@@ -1863,6 +1918,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         return;
       }
       if (hoveredStationId !== id) {
+        setGroupHover(hoveredGroupId, false);
+        const groupProp = feature?.properties?.group;
+        hoveredGroupId = typeof groupProp === 'string' ? groupProp : null;
+        setGroupHover(hoveredGroupId, true);
         if (hoveredStationId) {
           try {
             map.setFeatureState({ source: 'stations', id: hoveredStationId }, { hover: false });
@@ -2497,43 +2556,44 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     );
     // Prague's tram, metro and bus stops are drawn as stations too (same dot, label, hover and
     // selection); each kind only from the zoom it is wanted at, so the set changes with the band.
-    const transitPoints = (transitStops?.features ?? []).flatMap((feature) => {
-      const props = (feature.properties ?? {}) as { name?: string; tram?: boolean; metro?: boolean; bus?: boolean };
+    const transitPoints = (transitStops ?? []).flatMap((stop) => {
       const wanted =
-        (props.metro && stopBand >= 1) ||
-        (props.tram && !props.metro && stopBand >= 2) ||
-        (props.bus && !props.tram && !props.metro && stopBand >= 3);
-      if (!wanted || !props.name || feature.geometry.type !== 'Point') {
+        (stop.metro && stopBand >= 1) ||
+        (stop.tram && !stop.metro && stopBand >= 2) ||
+        (stop.bus && !stop.tram && !stop.metro && stopBand >= 3);
+      if (!wanted) {
         return [];
       }
-      const [lng, lat] = feature.geometry.coordinates;
-      return [
-        {
-          id: `stop:${props.name}`,
-          name: props.name,
-          lat,
-          lng,
-          color: railPalette(themeRef.current).fill,
-          rank: props.metro ? 2 : 1,
-        },
-      ];
+      return stop.spots.map(([lat, lng]) => ({
+        id: `stop:${stop.name}`,
+        name: stop.name,
+        lat,
+        lng,
+        color: railPalette(themeRef.current).fill,
+        rank: stop.metro ? 2 : 1,
+      }));
     });
-    const stationCollection = pointsToCollection([
+    // Stops of one name that lie apart (platforms, "Bratislava-Vinohrady 2") share one pill.
+    const grouped = groupStations([
       ...stops.map((stop) => ({
         id: stop.stopId,
         name: stop.name,
         lat: stop.lat,
         lng: stop.lng,
         color: railPalette(themeRef.current).fill,
-        rank: stationLabelRank(
-          stop.name,
-          stop.tripCount ?? tripCountByStop.get(stop.stopId) ?? 0
-        ),
+        rank: stationLabelRank(stop.name, stop.tripCount ?? tripCountByStop.get(stop.stopId) ?? 0),
       })),
       ...transitPoints,
     ]);
+    const stationCollection = pointsToCollection(grouped.points);
+    setSourceData(map, 'stations-pill', { type: 'FeatureCollection', features: grouped.pills });
     stationFeatureById.clear();
-    stationCollection.features.forEach((feature) => stationFeatureById.set(String(feature.properties?.id ?? feature.id), feature));
+    stationCollection.features.forEach((feature) => {
+      const id = String(feature.properties?.id ?? feature.id);
+      const list = stationFeatureById.get(id);
+      if (list) list.push(feature);
+      else stationFeatureById.set(id, [feature]);
+    });
     setSourceData(map, 'stations', stationCollection);
     selectedStationRef.current = applyStationSelection(
       map,
