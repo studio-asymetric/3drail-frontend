@@ -329,6 +329,9 @@ export function formatTrainDisplayName(name: string): string {
     );
 }
 
+/** Buses, trams and metro are drawn white: the delay colours belong to the trains. */
+export const VEHICLE_PILL_COLOR = '#ffffff';
+
 export function getDelayColor(delayMinutes: number): string {
   if (delayMinutes >= 30) {
     return '#D12F2F';
@@ -796,7 +799,7 @@ export function buildTrainRenderState(
       position: roster.position,
       progress: 0.5,
       delayMinutes,
-      color: getDelayColor(delayMinutes),
+      color: roster.mode ? VEHICLE_PILL_COLOR : getDelayColor(delayMinutes),
       nextStation,
       currentStation,
       reportedAt,
@@ -857,7 +860,7 @@ export function buildTrainRenderState(
     position: interpolateShape(shape.points, progress),
     progress,
     delayMinutes,
-    color: getDelayColor(delayMinutes),
+    color: roster.mode ? VEHICLE_PILL_COLOR : getDelayColor(delayMinutes),
     nextStation,
     currentStation,
     reportedAt,
