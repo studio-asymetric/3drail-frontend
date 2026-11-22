@@ -2463,7 +2463,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   useEffect(() => {
     setNetworkRoute(null);
     const waypoints = traceKey ? decodePolyline(traceKey) : [];
-    if (!focusedTrainNumber || waypoints.length < 2) {
+    // A vehicle with its own track line (trams, metro) needs no stations to be found on the map.
+    const stored = focusedTrainNumber ? journeyAnimatorRef.current.journey(focusedTrainNumber) : null;
+    if (!focusedTrainNumber || (waypoints.length < 2 && !(stored && stored.ok))) {
       return;
     }
     let cancelled = false;
@@ -2506,7 +2508,6 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         })
         .catch(() => undefined);
     };
-    const stored = journeyAnimatorRef.current.journey(focusedTrainNumber);
     if (stored && stored.ok) {
       const line: Coordinate[] = [];
       for (let index = 0; index < stored.lat.length; index += 1) {
