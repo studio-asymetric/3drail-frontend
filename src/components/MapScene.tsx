@@ -189,7 +189,7 @@ const BASEMAP_RAIL_FADE: ExpressionSpecification = [
 const DETAIL_RAIL_MIN_ZOOM = 13.9;
 const DETAIL_RAIL_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 1];
 /** The detailed tram tracks fade in to the same grey and strength the simplified ones have (no glow). */
-const TRAM_DETAIL_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 0.6];
+const TRAM_DETAIL_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 14, 0, 15, 0.7, 16, 0.95];
 /** The simplified tram tracks: faint from afar, full in the city, gone once the detailed ones are in. */
 const TRAM_SIMPLIFIED_FADE: ExpressionSpecification = ['interpolate', ['linear'], ['zoom'], 11.8, 0.4, 13, 0.6, 14, 0.6, 15, 0];
 
@@ -819,6 +819,21 @@ function addTransitLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     if (map.getLayer(id)) map.removeLayer(id);
   };
   remove('transit-metro');
+  remove('transit-metro-casing');
+  // A dark (light on the light map) edge makes the line stand out once the view is close.
+  map.addLayer({
+    id: 'transit-metro-casing',
+    type: 'line',
+    source: 'transit-lines',
+    minzoom: 13,
+    filter: ['==', ['get', 'mode'], 'metro'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': theme === 'dark' ? '#0a0a0b' : '#f6f6f6',
+      'line-opacity': ['interpolate', ['linear'], ['zoom'], 13, 0, 14.5, 0.9],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 13, 2.6, 14, 4, 17, 7.4],
+    },
+  });
   map.addLayer({
     id: 'transit-metro',
     type: 'line',
@@ -828,7 +843,7 @@ function addTransitLayers(map: MapLibreMap, theme: MapTheme = 'light') {
     layout: { 'line-cap': 'round', 'line-join': 'round' },
     paint: {
       'line-color': ['get', 'color'],
-      'line-opacity': 0.9,
+      'line-opacity': ['interpolate', ['linear'], ['zoom'], 11.8, 0.9, 14, 1],
       'line-width': ['interpolate', ['linear'], ['zoom'], 7, 0.7, 11, 1.4, 14, 2.4, 17, 4.2],
     },
   });
@@ -978,6 +993,8 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       isBasemapTramLine,
       ['!=', ['get', 'brunnel'], 'tunnel'],
     ];
+    // grey from afar, brighter once close, so the tracks read clearly when zoomed in
+    const tramCloseColor = ['interpolate', ['linear'], ['zoom'], 14, sideColor, 16, fillColor] as unknown as string;
     const tramTunnelFilter: ExpressionSpecification = [
       'all',
       isBasemapTramLine,
@@ -1042,10 +1059,10 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       });
     };
     // tram tracks first: every railway is drawn above them
-    addBasemapPair('basemap-rails-tram', tramFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, sideColor, TRAM_DETAIL_FADE, {
+    addBasemapPair('basemap-rails-tram', tramFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, tramCloseColor, TRAM_DETAIL_FADE, {
       minzoom: DETAIL_RAIL_MIN_ZOOM,
     });
-    addBasemapPair('basemap-rails-tram-tunnel', tramTunnelFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, sideColor, TRAM_DETAIL_FADE, {
+    addBasemapPair('basemap-rails-tram-tunnel', tramTunnelFilter, RAIL_BRANCH_FILL, RAIL_BRANCH_CASING, tramCloseColor, TRAM_DETAIL_FADE, {
       dasharray: [2.4, 2.1],
       minzoom: DETAIL_RAIL_MIN_ZOOM,
     });
