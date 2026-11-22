@@ -58,6 +58,8 @@ export type Copy = {
   regionSk: string;
   regionPid: string;
   menuDarkMode: string;
+  menuAbout: string;
+  menuStudio: string;
   regionSkMeta: string;
   regionPidMeta: string;
   follow: string;
@@ -157,6 +159,8 @@ const sk: Copy = {
   regionSk: 'Slovensko',
   regionPid: 'Praha a okolie (PID)',
   menuDarkMode: 'Tmavý režim',
+  menuAbout: 'O aplikácii',
+  menuStudio: 'Autor',
   regionSkMeta: 'ZSSK · naživo',
   regionPidMeta: 'PID · naživo',
   follow: 'Sledovať',
@@ -258,6 +262,8 @@ const en: Copy = {
   regionSk: 'Slovakia',
   regionPid: 'Prague and surroundings (PID)',
   menuDarkMode: 'Dark mode',
+  menuAbout: 'About the app',
+  menuStudio: 'Made by',
   regionSkMeta: 'ZSSK · live',
   regionPidMeta: 'PID · live',
   follow: 'Follow',

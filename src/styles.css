@@ -3585,3 +3585,67 @@ body,
     animation: none;
   }
 }
+
+/* Links at the foot of the menu: About (phones only, the info button does it elsewhere) and the studio. */
+.menu__links {
+  display: flex;
+  flex-direction: column;
+}
+
+.menu__row-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 1px solid var(--menu-line);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 560;
+  letter-spacing: -0.02em;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  opacity: 0.88;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.menu__row-link:last-child {
+  border-bottom: 0;
+}
+
+.menu__row-link:hover,
+.menu__row-link:focus-visible {
+  opacity: 1;
+}
+
+.menu__row-link small {
+  display: block;
+  color: var(--ui-muted);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.menu__ext {
+  flex: none;
+  opacity: 0.7;
+}
+
+/* The About button of the tool column moves into the menu on phones. */
+@media (min-width: 801px) {
+  .menu__row-link--about {
+    display: none;
+  }
+}
+
+@media (max-width: 800px) {
+  .chrome__tool--info {
+    display: none;
+  }
+}

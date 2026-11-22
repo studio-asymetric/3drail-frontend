@@ -9,6 +9,8 @@ export interface MenuCopy {
   menuLanguage: string;
   menuAppearance: string;
   menuDarkMode: string;
+  menuAbout: string;
+  menuStudio: string;
   regionNames: Record<RegionId, string>;
   regionMeta: Record<RegionId, string>;
 }
@@ -21,6 +23,8 @@ interface Props {
   onLocale: (locale: AppLocale) => void;
   theme: 'light' | 'dark';
   onTheme: (theme: 'light' | 'dark') => void;
+  /** Opens the About panel (on a phone the menu is where it lives). */
+  onAbout: () => void;
   logo: string;
 }
 
@@ -33,7 +37,7 @@ const DESKTOP_QUERY = '(min-width: 801px)';
  * (each region is a page of its own, "/" and "/pid", so choosing one opens it); language is a
  * two-way switch and the colour mode a toggle.
  */
-export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocale, theme, onTheme, logo }) => {
+export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocale, theme, onTheme, onAbout, logo }) => {
   const closeRef = useRef<HTMLButtonElement | null>(null);
   // Stays in the page while it fades out (the same exit as the left panel), then goes.
   const [mounted, setMounted] = useState(open);
@@ -198,6 +202,20 @@ export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocal
               <span className="menu__switch-knob" aria-hidden="true" />
             </button>
           </div>
+        </section>
+        <section className="menu__group menu__links">
+          <button type="button" className="menu__row-link menu__row-link--about" onClick={onAbout}>
+            {copy.menuAbout}
+          </button>
+          <a className="menu__row-link" href="https://asymetric.studio" target="_blank" rel="noopener">
+            <span>
+              <small>{copy.menuStudio}</small>
+              Studio Asymetric
+            </span>
+            <svg className="menu__ext" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <path d="M3.5 2.5h6v6M9.5 2.5l-7 7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+          </a>
         </section>
       </div>
     </div>

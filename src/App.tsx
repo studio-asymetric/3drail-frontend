@@ -1971,12 +1971,20 @@ const App: React.FC = () => {
         onLocale={setLocale}
         theme={theme}
         onTheme={setTheme}
+        onAbout={() => {
+          setMenuOpen(false);
+          if (!aboutOpen) {
+            handleAboutToggle();
+          }
+        }}
         copy={{
           menuClose: t.menuClose,
           menuRegion: t.menuRegion,
           menuLanguage: t.menuLanguage,
           menuAppearance: t.menuAppearance,
           menuDarkMode: t.menuDarkMode,
+          menuAbout: t.menuAbout,
+          menuStudio: t.menuStudio,
           regionNames: { sk: t.regionSk, pid: t.regionPid },
           regionMeta: { sk: t.regionSkMeta, pid: t.regionPidMeta },
         }}
