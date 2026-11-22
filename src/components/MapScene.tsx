@@ -848,63 +848,6 @@ function addTransitLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       'line-width': ['interpolate', ['linear'], ['zoom'], 7, 0.7, 11, 1.4, 14, 2.4, 17, 4.2],
     },
   });
-  addTransitStopLayers(map, theme);
-}
-
-/** Tram, metro and bus stops: small dots from a close view, named when closer still. */
-const TRANSIT_STOP_LAYERS = ['transit-stops-metro', 'transit-stops-tram', 'transit-stops-bus'];
-function addTransitStopLayers(map: MapLibreMap, theme: MapTheme) {
-  if (!map.getSource('transit-stops')) {
-    map.addSource('transit-stops', { type: 'geojson', data: EMPTY_COLLECTION });
-  }
-  for (const id of [...TRANSIT_STOP_LAYERS, 'transit-stops-label']) {
-    if (map.getLayer(id)) map.removeLayer(id);
-  }
-  const edge = theme === 'dark' ? '#101012' : '#ffffff';
-  const fill = theme === 'dark' ? '#f2f2f2' : '#1c1c1e';
-  const circle = (id: string, minzoom: number, filter: ExpressionSpecification, radius: ExpressionSpecification) =>
-    map.addLayer({
-      id,
-      type: 'circle',
-      source: 'transit-stops',
-      minzoom,
-      filter,
-      paint: {
-        'circle-radius': radius,
-        'circle-color': fill,
-        'circle-stroke-color': edge,
-        'circle-stroke-width': 1.2,
-        'circle-opacity': 0.95,
-      },
-    });
-  circle('transit-stops-bus', 14.8, ['all', ['==', ['get', 'bus'], true], ['!=', ['get', 'tram'], true], ['!=', ['get', 'metro'], true]], [
-    'interpolate', ['linear'], ['zoom'], 14.8, 1.8, 17, 3.4,
-  ]);
-  circle('transit-stops-tram', 14, ['all', ['==', ['get', 'tram'], true], ['!=', ['get', 'metro'], true]], [
-    'interpolate', ['linear'], ['zoom'], 14, 2.2, 17, 4.4,
-  ]);
-  circle('transit-stops-metro', 12.5, ['==', ['get', 'metro'], true], ['interpolate', ['linear'], ['zoom'], 12.5, 3, 17, 7]);
-  map.addLayer({
-    id: 'transit-stops-label',
-    type: 'symbol',
-    source: 'transit-stops',
-    minzoom: 14.6,
-    layout: {
-      'text-font': stationLabelFont(map),
-      'text-field': ['coalesce', ['get', 'name'], ''],
-      'text-size': ['interpolate', ['linear'], ['zoom'], 14.6, 10, 17, 12.5],
-      'text-anchor': 'left',
-      'text-offset': [0.9, 0],
-      'text-optional': true,
-      'text-padding': 4,
-      'text-max-width': 8,
-    },
-    paint: {
-      'text-color': theme === 'dark' ? '#e9ebee' : '#1d1f23',
-      'text-halo-color': theme === 'dark' ? 'rgba(11, 13, 16, 0.88)' : 'rgba(255, 255, 255, 0.9)',
-      'text-halo-width': 1.1,
-    },
-  });
 }
 
 function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
@@ -1468,8 +1411,8 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   const outlineRef = useRef<LatLngPolygon[]>([]);
   const transitLinesRef = useRef<FeatureCollection | null>(transitLines);
   transitLinesRef.current = transitLines;
-  const transitStopsRef = useRef<FeatureCollection | null>(transitStops);
-  transitStopsRef.current = transitStops;
+  // zoom band the tram / metro / bus stops are shown at (0 none, 1 metro, 2 + tram, 3 + bus)
+  const [stopBand, setStopBand] = useState(0);
   const onTrainClickRef = useRef(onTrainClick);
   onTrainClickRef.current = onTrainClick;
   const onStationClickRef = useRef(onStationClick);
@@ -1774,6 +1717,9 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     let modeBand = -1;
     const modeBandOf = (zoom: number) => (zoom >= DOT_ZOOM ? 2 : zoom >= DOT_MIN_ZOOM ? 1 : 0);
     map.on('zoom', () => {
+      const zoomNow = map.getZoom();
+      const stopBandNow = zoomNow >= 14.8 ? 3 : zoomNow >= 14 ? 2 : zoomNow >= 12.5 ? 1 : 0;
+      setStopBand((current) => (current === stopBandNow ? current : stopBandNow));
       const band = modeBandOf(map.getZoom());
       if (band === modeBand) {
         return;
@@ -1790,7 +1736,6 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         addTransitLayers(map, themeRef.current);
         addRailLayers(map, themeRef.current);
         setSourceData(map, 'transit-lines', transitLinesRef.current ?? EMPTY_COLLECTION);
-        setSourceData(map, 'transit-stops', transitStopsRef.current ?? EMPTY_COLLECTION);
       } catch (error) {
         console.error('Failed to add rail layers', error);
         return;
@@ -1966,23 +1911,6 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     map.on('mousemove', handleStationMove);
     map.on('mouseout', clearStationHover);
     const handleBackgroundClick = (event: MapLayerMouseEvent) => {
-      // a tram, metro or bus stop opens its board (of every kind of vehicle)
-      const pad = 9;
-      const stopHits = map.getLayer('transit-stops-metro')
-        ? map.queryRenderedFeatures(
-            [
-              [event.point.x - pad, event.point.y - pad],
-              [event.point.x + pad, event.point.y + pad],
-            ],
-            { layers: TRANSIT_STOP_LAYERS.filter((layer) => map.getLayer(layer)) }
-          )
-        : [];
-      const stop = stopHits[0];
-      if (stop && stop.geometry.type === 'Point' && typeof stop.properties?.name === 'string') {
-        const [lng, lat] = stop.geometry.coordinates;
-        onStationClickRef.current?.({ id: `stop:${stop.properties.name}`, name: stop.properties.name, lng, lat });
-        return;
-      }
       if (stationNear(event.point)) {
         handleStationClick(event);
         return;
@@ -2567,19 +2495,43 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       ),
       (stop) => stop.tripCount ?? tripCountByStop.get(stop.stopId) ?? 0
     );
-    const stationCollection = pointsToCollection(
-        stops.map((stop) => ({
-          id: stop.stopId,
-          name: stop.name,
-          lat: stop.lat,
-          lng: stop.lng,
+    // Prague's tram, metro and bus stops are drawn as stations too (same dot, label, hover and
+    // selection); each kind only from the zoom it is wanted at, so the set changes with the band.
+    const transitPoints = (transitStops?.features ?? []).flatMap((feature) => {
+      const props = (feature.properties ?? {}) as { name?: string; tram?: boolean; metro?: boolean; bus?: boolean };
+      const wanted =
+        (props.metro && stopBand >= 1) ||
+        (props.tram && !props.metro && stopBand >= 2) ||
+        (props.bus && !props.tram && !props.metro && stopBand >= 3);
+      if (!wanted || !props.name || feature.geometry.type !== 'Point') {
+        return [];
+      }
+      const [lng, lat] = feature.geometry.coordinates;
+      return [
+        {
+          id: `stop:${props.name}`,
+          name: props.name,
+          lat,
+          lng,
           color: railPalette(themeRef.current).fill,
-          rank: stationLabelRank(
-            stop.name,
-            stop.tripCount ?? tripCountByStop.get(stop.stopId) ?? 0
-          ),
-        }))
-      );
+          rank: props.metro ? 2 : 1,
+        },
+      ];
+    });
+    const stationCollection = pointsToCollection([
+      ...stops.map((stop) => ({
+        id: stop.stopId,
+        name: stop.name,
+        lat: stop.lat,
+        lng: stop.lng,
+        color: railPalette(themeRef.current).fill,
+        rank: stationLabelRank(
+          stop.name,
+          stop.tripCount ?? tripCountByStop.get(stop.stopId) ?? 0
+        ),
+      })),
+      ...transitPoints,
+    ]);
     stationFeatureById.clear();
     stationCollection.features.forEach((feature) => stationFeatureById.set(String(feature.properties?.id ?? feature.id), feature));
     setSourceData(map, 'stations', stationCollection);
@@ -2588,7 +2540,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       focusedStationIdRef.current,
       null
     );
-  }, [dataset, svgOutlinePolygons, terrainLoaded, overlayEpoch]);
+  }, [dataset, svgOutlinePolygons, terrainLoaded, overlayEpoch, transitStops, stopBand]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -3252,12 +3204,6 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     }
   }, [transitLines, terrainLoaded, overlayEpoch]);
 
-  useEffect(() => {
-    const map = mapRef.current;
-    if (map && terrainLoaded) {
-      setSourceData(map, 'transit-stops', transitStops ?? EMPTY_COLLECTION);
-    }
-  }, [transitStops, terrainLoaded, overlayEpoch]);
 
   useEffect(() => {
     const map = mapRef.current;
