@@ -1107,6 +1107,7 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
 
   ensureSource('stations', { maxzoom: 14, tolerance: 0, buffer: 16, promoteId: 'id' });
   ensureSource('stations-hover', { maxzoom: 16, tolerance: 0, buffer: 64 });
+  ensureSource('stations-spots', { maxzoom: 16, tolerance: 0, buffer: 16 });
   ensureSource('stations-pill', { maxzoom: 16, tolerance: 0, buffer: 32, promoteId: 'group' });
   // Just the selected station, so its ring and label do not need a copy of every station.
   ensureSource('station-selected', { maxzoom: 16, tolerance: 0, buffer: 64 });
@@ -1229,6 +1230,19 @@ function addRailLayers(map: MapLibreMap, theme: MapTheme = 'light') {
       'circle-stroke-width': stationCircleRadius([1.0, 1.1, 1.45, 1.18]),
       'circle-stroke-color': casingColor,
       'circle-stroke-opacity': stationFade(1),
+      'circle-pitch-alignment': 'map',
+    },
+  });
+  // Where the platforms of a grouped stop are: small dots round the station dot in the middle.
+  upsertLayer({
+    id: 'stations-spots',
+    type: 'circle',
+    source: 'stations-spots',
+    minzoom: 14,
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 1.2, 16, 2],
+      'circle-color': fillColor,
+      'circle-opacity': stationFade(0.8),
       'circle-pitch-alignment': 'map',
     },
   });
@@ -2583,6 +2597,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       ...transitPoints,
     ]);
     const stationCollection = pointsToCollection(grouped.points);
+    setSourceData(map, 'stations-spots', { type: 'FeatureCollection', features: grouped.spots });
     setSourceData(map, 'stations-pill', { type: 'FeatureCollection', features: grouped.pills });
     stationFeatureById.clear();
     stationCollection.features.forEach((feature) => {

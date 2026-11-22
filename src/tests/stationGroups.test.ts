@@ -40,13 +40,15 @@ describe('groupStations', () => {
       point('stop:Truhlářská', 'Truhlářská', 50.0896, 14.4292),
     ]);
     expect(pills).toHaveLength(1);
-    expect(points.filter((p) => p.hideLabel)).toHaveLength(1);
+    // one dot in the middle of the shape
+    expect(points).toHaveLength(1);
+    expect(points[0].lat).toBeCloseTo(50.08955, 5);
   });
 
   it('does not join same-named places far apart, or a group that is too wide', () => {
     expect(groupStations([point('a', 'Nádraží', 48.0, 17.0), point('b', 'Nádraží', 48.5, 17.5)]).pills).toHaveLength(0);
     // 100 m links in a chain, but 400 m end to end: too wide to be one place
-    const chain = [0, 1, 2, 3, 4].map((i) => point(`c${i}`, 'Chain', 48.0, 17.0 + i * 0.0014));
+    const chain = [0, 1, 2, 3, 4].map((i) => point(`c${i}`, 'Chain', 48.0, 17.0 + i * 0.0035));
     expect(groupStations(chain).pills).toHaveLength(0);
   });
 });

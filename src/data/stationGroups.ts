@@ -1,4 +1,4 @@
-import type { Feature, Polygon } from 'geojson';
+import type { Feature, Point, Polygon } from 'geojson';
 
 export interface StationPoint {
   id: string;
@@ -25,8 +25,8 @@ export function baseStationName(name: string): string {
 }
 
 /** Dots of one name join only when they are this close in a chain, and the whole group no wider than the maximum. */
-const GROUP_LINK_METERS = 250;
-const GROUP_MAX_SPREAD_METERS = 300;
+const GROUP_LINK_METERS = 300;
+const GROUP_MAX_SPREAD_METERS = 700;
 const SAME_SPOT_METERS = 3;
 
 const meters = (a: StationPoint, b: StationPoint) =>
@@ -77,7 +77,7 @@ function hullAround(dots: StationPoint[]): Array<[number, number]> {
  * wider than GROUP_MAX_SPREAD_METERS is not joined. Returns the points (with group, pill and
  * hideLabel set) and the pill lines.
  */
-export function groupStations<T extends StationPoint>(points: T[]): { points: T[]; pills: Array<Feature<Polygon>> } {
+export function groupStations<T extends StationPoint>(points: T[]): { points: T[]; pills: Array<Feature<Polygon>>; spots: Array<Feature<Point>> } {
   const out: T[] = points.map((point) => ({ ...point }));
   const buckets = new Map<string, number[]>();
   out.forEach((point, index) => {
@@ -136,5 +136,26 @@ export function groupStations<T extends StationPoint>(points: T[]): { points: T[
       });
     });
   });
-  return { points: out, pills };
+  // Platforms of one stop (all sharing an id) are drawn as one dot in the middle of the shape, and a small dot where each platform was (spots).
+  const dropped = new Set<number>();
+  const spots: Array<Feature<Point>> = [];
+  buckets.forEach((indexes) => {
+    const byGroup = new Map<string, number[]>();
+    indexes.forEach((index) => {
+      const group = out[index].group;
+      if (group) byGroup.set(group, [...(byGroup.get(group) ?? []), index]);
+    });
+    byGroup.forEach((members) => {
+      if (new Set(members.map((index) => out[index].id)).size !== 1) return;
+      const keep = members[0];
+      members.forEach((index) =>
+        spots.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [out[index].lng, out[index].lat] } })
+      );
+      out[keep].lat = members.reduce((sum, index) => sum + out[index].lat, 0) / members.length;
+      out[keep].lng = members.reduce((sum, index) => sum + out[index].lng, 0) / members.length;
+      out[keep].hideLabel = false;
+      members.slice(1).forEach((index) => dropped.add(index));
+    });
+  });
+  return { points: out.filter((_, index) => !dropped.has(index)), pills, spots };
 }
