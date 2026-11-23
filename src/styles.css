@@ -578,8 +578,8 @@ body,
 
 .chrome__brand img {
   display: block;
-  width: 20px;
-  height: 20px;
+  width: auto;
+  height: 16px;
 }
 
 .chrome__brand span {

@@ -48,8 +48,7 @@ import {
   serializeAppRoute,
   type AppRoute,
 } from './appRoute';
-import logoMarkDark from './logo icon white.svg';
-import logoMarkLight from './logo icon black.svg';
+import logoMark from './logo ex.svg';
 import { ChromeSearchIcon } from './components/ChromeSearchIcon';
 import {
   copyFor,
@@ -1772,7 +1771,7 @@ const App: React.FC = () => {
             aria-label={t.aboutRailatlas}
             onClick={handleAboutToggle}
           >
-            <img src={theme === 'light' ? logoMarkLight : logoMarkDark} alt="" width={20} height={20} />
+            <img src={logoMark} alt="" width={25} height={16} />
             <span>Môj Vlak</span>
           </button>
           <small className="chrome__brand-meta">
@@ -2033,7 +2032,7 @@ const App: React.FC = () => {
       <MainMenu
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
-        logo={theme === 'dark' ? logoMarkDark : logoMarkLight}
+        logo={logoMark}
         locale={locale}
         onLocale={setLocale}
         theme={theme}

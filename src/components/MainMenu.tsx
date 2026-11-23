@@ -111,7 +111,7 @@ export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocal
     >
       <div className="menu__head">
         <span className="menu__brand">
-          <img src={logo} alt="" width={22} height={22} />
+          <img src={logo} alt="" width={28} height={18} />
           Môj Vlak
         </span>
       </div>
