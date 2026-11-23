@@ -875,10 +875,13 @@ const App: React.FC = () => {
       setStatusMessage(t.trainListUnavailable);
     };
     refresh();
-    // a region's live feed moves every 15 s; Slovakia's source is slower
-    const interval = setInterval(refresh, REGION_ID === 'sk' ? 45_000 : 10_000);
+    // A region's proxy may only be starting its live feed: ask again soon, so the vehicles do not wait a full turn.
+    const early = REGION_ID === 'sk' ? [] : [2_500, 5_500].map((ms) => setTimeout(refresh, ms));
+    // a region's live feed moves every 15 s (Brno's every few seconds); Slovakia's source is slower
+    const interval = setInterval(refresh, REGION_ID === 'sk' ? 45_000 : REGION_ID === 'jmk' ? 5_000 : 10_000);
     return () => {
       mounted = false;
+      early.forEach(clearTimeout);
       clearInterval(interval);
     };
   }, [service, t, useLiveApi, pushToast]);

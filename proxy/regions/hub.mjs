@@ -80,6 +80,8 @@ const CONFIGS = {
     label: 'JMK',
     dir: process.env.JMK_DATA_DIR ?? 'region-data/jmk',
     version: JMK_DATA_VERSION,
+    // the stream costs nothing to keep: stay connected so the next visitor sees vehicles at once
+    idleMs: 60 * 60_000,
     build: buildJmkRegion,
     startLive: ({ region, dir, log }) => startJmkLive({ region, dataDir: dir, log }),
   },
@@ -145,7 +147,7 @@ function createOneRegion(config, log) {
       stopLive = config.startLive({ region, dir: dataDir, log: say });
       if (stopLive) {
         idleTimer = setInterval(() => {
-          if (Date.now() - lastAsked > IDLE_STOP_MS) {
+          if (Date.now() - lastAsked > (config.idleMs ?? IDLE_STOP_MS)) {
             stopLive?.();
             stopLive = null;
             region?.setLive(new Map());

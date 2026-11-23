@@ -14,7 +14,7 @@ import path from 'node:path';
 
 const STREAM_URL = 'wss://gis.brno.cz/geoevent/ws/services/Kordis_stream/StreamServer/subscribe';
 const RT_URL = 'https://kordis-jmk.cz/gtfs/gtfsReal.dat';
-const PUSH_MS = 4_000;
+const PUSH_MS = 2_000;
 const POSITIONS_MS = 15_000;
 const STALE_MS = 3 * 60_000;
 /** Stream VType -> GTFS route type, for vehicles whose trip is not in the timetable. */
@@ -124,6 +124,9 @@ export function decodeVehiclePositions(buffer) {
 const metersBetween = (latA, lngA, latB, lngB) =>
   Math.hypot((latB - latA) * 110574, (lngB - lngA) * 111320 * Math.cos((latA * Math.PI) / 180));
 const MATCH_METERS = 450;
+/** The stream is "caught up" when it has told of this share of the vehicles the realtime file lists. */
+const SEED_BELOW = 0.75;
+const SEED_MAX_AGE_MS = 90_000;
 
 /**
  * Turn the stream's vehicles and the timetable trips of the realtime feed into what the region wants.
@@ -213,6 +216,43 @@ export function convertRecords(records, { positions, tripKey, tripInfo, routes, 
       atStop: false,
       at: Number.isFinite(stamp) ? stamp : now,
     });
+  }
+  // Just started: the stream has told of few vehicles yet (each speaks every ~10 s), but the realtime file
+  // knows all of them at once. Show those from it, with no delay, until the stream has caught up.
+  if (live.length < positions.length * SEED_BELOW) {
+    for (const p of positions) {
+      if (taken.has(p) || now - p.at > SEED_MAX_AGE_MS) continue;
+      const key = tripKey.get(p.tripId);
+      if (key) {
+        if (!rail.has(key)) {
+          rail.set(key, { delaySec: 0, exactDelay: false, lastSeq: null, atStop: false, lat: p.lat, lng: p.lng, at: p.at });
+        }
+        continue;
+      }
+      const info = tripInfo.get(p.tripId);
+      const route = info ? routes.get(info.routeId) : undefined;
+      if (!route || route.type === 2 || route.type === 1) continue;
+      other.push({
+        tripId: p.tripId,
+        routeId: info.routeId,
+        short: route.short,
+        type: route.type,
+        headsign: info.headsign,
+        agency: 'IDS JMK',
+        startTs: '',
+        lat: p.lat,
+        lng: p.lng,
+        bearing: undefined,
+        delaySec: 0,
+        lastStopId: '',
+        nextStopId: '',
+        lastTime: '',
+        nextTime: '',
+        lastSeq: null,
+        atStop: false,
+        at: p.at,
+      });
+    }
   }
   return { rail, other };
 }
@@ -309,7 +349,8 @@ export function startJmkLive({ region, dataDir, log = () => undefined }) {
   };
 
   connect();
-  pollPositions();
+  // first answer as soon as the realtime file is in, then every PUSH_MS
+  pollPositions().then(push);
   timer = setInterval(() => {
     push();
   }, PUSH_MS);
