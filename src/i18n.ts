@@ -93,6 +93,7 @@ export type Copy = {
   menuAppearance: string;
   regionSk: string;
   regionPid: string;
+  regionJmk: string;
   menuDarkMode: string;
   menuAbout: string;
   menuShow: string;
@@ -104,6 +105,7 @@ export type Copy = {
   menuStudio: string;
   regionSkMeta: string;
   regionPidMeta: string;
+  regionJmkMeta: string;
   follow: string;
   following: string;
   toastPositionCorrected: (km: string, back: boolean) => string;
@@ -201,6 +203,7 @@ const sk: Copy = {
   menuAppearance: 'Vzhľad',
   regionSk: 'Slovensko',
   regionPid: 'Praha a okolie (PID)',
+  regionJmk: 'Brno a Juhomoravský kraj (JMK)',
   menuDarkMode: 'Tmavý režim',
   menuAbout: 'O aplikácii',
   menuShow: 'Zobraziť',
@@ -212,6 +215,7 @@ const sk: Copy = {
   menuStudio: 'Autor',
   regionSkMeta: 'ZSSK · naživo',
   regionPidMeta: 'PID · naživo',
+  regionJmkMeta: 'IDS JMK · naživo',
   follow: 'Sledovať',
   following: 'Sledujem',
   toastPositionCorrected: (km, back) =>
@@ -311,6 +315,7 @@ const en: Copy = {
   menuAppearance: 'Appearance',
   regionSk: 'Slovakia',
   regionPid: 'Prague and surroundings (PID)',
+  regionJmk: 'Brno and South Moravia (JMK)',
   menuDarkMode: 'Dark mode',
   menuAbout: 'About the app',
   menuShow: 'Show',
@@ -322,6 +327,7 @@ const en: Copy = {
   menuStudio: 'Made by',
   regionSkMeta: 'ZSSK · live',
   regionPidMeta: 'PID · live',
+  regionJmkMeta: 'IDS JMK · live',
   follow: 'Follow',
   following: 'Following',
   toastPositionCorrected: (km, back) =>
@@ -425,6 +431,7 @@ const cs: Copy = {
   menuAppearance: 'Vzhled',
   regionSk: 'Slovensko',
   regionPid: 'Praha a okolí (PID)',
+  regionJmk: 'Brno a Jihomoravský kraj (JMK)',
   menuDarkMode: 'Tmavý režim',
   menuAbout: 'O aplikaci',
   menuShow: 'Zobrazit',
@@ -436,6 +443,7 @@ const cs: Copy = {
   menuStudio: 'Autor',
   regionSkMeta: 'ZSSK · živě',
   regionPidMeta: 'PID · živě',
+  regionJmkMeta: 'IDS JMK · živě',
   follow: 'Sledovat',
   following: 'Sleduji',
   toastPositionCorrected: (km, back) =>

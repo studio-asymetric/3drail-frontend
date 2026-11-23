@@ -796,7 +796,7 @@ function sendRegionPending(res) {
 
 function handleStations(res, reqUrl) {
   if (requestedRegions(reqUrl).length > 0) {
-    const body = regionHub.stationsBody();
+    const body = regionHub.stationsBody(requestedRegions(reqUrl));
     if (body) {
       sendCompressed(res, 200, body, 'application/json; charset=utf-8', { 'Cache-Control': 'no-cache' });
     } else {
@@ -1193,7 +1193,7 @@ async function handleOsm(reqUrl, res) {
   fs.mkdirSync(config.osmCacheDir, { recursive: true });
 
   if (level === 'network' && requestedRegions(reqUrl).length > 0) {
-    const pack = regionHub.networkPack();
+    const pack = regionHub.networkPack(requestedRegions(reqUrl));
     if (!pack) {
       sendRegionPending(res);
       return;
@@ -1735,9 +1735,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (mode === 'stops') {
-      const body = requestedRegions(reqUrl).length > 0 ? regionHub.stopsBody(Number(reqUrl.searchParams.get('kinds') ?? 7)) : null;
+      const body =
+        requestedRegions(reqUrl).length > 0
+          ? regionHub.stopsBody(requestedRegions(reqUrl), Number(reqUrl.searchParams.get('kinds') ?? 7))
+          : null;
       if (body) {
-        sendCompressed(res, 200, body, 'application/json; charset=utf-8', { 'Cache-Control': 'public, max-age=600' }, `stops${reqUrl.searchParams.get('kinds') ?? ''}`);
+        sendCompressed(
+          res,
+          200,
+          body,
+          'application/json; charset=utf-8',
+          { 'Cache-Control': 'public, max-age=600' },
+          `stops${reqUrl.searchParams.get('kinds') ?? ''}-${requestedRegions(reqUrl)[0]}-${body.length}`
+        );
       } else if (requestedRegions(reqUrl).length > 0) {
         sendRegionPending(res);
       } else {
@@ -1746,9 +1756,16 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (mode === 'lines') {
-      const body = requestedRegions(reqUrl).length > 0 ? regionHub.linesBody() : null;
+      const body = requestedRegions(reqUrl).length > 0 ? regionHub.linesBody(requestedRegions(reqUrl)) : null;
       if (body) {
-        sendCompressed(res, 200, body, 'application/json; charset=utf-8', { 'Cache-Control': 'public, max-age=600' }, 'lines');
+        sendCompressed(
+          res,
+          200,
+          body,
+          'application/json; charset=utf-8',
+          { 'Cache-Control': 'public, max-age=600' },
+          `lines-${requestedRegions(reqUrl)[0]}-${body.length}`
+        );
       } else if (requestedRegions(reqUrl).length > 0) {
         sendRegionPending(res);
       } else {

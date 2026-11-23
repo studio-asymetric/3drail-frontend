@@ -1,13 +1,14 @@
 /**
- * Extra regions (Prague / PID) merged into the Slovak proxy, on demand.
+ * Extra regions merged into the Slovak proxy, on demand: Prague (PID) and Brno + South Moravia (JMK).
  *
- * Nothing is loaded or polled until a browser asks for `regions=pid` (the map does that once the
- * visitor moves to Prague). The first request starts the timetable download/parse in the
- * background; until it is ready the answers are Slovakia only. While browsers keep asking, the
- * Golemio live feed is polled; a few minutes after the last request everything goes quiet again.
+ * Nothing is loaded or polled until a browser asks for `regions=pid` (or `jmk`). The first request
+ * starts the timetable download/parse in the background; until it is ready the answers are Slovakia
+ * only. While browsers keep asking, the region's live feed runs; a few minutes after the last
+ * request everything goes quiet again.
  *
  *   REGION_DATA_DIR   where the cut-down PID timetable lives (default region-data/pid)
- *   GOLEMIO_API_KEY   live positions; without it trains of the region run on their timetable
+ *   JMK_DATA_DIR      the same for Brno + South Moravia (default region-data/jmk)
+ *   GOLEMIO_API_KEY   live positions of Prague; without it trains of the region run on their timetable
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,6 +18,8 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createGtfsRegion } from './gtfsRegion.mjs';
 import { startGolemioPolling } from './golemio.mjs';
+import { startJmkLive } from './jmkLive.mjs';
+import { buildJmkRegion, JMK_DATA_VERSION } from './buildJmk.mjs';
 import { buildRailSubset, REGION_DATA_VERSION } from './buildGtfs.mjs';
 
 const dirName = path.dirname(fileURLToPath(import.meta.url));
@@ -29,13 +32,13 @@ export function requestedRegions(reqUrl) {
   return (reqUrl.searchParams.get('regions') ?? '')
     .split(',')
     .map((id) => id.trim())
-    .filter((id) => id === 'pid');
+    .filter((id) => id === 'pid' || id === 'jmk');
 }
 
 const run = (cmd, args) =>
   new Promise((resolve, reject) => execFile(cmd, args, { maxBuffer: 1 << 20 }, (e) => (e ? reject(e) : resolve())));
 
-async function downloadAndBuild(dataDir, log) {
+async function buildPid(dataDir, log) {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'pid-'));
   try {
     const zipPath = path.join(work, 'feed.zip');
@@ -59,25 +62,48 @@ async function downloadAndBuild(dataDir, log) {
   }
 }
 
-export function createRegionHub(log = () => undefined) {
-  const dataDir = path.resolve(dirName, '..', '..', process.env.REGION_DATA_DIR ?? 'region-data/pid');
-  const apiKey = process.env.GOLEMIO_API_KEY ?? '';
+const CONFIGS = {
+  pid: {
+    id: 'pid',
+    label: 'PID',
+    dir: process.env.REGION_DATA_DIR ?? 'region-data/pid',
+    version: String(REGION_DATA_VERSION),
+    build: buildPid,
+    /** Starts the live feed; returns its stop function, or null when there is nothing to start. */
+    startLive: ({ region, log }) => {
+      const apiKey = process.env.GOLEMIO_API_KEY ?? '';
+      return apiKey ? startGolemioPolling({ region, apiKey, log }) : null;
+    },
+  },
+  jmk: {
+    id: 'jmk',
+    label: 'JMK',
+    dir: process.env.JMK_DATA_DIR ?? 'region-data/jmk',
+    version: JMK_DATA_VERSION,
+    build: buildJmkRegion,
+    startLive: ({ region, dir, log }) => startJmkLive({ region, dataDir: dir, log }),
+  },
+};
+
+function createOneRegion(config, log) {
+  const dataDir = path.resolve(dirName, '..', '..', config.dir);
   let region = null;
   let loading = false;
   let loadedAt = 0;
   let lastAsked = 0;
-  let stopPolling = null;
+  let stopLive = null;
   let idleTimer = null;
   let packBody = null;
   let linesBody = null;
   const stopsBodies = new Map(); // kinds mask -> JSON
   let stationsBody = null;
   const merged = { key: '', body: '', etag: '' };
+  const say = (message) => log(`${config.label}: ${message}`);
 
   const dataFresh = () => {
     try {
-      const version = Number(fs.readFileSync(path.join(dataDir, 'region.version'), 'utf8'));
-      return version === REGION_DATA_VERSION && Date.now() - fs.statSync(path.join(dataDir, 'trips.txt')).mtimeMs < MAX_DATA_AGE_MS;
+      const version = fs.readFileSync(path.join(dataDir, 'region.version'), 'utf8').trim();
+      return version === config.version && Date.now() - fs.statSync(path.join(dataDir, 'trips.txt')).mtimeMs < MAX_DATA_AGE_MS;
     } catch {
       return false;
     }
@@ -89,9 +115,9 @@ export function createRegionHub(log = () => undefined) {
     try {
       if (!dataFresh()) {
         try {
-          await downloadAndBuild(dataDir, log);
+          await config.build(dataDir, log);
         } catch (error) {
-          log(`PID: update failed: ${error instanceof Error ? error.message : String(error)}`);
+          say(`update failed: ${error instanceof Error ? error.message : String(error)}`);
           if (!fs.existsSync(path.join(dataDir, 'trips.txt'))) {
             throw error;
           }
@@ -104,7 +130,7 @@ export function createRegionHub(log = () => undefined) {
       linesBody = null;
       stopsBodies.clear();
     } catch (error) {
-      log(`PID: not available: ${error instanceof Error ? error.message : String(error)}`);
+      say(`not available: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       loading = false;
     }
@@ -115,18 +141,20 @@ export function createRegionHub(log = () => undefined) {
     if (!region && !loading) {
       load();
     }
-    if (region && apiKey && !stopPolling) {
-      stopPolling = startGolemioPolling({ region, apiKey, log });
-      idleTimer = setInterval(() => {
-        if (Date.now() - lastAsked > IDLE_STOP_MS) {
-          stopPolling?.();
-          stopPolling = null;
-          region?.setLive(new Map());
-          region?.setOthers([]);
-          clearInterval(idleTimer);
-          log('PID: idle, live polling stopped');
-        }
-      }, 60_000);
+    if (region && !stopLive) {
+      stopLive = config.startLive({ region, dir: dataDir, log: say });
+      if (stopLive) {
+        idleTimer = setInterval(() => {
+          if (Date.now() - lastAsked > IDLE_STOP_MS) {
+            stopLive?.();
+            stopLive = null;
+            region?.setLive(new Map());
+            region?.setOthers([]);
+            clearInterval(idleTimer);
+            say('idle, live feed stopped');
+          }
+        }, 60_000);
+      }
     }
     if (region && Date.now() - loadedAt > 24 * 3_600_000 && !loading) {
       // a day old: read the refreshed timetable
@@ -137,16 +165,17 @@ export function createRegionHub(log = () => undefined) {
   }
 
   return {
-    /** Train rows of the regions the request asked for (empty until loaded). */
-    trains(ids) {
-      return ids.length > 0 ? (touch()?.trains() ?? []) : [];
+    id: config.id,
+    touch,
+    peek: () => region,
+    trains: () => touch()?.trains() ?? [],
+    journeys() {
+      const r = touch();
+      return r ? r.journeys() : null;
     },
-    /** Slovak journeys `{ body, etag }` merged with the region's (or the region's alone with `only`). */
-    journeys(ids, sk, only = false) {
-      const r = ids.length > 0 ? touch() : null;
-      if (!r) return only ? { body: '{"v":2,"routes":{},"journeys":[]}', etag: '"building"' } : sk;
-      const extra = r.journeys();
-      if (only) return extra;
+    mergedJourneys(sk) {
+      const extra = this.journeys();
+      if (!extra) return sk;
       const key = `${sk.etag}|${extra.etag}`;
       if (merged.key !== key) {
         const base = JSON.parse(sk.body);
@@ -158,22 +187,12 @@ export function createRegionHub(log = () => undefined) {
       }
       return { body: merged.body, etag: merged.etag };
     },
-    isRegionKey(key) {
-      return /^p\d/.test(key);
-    },
-    /** Stop list of a running region train, or null. */
-    detail(key) {
-      touch();
-      return region?.detail(key) ?? null;
-    },
-    /** `{stations:[...]}` JSON of the region only (the browser merges it); null while loading. */
     stationsBody() {
       const r = touch();
       if (!r) return null;
       stationsBody ??= JSON.stringify({ stations: r.stations() });
       return stationsBody;
     },
-    /** Tram (1), metro (2) and bus (4) stops of the kinds in `mask` (JSON string); null while loading. */
     stopsBody(mask = 7) {
       const r = touch();
       if (!r) return null;
@@ -187,19 +206,60 @@ export function createRegionHub(log = () => undefined) {
       }
       return stopsBodies.get(key);
     },
-    /** Tram and metro tracks (GeoJSON string); null while the region is still loading. */
     linesBody() {
       const r = touch();
       if (!r) return null;
       linesBody ??= JSON.stringify(r.transitLines());
       return linesBody;
     },
-    /** Gzipped RNET pack of the region's rails; null while it is still loading. */
     networkPack() {
       const r = touch();
       if (!r) return null;
       packBody ??= r.networkPack();
       return packBody;
     },
+  };
+}
+
+export function createRegionHub(log = () => undefined) {
+  const regions = new Map(Object.values(CONFIGS).map((config) => [config.id, createOneRegion(config, log)]));
+  const pick = (ids) => (ids.length > 0 ? regions.get(ids[0]) : undefined);
+
+  return {
+    /** Train rows of the regions the request asked for (empty until loaded). */
+    trains(ids) {
+      return ids.flatMap((id) => regions.get(id)?.trains() ?? []);
+    },
+    /** Slovak journeys `{ body, etag }` merged with the region's (or the region's alone with `only`). */
+    journeys(ids, sk, only = false) {
+      const one = pick(ids);
+      if (!one) return sk;
+      if (only) {
+        const extra = one.journeys();
+        return extra ?? { body: '{"v":2,"routes":{},"journeys":[]}', etag: '"building"' };
+      }
+      return one.mergedJourneys(sk);
+    },
+    isRegionKey(key) {
+      return /^p\d/.test(key);
+    },
+    /** Stop list of a running region vehicle, or null. */
+    detail(key) {
+      for (const one of regions.values()) {
+        const r = one.peek();
+        if (r) {
+          const found = r.detail(key);
+          if (found) {
+            one.touch();
+            return found;
+          }
+        }
+      }
+      return null;
+    },
+    stationsBody: (ids) => pick(ids)?.stationsBody() ?? null,
+    stopsBody: (ids, mask = 7) => pick(ids)?.stopsBody(mask) ?? null,
+    linesBody: (ids) => pick(ids)?.linesBody() ?? null,
+    networkPack: (ids) => pick(ids)?.networkPack() ?? null,
   };
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { REGION_ID, REGIONS, VEHICLE_MODES, type RegionId, type VehicleMode } from '../region';
+import { REGION_ID, REGIONS, regionModes, type RegionId, type VehicleMode } from '../region';
 import type { AppLocale } from '../i18n';
 import { REGION_SKETCH, REGION_SKETCH_SIZE } from '../data/regionSketch';
 
@@ -33,13 +33,13 @@ interface Props {
   logo: string;
 }
 
-const REGION_ORDER: RegionId[] = ['sk', 'pid'];
+const REGION_ORDER: RegionId[] = ['sk', 'pid', 'jmk'];
 /** Wider than this the menu is a card in the corner; narrower it fills the screen. */
 const DESKTOP_QUERY = '(min-width: 801px)';
 
 /**
  * Full-screen menu behind the hamburger. Regions are cards with a sketch of their rail network
- * (each region is a page of its own, "/" and "/pid", so choosing one opens it); language is a
+ * (each region is a page of its own, "/", "/pid" and "/jmk", so choosing one opens it); language is a
  * two-way switch and the colour mode a toggle.
  */
 export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocale, theme, onTheme, onAbout, modes, onToggleMode, logo }) => {
@@ -163,11 +163,11 @@ export const MainMenu: React.FC<Props> = ({ open, onClose, copy, locale, onLocal
           </div>
         </section>
 
-        {REGION_ID === 'pid' && (
+        {REGION_ID !== 'sk' && (
           <section className="menu__group">
             <h2 className="menu__label">{copy.menuShow}</h2>
             <div className="menu__chips" role="group" aria-label={copy.menuShow}>
-              {VEHICLE_MODES.map((mode) => (
+              {regionModes(REGION_ID).map((mode) => (
                 <button
                   key={mode}
                   type="button"

@@ -2,7 +2,7 @@
  * Draws each region as a tiny SVG for the menu's region cards: its outline and the lines
  * passenger trains run on.
  *
- *   node scripts/buildRegionSketches.mjs [proxy = http://127.0.0.1:3001]
+ *   node scripts/buildRegionSketches.mjs [proxy = http://127.0.0.1:3001] [only = jmk,pid]
  *
  * The outline comes from OpenStreetMap (Nominatim, once), the lines from the proxy's journeys
  * (the routes of the trains running right now, so run it by day). Writes src/data/regionSketch.ts.
@@ -11,6 +11,8 @@ import fs from 'node:fs';
 import { decodePolyline } from '../proxy/railRoute.mjs';
 
 const proxy = process.argv[2] ?? 'http://127.0.0.1:3001';
+// regions to redraw (the others keep their sketch from the file)
+const only = (process.argv[3] ?? '').split(',').filter(Boolean);
 const W = 200;
 const H = 120;
 const PAD = 6;
@@ -21,6 +23,10 @@ const REGIONS = {
   pid: {
     journeys: '&regions=pid&only=1',
     outlines: ['state=Středočeský kraj&country=Czechia', 'city=Praha&country=Czechia'],
+  },
+  jmk: {
+    journeys: '&regions=jmk&only=1',
+    outlines: ['state=Jihomoravský kraj&country=Czechia'],
   },
 };
 
@@ -80,8 +86,13 @@ async function routeLines(query) {
   return lines;
 }
 
-const out = {};
+const file = new URL('../src/data/regionSketch.ts', import.meta.url);
+const existing = fs.existsSync(file)
+  ? JSON.parse(fs.readFileSync(file, 'utf8').match(/REGION_SKETCH:[^=]*=\s*(\{[\s\S]*\});/)?.[1] ?? '{}')
+  : {};
+const out = { ...existing };
 for (const [id, region] of Object.entries(REGIONS)) {
+  if (only.length > 0 && !only.includes(id)) continue;
   const rings = [];
   for (const query of region.outlines) {
     rings.push(...(await outlineRings(query)));
@@ -146,10 +157,10 @@ for (const [id, region] of Object.entries(REGIONS)) {
 }
 
 fs.writeFileSync(
-  new URL('../src/data/regionSketch.ts', import.meta.url),
+  file,
   `/** Outline and train lines of each region as small SVG paths (200 x 120), made by scripts/buildRegionSketches.mjs. */
 export const REGION_SKETCH_SIZE = { width: ${W}, height: ${H} };
 
-export const REGION_SKETCH: Record<'sk' | 'pid', { outline: string; rails: string }> = ${JSON.stringify(out, null, 2)};
+export const REGION_SKETCH: Record<'sk' | 'pid' | 'jmk', { outline: string; rails: string }> = ${JSON.stringify(out, null, 2)};
 `
 );

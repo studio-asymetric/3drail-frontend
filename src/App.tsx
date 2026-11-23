@@ -2055,8 +2055,8 @@ const App: React.FC = () => {
           menuShow: t.menuShow,
           modeNames: { rail: t.modeRail, metro: t.modeMetro, tram: t.modeTram, trolley: t.modeTrolley, bus: t.modeBus },
           menuStudio: t.menuStudio,
-          regionNames: { sk: t.regionSk, pid: t.regionPid },
-          regionMeta: { sk: t.regionSkMeta, pid: t.regionPidMeta },
+          regionNames: { sk: t.regionSk, pid: t.regionPid, jmk: t.regionJmk },
+          regionMeta: { sk: t.regionSkMeta, pid: t.regionPidMeta, jmk: t.regionJmkMeta },
         }}
       />
       {toasts.length > 0 && (

@@ -155,7 +155,9 @@ const AboutArticleCs = () => (
         mapa.zsr.sk
       </a>{' '}
       po cookie handshake. Tabule stanic jsou z cp.sk a idos.cz. Pražská data jsou z otevřených dat PID
-      (jízdní řády, licence CC BY) a živých poloh přes Golemio API. Podklad OpenFreeMap (OSM) a terén přes
+      (jízdní řády, licence CC BY) a živých poloh přes Golemio API. Data z Brna a Jihomoravského kraje jsou z
+      otevřených dat KORDIS JMK (jízdní řády, licence CC BY 4.0) a z živých poloh vozidel statutárního města Brna.
+      Podklad OpenFreeMap (OSM) a terén přes
       proxy. Geometrie kolejí © OpenStreetMap (ODbL). Vlakové feedy nepřeposílejte dál — aplikace jen
       zobrazuje to, co už ukazují veřejné mapy provozovatelů.
     </p>

@@ -85,7 +85,7 @@ const WELD_METERS = 4;
 const WELD_ANGLE = 25;
 
 /** Drop repeated points and a spike folded back at either end; [] for tiny loops. */
-function cleanWayGeometry(geometry) {
+function cleanWayGeometry(geometry, keepShort = false) {
   let out = [];
   geometry.forEach((raw) => {
     const point = { lat: raw.lat, lng: raw.lon ?? raw.lng };
@@ -114,7 +114,7 @@ function cleanWayGeometry(geometry) {
     minLng = Math.min(minLng, point.lng);
     maxLng = Math.max(maxLng, point.lng);
   });
-  if (distanceMeters(minLat, minLng, maxLat, maxLng) < DEGENERATE_METERS) {
+  if (!keepShort && distanceMeters(minLat, minLng, maxLat, maxLng) < DEGENERATE_METERS) {
     return [];
   }
   return out;
@@ -180,9 +180,10 @@ class MinHeap {
 /**
  * Build the routing graph from pack ways ({ geometry: [{lat, lon}] }).
  * Shared endpoints in the pack are exact at 1e-5 degrees, so nodes are keyed by
- * those integers. Geometry is never moved to a grid.
+ * those integers. Geometry is never moved to a grid. `keepShort` keeps the tiny ways of raw
+ * OpenStreetMap data (bridges, switch pieces): without them a line falls apart.
  */
-export function buildRouteGraph(ways) {
+export function buildRouteGraph(ways, { keepShort = false } = {}) {
   const startedAt = Date.now();
   const lat = [];
   const lng = [];
@@ -224,7 +225,7 @@ export function buildRouteGraph(ways) {
     adjacency[right] = adjacency[right].filter((edge) => edge.to !== left);
   };
 
-  const cleaned = ways.map((way) => cleanWayGeometry(way.geometry ?? [])).filter((line) => line.length >= 2);
+  const cleaned = ways.map((way) => cleanWayGeometry(way.geometry ?? [], keepShort)).filter((line) => line.length >= 2);
   cleaned.forEach((geometry) => {
     let previous = -1;
     geometry.forEach((point) => {

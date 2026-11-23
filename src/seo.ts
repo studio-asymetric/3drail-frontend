@@ -72,6 +72,20 @@ export function seoFor(locale: AppLocale, state: SeoState): { title: string; des
       ),
     };
   }
+  if (REGION_ID === 'jmk') {
+    return {
+      title: pick(
+        'Mapa vlakov a MHD Brna a Juhomoravského kraja (JMK) naživo | Môj Vlak',
+        'Mapa vlaků a MHD Brna a Jihomoravského kraje (JMK) živě | Môj Vlak',
+        'Live train and tram map of Brno and South Moravia (JMK) | Môj Vlak'
+      ),
+      description: pick(
+        'Poloha vlakov, električiek, trolejbusov a autobusov v Brne a Juhomoravskom kraji naživo: mapa IDS JMK s meškaním, zastávkami a trasou každého vlaku.',
+        'Poloha vlaků, tramvají, trolejbusů a autobusů v Brně a Jihomoravském kraji živě: mapa IDS JMK se zpožděním, zastávkami a trasou každého vlaku.',
+        'Where the trains, trams, trolleybuses and buses of Brno and South Moravia are right now: live IDS JMK positions with delays, stops and the route of each train.'
+      ),
+    };
+  }
   return base;
 }
 
