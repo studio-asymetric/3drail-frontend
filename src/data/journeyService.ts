@@ -27,6 +27,8 @@ export interface Journey {
    * crossing at a passing loop) or 'pass' (the train runs through).
    */
   stops: Array<{ along: number; arr: number; dep: number; kind: StopKind }>;
+  /** The timetable's own times at the same points, before any stand was added (tram and metro model). */
+  sched?: Array<{ along: number; arr: number; dep: number }>;
   /**
    * Runs between two places the train stands (departure, arrival in epoch s).
    * Within a run the train speeds up and slows down gently; passing points
@@ -242,6 +244,7 @@ export function buildJourney(raw: RawJourney): Journey | null {
     }
   });
   const stops: Journey['stops'] = [];
+  const sched: NonNullable<Journey['sched']> = [];
   (raw.stops ?? []).forEach(([along, arrRaw, depRaw, , kindCode]) => {
     const arr = arrRaw ?? depRaw;
     const dep = depRaw ?? arrRaw;
@@ -259,6 +262,7 @@ export function buildJourney(raw: RawJourney): Journey | null {
     }
     const arrives = last ? Math.max(arrival, last.dep) : arrival;
     stops.push({ along, arr: arrives, dep: Math.max(departure, arrives), kind });
+    sched.push({ along, arr: arrives, dep: Math.max(dep, arrives) });
   });
   // A halt reads arr = dep. Give such passenger stops a short stand that ends
   // at the (mid-minute) departure, taken from the run before, so the pill
@@ -286,7 +290,7 @@ export function buildJourney(raw: RawJourney): Journey | null {
       runStart = stop.dep;
     }
   }
-  return { train: raw.n, sig: raw.sig, lat, lng, cum, stops, runs, at: raw.at ?? [], bus: raw.bus ?? [], ok: raw.ok };
+  return { train: raw.n, sig: raw.sig, lat, lng, cum, stops, sched, runs, at: raw.at ?? [], bus: raw.bus ?? [], ok: raw.ok };
 }
 
 /**
@@ -316,6 +320,81 @@ function easedRunTime(runs: Journey['runs'], t: number): number {
     return start + pace * (s - ramp / 2);
   }
   return t;
+}
+
+/** Seconds a tram / metro stands at a stop (Prague): it arrives at the timetable time and leaves this much later. */
+const SCHED_DWELL_SECONDS: Record<string, number> = { tram: 10, metro: 20 };
+/** Seconds a tram or metro takes to get up to speed after a stop and to brake into the next. */
+const SCHED_RAMP_SECONDS = 8;
+/** A tram or metro is placed at most this early (s). */
+const SCHED_MAX_EARLY_SECONDS = 60;
+
+const dwellCache = new WeakMap<Journey, Map<number, Array<{ along: number; arr: number; dep: number }>>>();
+
+function dwellStops(journey: Journey, dwell: number) {
+  let byDwell = dwellCache.get(journey);
+  if (!byDwell) {
+    byDwell = new Map();
+    dwellCache.set(journey, byDwell);
+  }
+  let out = byDwell.get(dwell);
+  if (!out) {
+    out = (journey.sched ?? journey.stops).map((s) => ({ along: s.along, arr: s.arr, dep: s.dep }));
+    // Every stop in the middle: arrives on the timetable minute, leaves `dwell` seconds later
+    // (never after the next arrival).
+    for (let index = 1; index < out.length - 1; index += 1) {
+      const stop = out[index];
+      stop.dep = Math.max(stop.arr, Math.min(Math.max(stop.dep, stop.arr + dwell), out[index + 1].arr));
+    }
+    byDwell.set(dwell, out);
+  }
+  return out;
+}
+
+/**
+ * Metres along the line of a tram or metro at timetable time `t` (epoch s): it arrives at each
+ * stop at its timetable time, stands `dwell` seconds, and runs to the next one.
+ */
+export function scheduledAlong(journey: Journey, t: number, dwell: number): number | null {
+  const stops = dwellStops(journey, dwell);
+  if (stops.length < 2) {
+    return null;
+  }
+  const first = stops[0];
+  const last = stops[stops.length - 1];
+  if (t < first.dep - EDGE_SECONDS) {
+    return null;
+  }
+  if (t >= last.arr) {
+    return last.along;
+  }
+  if (t <= first.dep) {
+    return first.along;
+  }
+  for (let index = 0; index < stops.length - 1; index += 1) {
+    const from = stops[index];
+    const to = stops[index + 1];
+    if (t < from.dep) {
+      return from.along;
+    }
+    if (t <= to.arr) {
+      const total = to.arr - from.dep;
+      if (total <= 0) {
+        return to.along;
+      }
+      const s = t - from.dep;
+      const ramp = Math.min(SCHED_RAMP_SECONDS, total / 2);
+      const pace = total / (total - ramp);
+      const done =
+        s < ramp
+          ? (pace * s * s) / (2 * ramp)
+          : s > total - ramp
+            ? total - (pace * (total - s) * (total - s)) / (2 * ramp)
+            : pace * (s - ramp / 2);
+      return from.along + (to.along - from.along) * Math.max(0, Math.min(1, done / total));
+    }
+  }
+  return last.along;
 }
 
 let lastJourneysEtag = '';
@@ -505,6 +584,8 @@ type TrainModelState = {
   hold?: boolean;
   /** The reports are live GPS fixes (a region feed): the model stays close to them. */
   live?: boolean;
+  /** Tram or metro: placed from timetable + delay alone (this is the stand in seconds per stop). */
+  sched?: number;
   /** Live fixes: when the newest one was taken, where it put the train, and the speed the last two imply (m/s). */
   fixMs?: number;
   fixFloor?: number;
@@ -521,6 +602,10 @@ type TrainModelState = {
 export interface LiveTrainInput {
   trainNumber: string;
   delayMinutes: number;
+  /** 'tram', 'metro', 'bus'...; absent for trains. */
+  mode?: string;
+  /** Exact delay in seconds (region feeds). */
+  delaySeconds?: number;
   position?: { lat: number; lng: number };
   rosterOrderCurrentStation?: number;
   /** The position is a live GPS fix: the train is never shown behind it. */
@@ -587,6 +672,9 @@ export class JourneyAnimator {
         ? (train.rosterOrderCurrentStation as number)
         : -1;
       let floor: number | null = checkpoint >= 0 ? journey.at[checkpoint] ?? null : null;
+      // Prague trams and metro: no GPS, just the delay and the stops (see scheduledAlong).
+      const schedDwell =
+        train.rosterLiveGps && Number.isFinite(train.delaySeconds) ? SCHED_DWELL_SECONDS[train.mode ?? ''] : undefined;
       if (train.position) {
         const fix = projectOnJourney(journey, train.position.lat, train.position.lng);
         if (fix.off > OFF_LINE_METERS) {
@@ -596,7 +684,7 @@ export class JourneyAnimator {
         if (floor == null) {
           floor = fix.along;
           checkpoint = journey.at.findIndex((along) => along != null && along > fix.along + 30) - 1;
-        } else if (train.rosterLiveGps && (fix.along > floor || fix.along < floor - LIVE_STATION_MISMATCH_METERS)) {
+        } else if (train.rosterLiveGps && schedDwell == null && (fix.along > floor || fix.along < floor - LIVE_STATION_MISMATCH_METERS)) {
           // A real fix ahead of the last stop: the train has moved on, so draw it at least there.
           // One far behind it means the stop number does not fit the line: the GPS wins.
           floor = fix.along;
@@ -604,6 +692,25 @@ export class JourneyAnimator {
       }
       if (floor == null) {
         this.markInactive(train.trainNumber, journey.sig);
+        return;
+      }
+      if (schedDwell != null) {
+        const before = this.states.get(train.trainNumber);
+        const same = before && before.sig === journey.sig ? before : null;
+        const delay = train.delaySeconds as number;
+        this.states.set(train.trainNumber, {
+          sig: journey.sig,
+          delaySeconds: Math.max(-SCHED_MAX_EARLY_SECONDS, delay),
+          reportedDelay: delay,
+          unconfirmed: false,
+          live: true,
+          sched: schedDwell,
+          floor,
+          shownAlong: same ? same.shownAlong : null,
+          shownSpeed: same?.shownSpeed,
+          lastMs: before?.lastMs ?? 0,
+          active: true,
+        });
         return;
       }
       // ZSR does not report at every stop, so between reports the train keeps
@@ -725,6 +832,11 @@ export class JourneyAnimator {
     // ZSR often raises the delay of a train it still lists as waiting: give it a
     // short grace after departure + delay before the pill leaves the station.
     const grace = state.unconfirmed ? UNCONFIRMED_GRACE_SECONDS : 0;
+    if (state.sched != null) {
+      // Where the timetable puts it, shifted by the delay; never behind the last stop it served.
+      const along = scheduledAlong(journey, nowMs / 1000 - state.delaySeconds, state.sched);
+      return Math.max(state.floor, along ?? state.floor);
+    }
     if (state.hold) {
       return state.floor;
     }
@@ -810,7 +922,8 @@ export class JourneyAnimator {
       // Never pinging: a new fix shows how far off the guess was; the drawn vehicle speeds up or slows
       // down toward the speed that closes the gap (gently: a bus does not lurch), and stands when it
       // is ahead of where it should be.
-      const pace = state.speed ?? 8;
+      const pace =
+        state.sched != null ? Math.max(0, (this.target(train, nowMs + 1000) ?? target) - target) : state.speed ?? 8;
       let wanted: number;
       if (gap >= 0) {
         wanted = Math.min(pace * LIVE_CATCH_UP + 2 + Math.min(LIVE_CATCH_UP_MAX, gap * LIVE_CATCH_UP_PER_METER), Math.max(pace, gap / LIVE_CHASE_SECONDS + pace * 0.5));

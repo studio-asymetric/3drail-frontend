@@ -50,6 +50,8 @@ interface MapaZsrTrain {
   PositionLive?: boolean;
   /** Region feeds: when the GPS fix was taken (epoch ms). */
   PositionAt?: number;
+  /** Region feeds: the exact delay in seconds (`Meska` is rounded to minutes). */
+  MeskaSek?: number;
   /** Region feeds: 'tram', 'metro', 'bus', 'trolley' (absent for trains). */
   Rezim?: string;
   /** Region feeds: the line's own colour (metro A, B, C). */
@@ -113,6 +115,7 @@ export interface TrainRosterItem {
   /** `position` is a live GPS fix (not the last station). */
   liveGps?: boolean;
   liveAt?: number;
+  delaySeconds?: number;
   mode?: string;
   lineColor?: string;
   summary?: string;
@@ -155,6 +158,8 @@ export interface TrainRenderState {
   rosterOrderCurrentStation?: number;
   rosterLiveGps?: boolean;
   rosterLiveAt?: number;
+  /** Exact delay in seconds (region feeds). */
+  delaySeconds?: number;
   liveRoute?: Coordinate[];
   routeSegments?: RouteSegment[];
   /** Every point mapa.zsr.sk lists for the journey, junctions included, in order. */
@@ -722,6 +727,7 @@ function convertTrainsToRosterItems(trains: MapaZsrTrain[]): TrainRosterItem[] {
       orderCurrentStation: Number.isFinite(parsedOrder) ? parsedOrder : undefined,
       liveGps: train.PositionLive === true ? true : undefined,
       liveAt: typeof train.PositionAt === 'number' ? train.PositionAt : undefined,
+      delaySeconds: typeof train.MeskaSek === 'number' ? train.MeskaSek : undefined,
       mode: train.Rezim || undefined,
       lineColor: /^#[0-9a-f]{6}$/i.test(train.Farba ?? '') ? train.Farba : undefined,
       summary: train.Popis || train.Nazov || undefined,
@@ -824,6 +830,7 @@ export function buildTrainRenderState(
       rosterOrderCurrentStation: roster.orderCurrentStation,
       rosterLiveGps: roster.liveGps,
       rosterLiveAt: roster.liveAt,
+      delaySeconds: roster.delaySeconds,
       summary: roster.summary,
       operator: roster.operator,
       delayText: roster.delayText,
@@ -886,6 +893,7 @@ export function buildTrainRenderState(
     rosterOrderCurrentStation: roster.orderCurrentStation,
     rosterLiveGps: roster.liveGps,
     rosterLiveAt: roster.liveAt,
+    delaySeconds: roster.delaySeconds,
     summary: roster.summary,
     operator: roster.operator,
     delayText: roster.delayText,

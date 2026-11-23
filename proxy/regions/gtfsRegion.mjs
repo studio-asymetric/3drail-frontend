@@ -511,6 +511,7 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
           Trasa: [],
           Meska: delayMin,
           MeskaSkutocne: delayMin,
+          MeskaSek: lv ? delaySec : undefined,
           MeskaColor: delayMin > 5 ? 'red' : delayMin > 1 ? 'orange' : 'green',
           InfoZoStanice: name(entry.trip.stops[lastIdx].stopId),
           NextStation: name(next.stopId),
