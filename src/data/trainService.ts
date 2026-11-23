@@ -1,4 +1,4 @@
-import { REGION_ID, regionsQuery } from '../region';
+import { REGION_ID, readStoredModes, regionsQuery } from '../region';
 import type {
   Coordinate,
   GtfsDataset,
@@ -342,6 +342,9 @@ export function formatTrainDisplayName(name: string): string {
 }
 
 /** Buses, trams and metro are drawn white: the delay colours belong to the trains. */
+/** `&modes=...` on a region page: the proxy leaves out the kinds of vehicle that are switched off (a city's buses are most of the feed). */
+const shownModesQuery = (): string => (REGION_ID === 'sk' ? '' : `&modes=${readStoredModes().join(',')}`);
+
 export const VEHICLE_PILL_COLOR = '#ffffff';
 
 /** Metro lines carry their own colour; so do Brno's trams (each line of the city has one). */
@@ -450,7 +453,7 @@ async function fetchAllTrainsOnce(options?: LiveFetchOptions): Promise<TrainRost
   const proxyUrl = options?.proxyUrl ?? '/proxy';
   const endpoint =
     isProxy
-      ? `${proxyUrl.replace(/\/$/, '')}/gtall?mode=gtall${options?.refresh ? '&refresh=1' : ''}${regionsQuery()}`
+      ? `${proxyUrl.replace(/\/$/, '')}/gtall?mode=gtall${options?.refresh ? '&refresh=1' : ''}${regionsQuery()}${shownModesQuery()}`
       : '/api/action';
   
   try {

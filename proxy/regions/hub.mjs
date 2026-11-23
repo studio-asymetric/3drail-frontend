@@ -82,6 +82,8 @@ const CONFIGS = {
     version: JMK_DATA_VERSION,
     // the stream costs nothing to keep: stay connected so the next visitor sees vehicles at once
     idleMs: 60 * 60_000,
+    // built at server start, so the first visitor does not wait for it
+    prebuild: true,
     build: buildJmkRegion,
     startLive: ({ region, dir, log }) => startJmkLive({ region, dataDir: dir, log }),
   },
@@ -111,22 +113,38 @@ function createOneRegion(config, log) {
     }
   };
 
+  /** Makes sure the cut-down timetable on disk is current (downloads and builds it when it is not). */
+  let preparing = null;
+  function prepare() {
+    if (dataFresh()) return Promise.resolve();
+    preparing ??= (async () => {
+      try {
+        await config.build(dataDir, log);
+      } catch (error) {
+        say(`update failed: ${error instanceof Error ? error.message : String(error)}`);
+        if (!fs.existsSync(path.join(dataDir, 'trips.txt'))) {
+          throw error;
+        }
+      } finally {
+        preparing = null;
+      }
+    })();
+    return preparing;
+  }
+
   async function load() {
     if (loading) return;
     loading = true;
     try {
-      if (!dataFresh()) {
-        try {
-          await config.build(dataDir, log);
-        } catch (error) {
-          say(`update failed: ${error instanceof Error ? error.message : String(error)}`);
-          if (!fs.existsSync(path.join(dataDir, 'trips.txt'))) {
-            throw error;
-          }
-        }
-      }
+      await prepare();
       region = createGtfsRegion({ dir: dataDir, tz: 'Europe/Prague', log });
       loadedAt = Date.now();
+      // the live feed was handed the old region: it starts again, on the new one, with the next request
+      if (stopLive) {
+        stopLive();
+        stopLive = null;
+        clearInterval(idleTimer);
+      }
       packBody = null;
       stationsBody = null;
       linesBody = null;
@@ -159,8 +177,7 @@ function createOneRegion(config, log) {
       }
     }
     if (region && Date.now() - loadedAt > 24 * 3_600_000 && !loading) {
-      // a day old: read the refreshed timetable
-      region = null;
+      // a day old: read the refreshed timetable (the old one keeps serving until the new one is ready)
       load();
     }
     return region;
@@ -169,6 +186,8 @@ function createOneRegion(config, log) {
   return {
     id: config.id,
     touch,
+    /** Builds the timetable on disk ahead of the first visitor. */
+    warm: () => (config.prebuild ? prepare().catch(() => undefined) : Promise.resolve()),
     peek: () => region,
     trains: () => touch()?.trains() ?? [],
     journeys() {
@@ -198,7 +217,7 @@ function createOneRegion(config, log) {
     stopsBody(mask = 7) {
       const r = touch();
       if (!r) return null;
-      const key = mask & 7;
+      const key = mask & 15;
       if (!stopsBodies.has(key)) {
         const rows = r
           .transitStops()
@@ -259,6 +278,8 @@ export function createRegionHub(log = () => undefined) {
       }
       return null;
     },
+    /** Builds the timetables that are worth having ready (not Prague's: that download is large). */
+    warm: () => Promise.all([...regions.values()].map((one) => one.warm())),
     stationsBody: (ids) => pick(ids)?.stationsBody() ?? null,
     stopsBody: (ids, mask = 7) => pick(ids)?.stopsBody(mask) ?? null,
     linesBody: (ids) => pick(ids)?.linesBody() ?? null,

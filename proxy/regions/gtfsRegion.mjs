@@ -610,13 +610,13 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
 
     /**
      * Tram, metro, bus and trolleybus stops: [[name, kinds, [[lat, lng], ...]]], kinds 1 tram, 2 metro,
-     * 4 bus (buses, trolleybuses, ferries). Platforms of one name close together are one stop with
+     * 4 bus (buses, ferries), 8 trolleybus. Platforms of one name close together are one stop with
      * several spots (spots within 14 m count as one).
      */
     transitStops() {
       const file = path.join(dir, 'stop_modes.txt');
       if (!fs.existsSync(file)) return [];
-      const BIT = { tram: 1, metro: 2, bus: 8 | 16 | 64 };
+      const BIT = { tram: 1, metro: 2, bus: 8 | 16, trolley: 64 };
       const groups = new Map(); // name|cell -> { name, kinds, spots: [[lat, lng]] }
       for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
         if (!line) continue;
@@ -624,7 +624,7 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
         const stop = stops.get(line.slice(0, comma));
         const mask = Number(line.slice(comma + 1));
         if (!stop || !Number.isFinite(stop.lat)) continue;
-        const kinds = (mask & BIT.tram ? 1 : 0) | (mask & BIT.metro ? 2 : 0) | (mask & BIT.bus ? 4 : 0);
+        const kinds = (mask & BIT.tram ? 1 : 0) | (mask & BIT.metro ? 2 : 0) | (mask & BIT.bus ? 4 : 0) | (mask & BIT.trolley ? 8 : 0);
         if (!kinds) continue; // a stop only trains call at is a station, not here
         const key = `${stop.name}|${Math.round(stop.lat * 300)}|${Math.round(stop.lng * 190)}`;
         let group = groups.get(key);

@@ -19,6 +19,7 @@ WORKDIR /app
 COPY --from=build /app/dist ./dist
 COPY proxy/*.mjs ./proxy/
 COPY proxy/regions/*.mjs ./proxy/regions/
+COPY proxy/regions/*.json ./proxy/regions/
 RUN npm install --omit=dev pbf @mapbox/vector-tile
 
 RUN mkdir -p /data/osm-cache

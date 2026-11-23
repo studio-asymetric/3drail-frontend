@@ -4,6 +4,7 @@ import { REGION_ID, type VehicleMode } from '../region';
 export const STOP_TRAM = 1;
 export const STOP_METRO = 2;
 export const STOP_BUS = 4;
+export const STOP_TROLLEY = 8;
 
 export interface TransitStop {
   name: string;
@@ -14,9 +15,9 @@ export interface TransitStop {
   spots: Array<[number, number]>;
 }
 
-/** The stop kinds that go with the vehicle kinds switched on (trolleybuses stop with the buses). */
+/** The stop kinds that go with the vehicle kinds switched on. */
 export function stopKindsOf(modes: VehicleMode[]): number {
-  return (modes.includes('tram') ? STOP_TRAM : 0) | (modes.includes('metro') ? STOP_METRO : 0) | (modes.includes('bus') || modes.includes('trolley') ? STOP_BUS : 0);
+  return (modes.includes('tram') ? STOP_TRAM : 0) | (modes.includes('metro') ? STOP_METRO : 0) | (modes.includes('bus') ? STOP_BUS : 0) | (modes.includes('trolley') ? STOP_TROLLEY : 0);
 }
 
 /** Tram, metro and bus stops of the region. */
@@ -39,7 +40,7 @@ export async function fetchTransitStops(kinds: number, signal?: AbortSignal): Pr
         name,
         tram: Boolean(mask & STOP_TRAM),
         metro: Boolean(mask & STOP_METRO),
-        bus: Boolean(mask & STOP_BUS),
+        bus: Boolean(mask & (STOP_BUS | STOP_TROLLEY)),
         spots,
       }));
     }

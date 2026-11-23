@@ -980,8 +980,18 @@ async function refreshGtall({ force = false, ping = true } = {}) {
 }
 
 const regionHub = createRegionHub((message) => logMessage(message));
+// the Brno timetable is built a little after start, so the first visitor finds it ready
+setTimeout(() => regionHub.warm(), 15_000);
 
 /** `only=1`: the page shows just the requested region, so Slovakia's data is left out. */
+/** `modes=rail,tram,...`: leave out the kinds of vehicle the page does not show (buses are most of a city's feed). */
+function onlyModes(rows, reqUrl) {
+  const asked = (reqUrl.searchParams.get('modes') ?? '').split(',').filter(Boolean);
+  if (asked.length === 0) return rows;
+  const kind = (mode) => (!mode ? 'rail' : mode === 'metro' || mode === 'tram' || mode === 'trolley' ? mode : 'bus');
+  return rows.filter((row) => asked.includes(kind(row.Rezim)));
+}
+
 const onlyRegions = (reqUrl) => requestedRegions(reqUrl).length > 0 && reqUrl.searchParams.get('only') === '1';
 
 async function handleGtall(reqUrl, res) {
@@ -993,8 +1003,8 @@ async function handleGtall(reqUrl, res) {
     status: state.status,
     error: state.error,
     data: onlyRegions(reqUrl)
-      ? regionHub.trains(requestedRegions(reqUrl))
-      : [...(state.data ?? []), ...regionHub.trains(requestedRegions(reqUrl))],
+      ? onlyModes(regionHub.trains(requestedRegions(reqUrl)), reqUrl)
+      : [...(state.data ?? []), ...onlyModes(regionHub.trains(requestedRegions(reqUrl)), reqUrl)],
   });
 }
 

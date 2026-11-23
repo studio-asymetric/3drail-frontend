@@ -874,15 +874,24 @@ const App: React.FC = () => {
       setStatusKind('error');
       setStatusMessage(t.trainListUnavailable);
     };
+    refreshTrainsRef.current = refresh;
     refresh();
     // A region's proxy may only be starting its live feed: ask again soon, so the vehicles do not wait a full turn.
     const early = REGION_ID === 'sk' ? [] : [2_500, 5_500].map((ms) => setTimeout(refresh, ms));
     // a region's live feed moves every 15 s (Brno's every few seconds); Slovakia's source is slower
-    const interval = setInterval(refresh, REGION_ID === 'sk' ? 45_000 : REGION_ID === 'jmk' ? 5_000 : 10_000);
+    // a tab nobody looks at does not download the feed; coming back brings it up to date at once
+    const interval = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, REGION_ID === 'sk' ? 45_000 : REGION_ID === 'jmk' ? 5_000 : 10_000);
+    const onVisible = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
       mounted = false;
       early.forEach(clearTimeout);
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, [service, t, useLiveApi, pushToast]);
 
@@ -1285,7 +1294,15 @@ const App: React.FC = () => {
     });
   }, []);
   // switching a kind off removes it at once; switching it on brings it back with the next update
+  const refreshTrainsRef = useRef<(() => void) | null>(null);
+  const firstModesRef = useRef(true);
   useEffect(() => {
+    if (firstModesRef.current) {
+      firstModesRef.current = false;
+    } else if (REGION_ID !== 'sk') {
+      // the proxy leaves out the kinds that are off: ask again so a kind switched on shows now
+      refreshTrainsRef.current?.();
+    }
     setTrains((current) => {
       const kept = current.filter((train) => modes.includes(vehicleModeOf(train.mode)));
       return kept.length === current.length ? current : kept;

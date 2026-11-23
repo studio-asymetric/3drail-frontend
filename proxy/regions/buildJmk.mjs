@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { buildRailSubset } from './buildGtfs.mjs';
 import { buildRouteGraph, traceRoute } from '../railRoute.mjs';
 
@@ -76,8 +77,19 @@ async function eachRow(file, onRow) {
 
 const csvCell = (value) => (/[",\n]/.test(String(value)) ? `"${String(value).replace(/"/g, '""')}"` : String(value));
 
-/** OSM rails and tram tracks of South Moravia, cached on disk. */
+/** OSM rails and tram tracks of South Moravia, as downloaded once and kept in the repository (Overpass is slow and often busy). */
+const BUNDLED_OSM = path.join(path.dirname(fileURLToPath(import.meta.url)), 'jmk-osm.json');
+
+/**
+ * OSM rails and tram tracks of South Moravia: the copy kept in the repository, else a cached download,
+ * else a fresh download. To refresh the copy, delete it and the cache and run a build once.
+ */
 async function loadOsm(cacheFile, log) {
+  try {
+    return JSON.parse(fs.readFileSync(BUNDLED_OSM, 'utf8'));
+  } catch {
+    // not there: use the cache or download below
+  }
   try {
     if (Date.now() - fs.statSync(cacheFile).mtimeMs < OSM_MAX_AGE_MS) {
       return JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
@@ -113,6 +125,11 @@ out geom tags;`;
       if (ways.length < 100) throw new Error(`only ${ways.length} ways`);
       fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
       fs.writeFileSync(cacheFile, JSON.stringify(ways));
+      try {
+        fs.writeFileSync(BUNDLED_OSM, JSON.stringify(ways)); // so the next build (and a commit) has it
+      } catch {
+        // a read-only install: the cache is enough
+      }
       return ways;
     } catch (error) {
       lastError = error;
