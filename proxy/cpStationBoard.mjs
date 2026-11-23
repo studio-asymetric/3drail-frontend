@@ -3,6 +3,8 @@ const CP_BOARD_URL = 'https://cp.sk/vlakbusmhd/odchody/';
 export const IDOS_BOARD_URL = 'https://idos.cz/vlaky/odjezdy/';
 /** The same for every kind of vehicle (trams, metro, buses): the boards of Prague's other stops. */
 export const IDOS_ALL_BOARD_URL = 'https://idos.cz/vlakyautobusymhdvse/odjezdy/';
+/** Brno and South Moravia (IDS JMK): trains, trams, trolleybuses and buses of the region on one board. */
+export const IDOS_BRNO_BOARD_URL = 'https://idos.cz/brno/odjezdy/';
 
 function decodeEntities(value) {
   return String(value ?? '')

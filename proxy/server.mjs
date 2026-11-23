@@ -32,7 +32,7 @@ import {
   ROUTE_ALGORITHM_VERSION,
   traceRoute,
 } from './railRoute.mjs';
-import { fetchStationBoard, IDOS_ALL_BOARD_URL, IDOS_BOARD_URL } from './cpStationBoard.mjs';
+import { fetchStationBoard, IDOS_ALL_BOARD_URL, IDOS_BOARD_URL, IDOS_BRNO_BOARD_URL } from './cpStationBoard.mjs';
 import { createJourneyStore } from './journeys.mjs';
 import { createRegionHub, requestedRegions } from './regions/hub.mjs';
 import { ensureRailwayTunnels, mergeTunnelWays } from './osmTunnels.mjs';
@@ -1605,14 +1605,16 @@ async function handleStationBoard(reqUrl, res) {
   const regional = requestedRegions(reqUrl).length > 0;
   // a tram, metro or bus stop (all=1) gets the board of every kind of vehicle
   const allKinds = regional && reqUrl.searchParams.get('all') === '1';
-  const boardUrl = regional ? (allKinds ? IDOS_ALL_BOARD_URL : IDOS_BOARD_URL) : undefined;
+  const regionId = requestedRegions(reqUrl)[0];
+  // Brno's board lists every kind of vehicle of the region; Prague's trains and its other stops have two boards
+  const boardUrl = regionId === 'jmk' ? IDOS_BRNO_BOARD_URL : regional ? (allKinds ? IDOS_ALL_BOARD_URL : IDOS_BOARD_URL) : undefined;
   const station = (reqUrl.searchParams.get('station') ?? reqUrl.searchParams.get('f') ?? '').trim();
   const arrivals = reqUrl.searchParams.get('byarr') === 'true' || reqUrl.searchParams.get('arrivals') === '1';
   if (!station || station.length > 120) {
     sendJson(res, 400, { error: 'Missing station', rows: [] });
     return;
   }
-  const cacheKey = `${regional ? (allKinds ? 'pid-all:' : 'pid:') : ''}${arrivals ? 'arr' : 'dep'}:${station.toLowerCase()}`;
+  const cacheKey = `${regionId === 'jmk' ? 'jmk:' : regional ? (allKinds ? 'pid-all:' : 'pid:') : ''}${arrivals ? 'arr' : 'dep'}:${station.toLowerCase()}`;
   const cached = stationBoardCache.get(cacheKey);
   if (cached && Date.now() - cached.at < STATION_BOARD_CACHE_MS) {
     sendJson(res, 200, { ...cached.payload, status: 'cached' });
