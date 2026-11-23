@@ -74,7 +74,7 @@ describe('a vehicle with live GPS fixes', () => {
     expect(worstStep).toBeLessThan(1.0);
     // and it never strays far from the vehicle (a fix is up to 15 s old: ~180 m at 12 m/s)
     expect(worstGap).toBeLessThan(500);
-    // standing at the end: it is held where the vehicle stands
-    expect(Math.abs((last ?? 0) - 1080)).toBeLessThan(60);
+    // standing at the end: it waits (it does not reverse) at most about one fix interval's run past where the vehicle stands
+    expect(Math.abs((last ?? 0) - 1080)).toBeLessThan(250);
   });
 });

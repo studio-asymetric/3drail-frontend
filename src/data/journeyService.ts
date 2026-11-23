@@ -59,6 +59,8 @@ const EDGE_SECONDS = 5 * 60;
 const OFF_LINE_METERS = 900;
 /** Seconds for the shown position to close most of the gap to a new target. */
 const EASE_SECONDS = 2.5;
+/** The fastest (m/s) a drawn train closes a gap on the timetable. */
+const EASE_MAX_SPEED = 45;
 /** Gaps larger than this are jumped instead of eased (e.g. after a long pause). */
 const SNAP_METERS = 6000;
 /** A target this far behind the shown position is applied; smaller ones wait in place. */
@@ -66,10 +68,29 @@ const BACKTRACK_METERS = 4000;
 /** With live GPS a train drawn this far ahead of its fix is pulled back, and may run no further ahead of it. */
 const LIVE_BACKTRACK_METERS = 150;
 const LIVE_MAX_LEAD_METERS = 900;
+/** Only a train this far ahead of where it should be slides back; nearer ones stand and wait. */
+const LIVE_REVERSE_METERS = 900;
+const LIVE_SNAP_BACK_METERS = 3000;
+/** A live fix this far behind the vehicle's reported stop: the stop is wrong, not the GPS. */
+const LIVE_STATION_MISMATCH_METERS = 1500;
 /** A live train runs on at the speed its last two fixes show for at most this long (s) before the next one. */
-const LIVE_EXTRAPOLATE_SECONDS = 45;
+const LIVE_EXTRAPOLATE_SECONDS = 30;
+/** A stop this close ahead of the last fix is the one the train is standing at, not the next. */
+const STOP_AHEAD_METERS = 40;
 /** Seconds for a live train's drawn spot to close most of the gap to where it should be (forward / back). */
-const LIVE_CHASE_SECONDS = 2.5;
+const LIVE_CHASE_SECONDS = 4;
+/** How much faster than its own speed a drawn train may run to catch up with where it should be. */
+const LIVE_CATCH_UP = 1.2;
+/** Below this speed (m/s) the fixes show a vehicle standing. */
+const LIVE_MOVING_SPEED = 1.5;
+/** A drawn vehicle that is far behind may run up to this much faster than its own speed (m/s per metre of gap). */
+const LIVE_CATCH_UP_PER_METER = 0.015;
+const LIVE_CATCH_UP_MAX = 4;
+/** Acceleration and braking of a drawn live vehicle (m/s per second). */
+const LIVE_ACCEL = 2.2;
+/** No drawn live vehicle runs faster than this (m/s), whatever it has to catch up. */
+const LIVE_MAX_SHOWN_SPEED = 32;
+const LIVE_DECEL = 3.5;
 const LIVE_CHASE_BACK_SECONDS = 3;
 /** Seconds a train shown too far on takes to slide back to where ZSR puts it. */
 const EASE_BACK_SECONDS = 4;
@@ -491,6 +512,8 @@ type TrainModelState = {
   /** Metres along the line of the last reported checkpoint. */
   floor: number;
   shownAlong: number | null;
+  /** How fast the drawn live vehicle is going (m/s); it speeds up and slows down gently. */
+  shownSpeed?: number;
   lastMs: number;
   active: boolean;
 };
@@ -573,8 +596,9 @@ export class JourneyAnimator {
         if (floor == null) {
           floor = fix.along;
           checkpoint = journey.at.findIndex((along) => along != null && along > fix.along + 30) - 1;
-        } else if (train.rosterLiveGps && fix.along > floor) {
+        } else if (train.rosterLiveGps && (fix.along > floor || fix.along < floor - LIVE_STATION_MISMATCH_METERS)) {
           // A real fix ahead of the last stop: the train has moved on, so draw it at least there.
+          // One far behind it means the stop number does not fit the line: the GPS wins.
           floor = fix.along;
         }
       }
@@ -662,13 +686,15 @@ export class JourneyAnimator {
         delaySeconds,
         reportedDelay,
         unconfirmed: train.departureConfirmed === false,
-        hold: Boolean(train.rosterLiveGps && train.departureConfirmed === false),
+        // Standing at a station: held there, unless the fixes show it moving (the flag lags behind).
+        hold: Boolean(train.rosterLiveGps && train.departureConfirmed === false && (speed ?? 0) < LIVE_MOVING_SPEED),
         live: Boolean(train.rosterLiveGps),
         fixMs,
         fixFloor,
-        speed: train.departureConfirmed === false && train.rosterLiveGps ? 0 : speed,
+        speed,
         floor,
         shownAlong: previous && previous.sig === journey.sig ? previous.shownAlong : null,
+        shownSpeed: previous && previous.sig === journey.sig ? previous.shownSpeed : undefined,
         lastMs: previous?.lastMs ?? 0,
         active: true,
       });
@@ -706,7 +732,10 @@ export class JourneyAnimator {
       // Between two live fixes: carry on at the speed the train was going, instead of the timetable
       // (which a tram held at a signal soon disagrees with).
       const age = Math.min(LIVE_EXTRAPOLATE_SECONDS, Math.max(0, (nowMs - state.fixMs) / 1000));
-      return Math.min(state.floor + state.speed * age, state.floor + LIVE_MAX_LEAD_METERS);
+      const run = Math.min(state.floor + state.speed * age, state.floor + LIVE_MAX_LEAD_METERS);
+      // A train that stops at the next station does not run through it: it waits there for the next fix.
+      const next = journey.stops.find((stop) => stop.kind !== 'pass' && stop.along > state.floor + STOP_AHEAD_METERS);
+      return next ? Math.min(run, next.along) : run;
     }
     const scheduled = alongAtTime(journey, nowMs / 1000 - state.delaySeconds - grace);
     const along = scheduled ?? state.floor;
@@ -778,22 +807,30 @@ export class JourneyAnimator {
     let shown = state.shownAlong ?? target;
     const gap = target - shown;
     if (state.live && gap <= SNAP_METERS) {
-      // Always moving, never pinging: a new fix shows how far off the guess was, and that is taken
-      // up gradually (a limit on how much faster than the train itself the drawn spot may go).
+      // Never pinging: a new fix shows how far off the guess was; the drawn vehicle speeds up or slows
+      // down toward the speed that closes the gap (gently: a bus does not lurch), and stands when it
+      // is ahead of where it should be.
       const pace = state.speed ?? 8;
+      let wanted: number;
       if (gap >= 0) {
-        const limit = (pace * 1.5 + 5) * dt;
-        // close the gap, at least as fast as the train itself moves and at most `limit`
-        const wanted = Math.max(gap * (1 - Math.exp(-dt / LIVE_CHASE_SECONDS)), pace * dt);
-        shown += Math.min(wanted, Math.max(limit, pace * dt), gap);
+        wanted = Math.min(pace * LIVE_CATCH_UP + 2 + Math.min(LIVE_CATCH_UP_MAX, gap * LIVE_CATCH_UP_PER_METER), Math.max(pace, gap / LIVE_CHASE_SECONDS + pace * 0.5));
       } else {
-        // ahead of where it should be: slow down to wait, and slide back only gently when far ahead
-        const slow = Math.max(0.2, 1 + gap / LIVE_BACKTRACK_METERS);
-        shown += pace * dt * slow;
-        if (gap < -LIVE_BACKTRACK_METERS) {
-          shown -= Math.min(-gap * (1 - Math.exp(-dt / LIVE_CHASE_BACK_SECONDS)), 8 * dt);
-          this.noteCorrection(train, gap);
-        }
+        wanted = pace * Math.max(0, 1 + gap / LIVE_BACKTRACK_METERS);
+      }
+      wanted = Math.min(wanted, LIVE_MAX_SHOWN_SPEED);
+      let speed = state.shownSpeed ?? Math.min(pace, wanted);
+      speed += Math.max(-LIVE_DECEL * dt, Math.min(LIVE_ACCEL * dt, wanted - speed));
+      speed = Math.max(0, speed);
+      state.shownSpeed = speed;
+      shown += speed * dt;
+      if (gap < -LIVE_SNAP_BACK_METERS) {
+        // a long way ahead of where its reports put it (a glitch): not a minute of reversing
+        shown = target;
+        state.shownSpeed = 0;
+        this.noteCorrection(train, gap);
+      } else if (gap < -LIVE_REVERSE_METERS) {
+        shown -= Math.min(-gap * (1 - Math.exp(-dt / LIVE_CHASE_BACK_SECONDS)), 15 * dt);
+        this.noteCorrection(train, gap);
       }
     } else if (gap < -(state.live ? LIVE_BACKTRACK_METERS : BACKTRACK_METERS)) {
       // The train was shown further on than ZSR says it can be: slide it back
@@ -804,7 +841,8 @@ export class JourneyAnimator {
       shown = target;
       this.noteCorrection(train, gap);
     } else if (gap > 0) {
-      shown += gap * Math.min(1, dt / EASE_SECONDS);
+      // closing a gap on the timetable: quickly, but never faster than a train can run
+      shown += Math.min(gap * Math.min(1, dt / EASE_SECONDS), EASE_MAX_SPEED * dt);
     }
     state.shownAlong = shown;
     return pointAtAlong(journey, shown);
