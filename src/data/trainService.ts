@@ -1,4 +1,4 @@
-import { regionsQuery } from '../region';
+import { REGION_ID, regionsQuery } from '../region';
 import type {
   Coordinate,
   GtfsDataset,
@@ -343,6 +343,9 @@ export function formatTrainDisplayName(name: string): string {
 
 /** Buses, trams and metro are drawn white: the delay colours belong to the trains. */
 export const VEHICLE_PILL_COLOR = '#ffffff';
+
+/** Metro lines carry their own colour; so do Brno's trams (each line of the city has one). */
+const hasLineColour = (mode?: string) => mode === 'metro' || (mode === 'tram' && REGION_ID === 'jmk');
 /** A vehicle's own colour is white, which is invisible on the light theme: dark ink there. */
 export function vehicleInk(color: string | undefined, theme: 'light' | 'dark'): string | undefined {
   return color && color.toLowerCase() === VEHICLE_PILL_COLOR && theme === 'light' ? VEHICLE_MAP_PILL_COLOR : color;
@@ -821,7 +824,7 @@ export function buildTrainRenderState(
       position: roster.position,
       progress: 0.5,
       delayMinutes,
-      color: roster.mode ? (roster.mode === 'metro' && roster.lineColor ? roster.lineColor : VEHICLE_PILL_COLOR) : getDelayColor(delayMinutes),
+      color: roster.mode ? (hasLineColour(roster.mode) && roster.lineColor ? roster.lineColor : VEHICLE_PILL_COLOR) : getDelayColor(delayMinutes),
       nextStation,
       currentStation,
       reportedAt,
@@ -884,7 +887,7 @@ export function buildTrainRenderState(
     position: interpolateShape(shape.points, progress),
     progress,
     delayMinutes,
-    color: roster.mode ? (roster.mode === 'metro' && roster.lineColor ? roster.lineColor : VEHICLE_PILL_COLOR) : getDelayColor(delayMinutes),
+    color: roster.mode ? (hasLineColour(roster.mode) && roster.lineColor ? roster.lineColor : VEHICLE_PILL_COLOR) : getDelayColor(delayMinutes),
     nextStation,
     currentStation,
     reportedAt,

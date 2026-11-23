@@ -376,7 +376,7 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
         PotvrdenyOdj: !v.atStop,
         PositionLive: true,
         Rezim: mode,
-        Farba: routes.get(v.routeId)?.color || '',
+        Farba: routes.get(v.routeId)?.color ? `#${routes.get(v.routeId).color}` : '',
       },
     ];
   }

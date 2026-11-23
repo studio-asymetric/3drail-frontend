@@ -841,6 +841,21 @@ function addTransitLayers(map: MapLibreMap, theme: MapTheme = 'light') {
   };
   remove('transit-metro');
   remove('transit-metro-casing');
+  remove('transit-tram-thin');
+  // Tram tracks as a hairline at every zoom, so a city's network shows from far out; the full tracks
+  // (added with the rails) take over from DOT_MIN_ZOOM.
+  map.addLayer({
+    id: 'transit-tram-thin',
+    type: 'line',
+    source: 'transit-lines',
+    filter: ['==', ['get', 'mode'], 'tram'],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': theme === 'dark' ? '#7d7d85' : '#8f8f94',
+      'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.5, 10, 0.75, DOT_MIN_ZOOM, 0.75, DOT_MIN_ZOOM + 1.2, 0],
+      'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.3, 10, 0.6, DOT_MIN_ZOOM, 0.9],
+    },
+  });
   // A dark (light on the light map) edge makes the line stand out once the view is close.
   map.addLayer({
     id: 'transit-metro-casing',
@@ -2350,7 +2365,12 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
           id: train.trainNumber,
           lat: position.lat,
           lng: position.lng,
-          color: train.mode ? VEHICLE_MAP_PILL_COLOR : train.color || getDelayColor(train.delayMinutes),
+          // Brno's trams wear the colour of their line; the other buses, trams and metro are black pills
+          color: train.mode
+            ? train.mode === 'tram' && REGION_ID === 'jmk' && train.color
+              ? train.color
+              : VEHICLE_MAP_PILL_COLOR
+            : train.color || getDelayColor(train.delayMinutes),
           selected: train.trainNumber === focused,
           type,
           number: trainNumberLabel(type, train.trainNumber),
