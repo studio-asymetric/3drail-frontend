@@ -84,7 +84,7 @@ const DEGENERATE_METERS = 12;
 const WELD_METERS = 4;
 const WELD_ANGLE = 25;
 
-/** Drop repeated points and a spike folded back at either end; [] for tiny loops. */
+/** Drop repeated points and a spike folded back at either end; [] for tiny loops. `keepShort` (raw OSM) keeps every way whole. */
 function cleanWayGeometry(geometry, keepShort = false) {
   let out = [];
   geometry.forEach((raw) => {
@@ -94,6 +94,10 @@ function cleanWayGeometry(geometry, keepShort = false) {
       out.push(point);
     }
   });
+  if (keepShort) {
+    // raw OpenStreetMap: its ways meet at their end points, so none may be trimmed
+    return out.length >= 2 ? out : [];
+  }
   const near = (a, b) => distanceMeters(a.lat, a.lng, b.lat, b.lng) < SPIKE_METERS;
   while (out.length >= 3 && near(out[0], out[2])) {
     out = out.slice(1);
@@ -713,7 +717,7 @@ function despike(points) {
  * @returns {{ segments: number[][][], hops: string[], stats: object }}
  *   segments: polylines of [lat, lng]; hops: per input hop 'ok' | 'gap' | 'skip'
  */
-export function traceRoute(graph, waypoints) {
+export function traceRoute(graph, waypoints, { detourRatio = DETOUR_RATIO, detourSlack = DETOUR_SLACK_METERS } = {}) {
   const scratch = graph.scratch ?? (graph.scratch = makeScratch(graph));
   const stops = waypoints.map((point) => ({ point, candidates: snapCandidates(graph, point) }));
   const hops = new Array(Math.max(0, waypoints.length - 1)).fill('gap');
@@ -781,7 +785,7 @@ export function traceRoute(graph, waypoints) {
       stop.point.lat,
       stop.point.lng
     );
-    const limit = straight * DETOUR_RATIO + DETOUR_SLACK_METERS;
+    const limit = straight * detourRatio + detourSlack;
     const states = stop.candidates.map((cand) => ({ cand, score: Infinity, back: -1, path: null }));
     previous.states.forEach((from, fromIndex) => {
       const routes = routeFrom(graph, from.cand, stop.candidates, limit, scratch);

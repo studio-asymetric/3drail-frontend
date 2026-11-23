@@ -17,7 +17,7 @@ import { buildRouteGraph, traceRoute } from '../railRoute.mjs';
 
 export const JMK_FEED_URL = 'https://kordis-jmk.cz/gtfs/gtfs.zip';
 /** Bumped when this build gains files or changes its output, so older copies are rebuilt. */
-export const JMK_DATA_VERSION = 'jmk-1';
+export const JMK_DATA_VERSION = 'jmk-2';
 /** South Moravia and a margin (trains run on into the neighbouring regions). */
 const BBOX = { minLat: 48.55, maxLat: 49.75, minLng: 15.85, maxLng: 17.75 };
 const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
@@ -214,7 +214,8 @@ export async function buildJmkRegion(dataDir, log = () => undefined) {
         .map((id) => stops.get(id))
         .filter((s) => s && Number.isFinite(s.lat));
       if (waypoints.length < 2) continue;
-      const result = traceRoute(graphs[type], waypoints);
+      // trams run stop to stop along the street: a hop that needs a long way round is a gap, not a loop
+      const result = traceRoute(graphs[type], waypoints, type === '0' ? { detourRatio: 1.8, detourSlack: 800 } : undefined);
       const { line, routed: ok } = joinPieces(result, waypoints);
       if (ok) routed += 1;
       else partly += 1;
