@@ -11,6 +11,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRerouter } from './jmkReroute.mjs';
 
 const STREAM_URL = 'wss://gis.brno.cz/geoevent/ws/services/Kordis_stream/StreamServer/subscribe';
 const RT_URL = 'https://kordis-jmk.cz/gtfs/gtfsReal.dat';
@@ -116,7 +117,10 @@ export function decodeVehiclePositions(buffer) {
     const lng = first(position, 2);
     const stamp = first(vehicle, 5);
     if (!tripId || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-    out.push({ tripId, lat, lng, at: Number.isFinite(stamp) ? stamp * 1000 : Date.now() });
+    // the stop it is at or heading to, and which: 0 incoming, 1 standing there, 2 in transit (the default)
+    const stopId = first(vehicle, 7)?.toString('utf8');
+    const status = first(vehicle, 4);
+    out.push({ tripId, lat, lng, at: Number.isFinite(stamp) ? stamp * 1000 : Date.now(), stopId, status: Number.isFinite(status) ? status : 2 });
   }
   return out;
 }
@@ -177,6 +181,9 @@ export function convertRecords(records, { positions, tripKey, tripInfo, routes, 
     const stamp = Number(a.TimeUpdated);
     // the stream's delay is whole minutes: the browser follows the GPS rather than placing it by the timetable
     rail.set(tripKey.get(p.tripId), {
+      tripId: p.tripId,
+      stopId: p.stopId,
+      status: p.status,
       delaySec: Math.round((Number(a.Delay) || 0) * 60),
       exactDelay: false,
       lastSeq: null,
@@ -225,7 +232,7 @@ export function convertRecords(records, { positions, tripKey, tripInfo, routes, 
       const key = tripKey.get(p.tripId);
       if (key) {
         if (!rail.has(key)) {
-          rail.set(key, { delaySec: 0, exactDelay: false, lastSeq: null, atStop: false, lat: p.lat, lng: p.lng, at: p.at });
+          rail.set(key, { seeded: true, delaySec: 0, exactDelay: false, lastSeq: null, atStop: false, lat: p.lat, lng: p.lng, at: p.at });
         }
         continue;
       }
@@ -273,6 +280,7 @@ export function startJmkLive({ region, dataDir, log = () => undefined }) {
   }
   log(`JMK live: ${tripInfo.size} bus trips known`);
 
+  const rerouter = createRerouter({ region, dataDir, log });
   const vehicles = new Map(); // ID -> latest attributes
   let positions = []; // GTFS-Realtime vehicle positions: which timetable trip is where
   const pollPositions = async () => {
@@ -346,6 +354,12 @@ export function startJmkLive({ region, dataDir, log = () => undefined }) {
     const { rail, other } = convertRecords([...vehicles.values()], { positions, tripKey, tripInfo, routes, shortOfTrip });
     region.setLive(rail);
     region.setOthers(other);
+    // vehicles that keep to a place off their line get the line redrawn through it
+    rerouter.observe(
+      [...rail]
+        .filter(([, v]) => v.tripId && !v.seeded)
+        .map(([key, v]) => ({ key, tripId: v.tripId, lat: v.lat, lng: v.lng, stopId: v.stopId, status: v.status }))
+    );
   };
 
   connect();

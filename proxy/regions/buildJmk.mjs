@@ -84,7 +84,7 @@ const BUNDLED_OSM = path.join(path.dirname(fileURLToPath(import.meta.url)), 'jmk
  * OSM rails and tram tracks of South Moravia: the copy kept in the repository, else a cached download,
  * else a fresh download. To refresh the copy, delete it and the cache and run a build once.
  */
-async function loadOsm(cacheFile, log) {
+export async function loadOsm(cacheFile, log) {
   try {
     return JSON.parse(fs.readFileSync(BUNDLED_OSM, 'utf8'));
   } catch {
@@ -157,6 +157,47 @@ function joinPieces(result, waypoints) {
   return { line, routed: result.stats.gaps === 0 };
 }
 
+/** The two routing graphs: trains on the rails, trams on the tram tracks. */
+export function buildGraphs(osm) {
+  return {
+    2: buildRouteGraph(osm.filter((w) => !w.tram), { keepShort: true }),
+    0: buildRouteGraph(osm.filter((w) => w.tram), { keepShort: true }),
+  };
+}
+
+/** Where the corrections learned from live vehicles are kept: they survive a rebuild of the timetable. */
+export const hintsFileOf = (dataDir) => path.join(path.dirname(dataDir), 'jmk-route-hints.json');
+
+export function readHints(dataDir) {
+  try {
+    return JSON.parse(fs.readFileSync(hintsFileOf(dataDir), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+/** The pattern key of a run: its kind (0 tram, 2 train) and stop ids. */
+export const patternKey = (type, stopIds) => `${type}|${stopIds.join(',')}`;
+
+/**
+ * The line of one stop pattern along the tracks. `stops`: [{ id, lat, lng }] in order; `hints`: places
+ * real vehicles were seen between two stops ({ from, to, lat, lng }): the route is made to pass them,
+ * so a way round that really is used wins over a shorter one that is not.
+ */
+export function tracePattern(graphs, type, stops, hints = []) {
+  const waypoints = [];
+  stops.forEach((stop, i) => {
+    waypoints.push({ lat: stop.lat, lng: stop.lng });
+    const next = stops[i + 1];
+    for (const hint of hints) {
+      if (hint.from === stop.id && (!next || hint.to === next.id)) waypoints.push({ lat: hint.lat, lng: hint.lng });
+    }
+  });
+  // trams run stop to stop along the street: a hop that needs a long way round is a gap, not a loop
+  const result = traceRoute(graphs[type], waypoints, String(type) === '0' ? { detourRatio: 1.8, detourSlack: 800 } : undefined);
+  return joinPieces(result, waypoints);
+}
+
 export async function buildJmkRegion(dataDir, log = () => undefined) {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'jmk-'));
   try {
@@ -215,10 +256,8 @@ export async function buildJmkRegion(dataDir, log = () => undefined) {
 
     const osm = await loadOsm(path.join(path.dirname(dataDir), 'jmk-osm-cache.json'), log);
     log(`JMK: ${osm.length} track pieces; building route graphs`);
-    const graphs = {
-      '2': buildRouteGraph(osm.filter((w) => !w.tram), { keepShort: true }),
-      '0': buildRouteGraph(osm.filter((w) => w.tram), { keepShort: true }),
-    };
+    const graphs = buildGraphs(osm);
+    const hints = readHints(dataDir);
 
     const shapeLines = [];
     let routed = 0;
@@ -228,12 +267,10 @@ export async function buildJmkRegion(dataDir, log = () => undefined) {
       const [type, list] = key.split('|');
       const waypoints = list
         .split(',')
-        .map((id) => stops.get(id))
-        .filter((s) => s && Number.isFinite(s.lat));
+        .map((id) => ({ id, ...stops.get(id) }))
+        .filter((s) => Number.isFinite(s.lat));
       if (waypoints.length < 2) continue;
-      // trams run stop to stop along the street: a hop that needs a long way round is a gap, not a loop
-      const result = traceRoute(graphs[type], waypoints, type === '0' ? { detourRatio: 1.8, detourSlack: 800 } : undefined);
-      const { line, routed: ok } = joinPieces(result, waypoints);
+      const { line, routed: ok } = tracePattern(graphs, type, waypoints, hints[key] ?? []);
       if (ok) routed += 1;
       else partly += 1;
       let cum = 0;

@@ -465,6 +465,54 @@ export function createGtfsRegion({ dir, tz = 'Europe/Prague', log = () => undefi
     return { source: 'gtfs-region', train: key, status: 'live', stops: stopsOut };
   }
   return {
+    /** A timetable trip: its kind (route type), shape and stops with places; null when it is not in this region. */
+    tripInfo(tripId) {
+      const trip = trips.get(tripId);
+      if (!trip) return null;
+      return {
+        type: typeOf(trip),
+        shapeId: trip.shapeId,
+        stops: trip.stops.map((s) => ({ id: s.stopId, ...(stops.get(s.stopId) ?? { name: '', lat: NaN, lng: NaN }) })),
+      };
+    },
+    /** Every distinct stop pattern with its shape: [{ type, shapeId, stops }] (one trip stands for all that share a shape). */
+    patterns() {
+      const byShape = new Map();
+      trips.forEach((trip) => {
+        if (!trip.shapeId || byShape.has(trip.shapeId)) return;
+        byShape.set(trip.shapeId, {
+          type: typeOf(trip),
+          shapeId: trip.shapeId,
+          stops: trip.stops.map((s) => ({ id: s.stopId, ...(stops.get(s.stopId) ?? { name: '', lat: NaN, lng: NaN }) })),
+        });
+      });
+      return [...byShape.values()];
+    },
+    /** How far (m) a place is from the line drawn for this shape; null when there is no such line. */
+    shapeDeviation(shapeId, lat, lng) {
+      const shape = shapeOf(shapeId);
+      if (!shape) return null;
+      let best = Infinity;
+      const kx = 111_320 * Math.cos((lat * Math.PI) / 180);
+      for (let i = 0; i < shape.line.length - 1; i += 1) {
+        const [aLat, aLng] = shape.line[i];
+        const [bLat, bLng] = shape.line[i + 1];
+        const px = (lng - aLng) * kx;
+        const py = (lat - aLat) * LAT_METERS;
+        const dx = (bLng - aLng) * kx;
+        const dy = (bLat - aLat) * LAT_METERS;
+        const len2 = dx * dx + dy * dy;
+        const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, (px * dx + py * dy) / len2));
+        best = Math.min(best, Math.hypot(px - dx * t, py - dy * t));
+      }
+      return best;
+    },
+    /** Replaces the line of a shape (a better route found from live positions); the journeys payload follows. */
+    setShape(shapeId, line) {
+      shapesRaw.set(shapeId, line.map(([lat, lng], i) => [lat, lng, i + 1]));
+      shapeCache.delete(shapeId);
+      locatedCache.clear();
+    },
     /** Live feed hook: Map(key -> { delaySec, lat, lng }), replaces the previous snapshot. */
     setLive(next) {
       live = next;
