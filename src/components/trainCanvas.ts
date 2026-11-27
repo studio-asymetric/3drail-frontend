@@ -54,6 +54,17 @@ const HIT_PAD_MOUSE = 9;
 const HIT_PAD_TOUCH = 14;
 /** How quickly pills settle after a neighbour moved them (time constant, seconds). */
 const SPREAD_EASE_SECONDS = 0.055;
+/**
+ * Opacity of the other vehicles while one is selected, and how quickly they fade (seconds).
+ * With only a few others on screen they hardly compete with the selected one, so they fade
+ * less: DIMMED_ALPHA_FEW at FEW_VEHICLES or fewer, rising smoothly from DIMMED_ALPHA as the
+ * count drops below MANY_VEHICLES.
+ */
+const DIMMED_ALPHA = 0.5;
+const DIMMED_ALPHA_FEW = 0.8;
+const FEW_VEHICLES = 5;
+const MANY_VEHICLES = 15;
+const DIM_FADE_SECONDS = 0.12;
 
 /**
  * Every pill and arrow is painted once into one shared atlas canvas and copied from there.
@@ -89,6 +100,11 @@ export class TrainCanvasLayer {
   /** How far each pill is currently shown from its true spot (degrees), eased towards its target. */
   private shown = new Map<string, { dLng: number; dLat: number }>();
   private lastDrawMs = 0;
+  /** 0 = every pill at full strength, 1 = all but the selected one faded (a vehicle is open). */
+  private dim = 0;
+  private dimTarget = 0;
+  /** Vehicles other than the selected one drawn in the last frame (sets how far they fade). */
+  private othersOnScreen = 0;
 
   constructor(map: MapLibreMap, onPick: (id: string) => void) {
     this.map = map;
@@ -126,6 +142,15 @@ export class TrainCanvasLayer {
       this.requestDraw();
     });
     this.handleResize();
+  }
+
+  /** Fades every vehicle but the selected one (while one is open), or brings them back. */
+  setDimmed(dimmed: boolean) {
+    const target = dimmed ? 1 : 0;
+    if (target !== this.dimTarget) {
+      this.dimTarget = target;
+      this.requestDraw();
+    }
   }
 
   setPills(pills: CanvasPill[]) {
@@ -447,6 +472,14 @@ export class TrainCanvasLayer {
     this.lastDrawMs = now;
     const ease = 1 - Math.exp(-dt / SPREAD_EASE_SECONDS);
     let settling = false;
+    this.dim += (this.dimTarget - this.dim) * (1 - Math.exp(-dt / DIM_FADE_SECONDS));
+    if (Math.abs(this.dimTarget - this.dim) < 0.01) {
+      this.dim = this.dimTarget;
+    } else {
+      settling = true;
+    }
+    const fadedAlpha = 1 - (1 - dimmedAlpha(this.othersOnScreen)) * this.dim;
+    let others = 0;
     const projection = screenProjection(this.map);
     const degPerPx = 360 / projection.scale;
     // Selected and hovered pills are drawn last so they sit on top.
@@ -475,6 +508,12 @@ export class TrainCanvasLayer {
         continue;
       }
       const hovered = pill.id === this.hovered;
+      if (!pill.selected) {
+        others += 1;
+      }
+      // While a vehicle is open the others step back (a hovered one comes forward again).
+      const faded = !pill.selected && !hovered;
+      ctx.globalAlpha = faded ? fadedAlpha : 1;
       const cx = Math.round(px);
       const cy = Math.round(py);
       if (pill.dot && !pill.selected) {
@@ -537,11 +576,24 @@ export class TrainCanvasLayer {
         label: pill.label,
       });
     }
+    ctx.globalAlpha = 1;
     this.boxes = boxes;
+    if (others !== this.othersOnScreen) {
+      // Painted with last frame's count: when the count changed the fade, paint once more.
+      const changed = this.dim > 0 && Math.abs(dimmedAlpha(others) - dimmedAlpha(this.othersOnScreen)) > 0.005;
+      this.othersOnScreen = others;
+      settling ||= changed;
+    }
     if (settling) {
       this.requestDraw();
     } else {
       this.lastDrawMs = 0;
     }
   }
+}
+
+/** How opaque the unselected vehicles are, given how many of them are on screen. */
+function dimmedAlpha(others: number) {
+  const few = Math.max(0, Math.min(1, (MANY_VEHICLES - others) / (MANY_VEHICLES - FEW_VEHICLES)));
+  return DIMMED_ALPHA + (DIMMED_ALPHA_FEW - DIMMED_ALPHA) * few;
 }

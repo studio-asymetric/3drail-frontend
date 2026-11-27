@@ -2514,6 +2514,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     if (!trainCanvasRef.current) {
       trainCanvasRef.current = new TrainCanvasLayer(map, (trainId) => onTrainClickRef.current?.(trainId));
     }
+    trainCanvasRef.current.setDimmed(Boolean(focusedTrainRef.current));
     const homeOf = new Map(measured.map((item) => [item.id, item]));
     trainCanvasRef.current.setPills(
       [...spread, ...dotPoints].map((point) => {
@@ -2777,6 +2778,11 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       pathfinderRejectorsRef.current.delete(requestId);
     };
   }, [focusedTrainNumber, traceKey, ensureWorkerGraph, journeysVersion]);
+
+  // A vehicle is open: the others fade so it stands out.
+  useEffect(() => {
+    trainCanvasRef.current?.setDimmed(Boolean(focusedTrainNumber));
+  }, [focusedTrainNumber]);
 
   // --- Timetable-driven positions -------------------------------------------
   // Load every running train's route + timetable from the proxy, then move the
