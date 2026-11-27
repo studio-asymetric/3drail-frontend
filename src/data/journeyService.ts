@@ -399,6 +399,9 @@ export function scheduledAlong(journey: Journey, t: number, dwell: number): numb
 
 let lastJourneysEtag = '';
 
+/** True while the proxy is still reading the region's timetable (its answer is a placeholder). */
+export const journeysBuilding = () => lastJourneysEtag === '"building"';
+
 /** All running trains' journeys, or null when the list has not changed since the last call. */
 export async function fetchJourneys(signal?: AbortSignal): Promise<Map<string, Journey> | null> {
   // no-cache: the browser revalidates with the ETag and gets a 304 when nothing changed.

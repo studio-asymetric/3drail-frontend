@@ -186,8 +186,19 @@ function createOneRegion(config, log) {
   return {
     id: config.id,
     touch,
-    /** Builds the timetable on disk ahead of the first visitor. */
-    warm: () => (config.prebuild ? prepare().catch(() => undefined) : Promise.resolve()),
+    /**
+     * Ahead of the first visitor: builds the timetable on disk (where that is cheap) and reads one
+     * that is already there, so a visit right after a restart gets journeys at once instead of a
+     * "building" placeholder (the pills would stand still until the page asked again).
+     */
+    warm: async () => {
+      if (config.prebuild) {
+        await prepare().catch(() => undefined);
+      }
+      if (!region && !loading && dataFresh()) {
+        await load();
+      }
+    },
     peek: () => region,
     trains: () => touch()?.trains() ?? [],
     journeys() {
@@ -278,7 +289,7 @@ export function createRegionHub(log = () => undefined) {
       }
       return null;
     },
-    /** Builds the timetables that are worth having ready (not Prague's: that download is large). */
+    /** Readies every region's timetable (Prague's is only read when already on disk: its download is large). */
     warm: () => Promise.all([...regions.values()].map((one) => one.warm())),
     stationsBody: (ids) => pick(ids)?.stationsBody() ?? null,
     stopsBody: (ids, mask = 7) => pick(ids)?.stopsBody(mask) ?? null,

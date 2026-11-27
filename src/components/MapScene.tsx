@@ -60,6 +60,7 @@ import { decodePolyline, encodePolyline, fetchTrainRoute } from '../data/routeSe
 import {
   estimatedDelaySeconds,
   fetchJourneys,
+  journeysBuilding,
   isOnBus,
   JourneyAnimator,
   timelineProgress,
@@ -314,6 +315,8 @@ type TrainPillPoint = {
 
 /** Zoom from which timetable-driven trains move smoothly (below it they update every few seconds). */
 const JOURNEY_SMOOTH_ZOOM = 9;
+/** Longest the loading card waits for the train timetables before showing the map anyway. */
+const JOURNEYS_WAIT_MS = 12_000;
 /** Zoom the camera moves to when a train is opened (close enough for smooth motion). */
 const TRAIN_FOCUS_ZOOM = 12;
 /** Extra pixels around a station dot that still hover or select it. */
@@ -2781,15 +2784,25 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   useEffect(() => {
     let cancelled = false;
     let controller: AbortController | null = null;
+    // While the proxy is still reading the region's timetable (right after it restarts) it
+    // answers a placeholder: ask again every 2 s instead of leaving the pills standing still
+    // until the next regular poll, 20 s later.
+    let haveJourneys = false;
+    const startedAt = Date.now();
     const load = async () => {
       controller?.abort();
       controller = new AbortController();
       try {
         const journeys = await fetchJourneys(controller.signal);
-        if (!cancelled) {
+        if (cancelled) {
+          return;
+        }
+        haveJourneys = !journeysBuilding();
+        // The loading card waits for the timetables, but not forever.
+        if (haveJourneys || Date.now() - startedAt > JOURNEYS_WAIT_MS) {
           setJourneysTried(true);
         }
-        if (cancelled || !journeys) {
+        if (!journeys) {
           return;
         }
         journeyAnimatorRef.current.setJourneys(journeys);
@@ -2802,20 +2815,25 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
         }
       }
     };
-    load();
     // Slovakia's timetables change slowly; with Prague on (its live delays move) ask more often.
     // Unchanged answers cost a 304.
     let timer = 0;
     const schedule = () => {
       timer = window.setTimeout(
-        () => {
-          load();
-          schedule();
+        async () => {
+          await load();
+          if (!cancelled) {
+            schedule();
+          }
         },
-        REGION_ID !== 'sk' ? 20_000 : 2 * 60 * 1000
+        !haveJourneys ? 2_000 : REGION_ID !== 'sk' ? 20_000 : 2 * 60 * 1000
       );
     };
-    schedule();
+    load().then(() => {
+      if (!cancelled) {
+        schedule();
+      }
+    });
     return () => {
       cancelled = true;
       controller?.abort();
