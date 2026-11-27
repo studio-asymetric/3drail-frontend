@@ -151,6 +151,44 @@ export function estimatedDelaySeconds(
   return null;
 }
 /**
+ * ZSR's estimated delay at every point still ahead of the train (stations and passing points
+ * alike), from the panel's rows: `index` is the row's number in ZSR's list (see `Journey.at`).
+ * Its own estimates are more precise than the one delay of the last report.
+ */
+export function estimatedDelayProfile(
+  rows: Array<{
+    state: string;
+    index?: number;
+    scheduledArrival: string;
+    scheduledDeparture: string;
+    arrival: string;
+    departure: string;
+    foreign?: boolean;
+  }>
+): Array<{ index: number; delay: number }> {
+  const out: Array<{ index: number; delay: number }> = [];
+  for (const row of rows) {
+    if (row.state === 'passed' || row.foreign || row.index == null) {
+      continue;
+    }
+    const planned = clockMinutes(row.scheduledDeparture || row.scheduledArrival);
+    const expected = clockMinutes(row.departure || row.arrival);
+    if (planned == null || expected == null) {
+      continue;
+    }
+    let diff = expected - planned;
+    if (diff < -720) {
+      diff += 1440;
+    }
+    if (diff > 720) {
+      diff -= 1440;
+    }
+    out.push({ index: row.index, delay: diff > 0 && diff < 600 ? diff * 60 : 0 });
+  }
+  return out;
+}
+
+/**
  * A passenger stop with only one time (a departure; arr = dep) is taken to have arrived
  * this long before it leaves, so the pill stands at the station for that long.
  */
@@ -632,6 +670,65 @@ export class JourneyAnimator {
   private states = new Map<string, TrainModelState>();
   /** Delay (s) read off ZSR's own estimated times for a train's next station: beats the feed's delay. */
   private estimates = new Map<string, number>();
+  /** ZSR's estimated delay at each point ahead (row index -> s), for the open train. */
+  private profiles = new Map<string, Array<{ index: number; delay: number }>>();
+
+  /** The estimated delays ahead of a train (see estimatedDelayProfile); null clears them. */
+  setEstimateProfile(train: string, profile: Array<{ index: number; delay: number }> | null) {
+    if (!profile || profile.length === 0) {
+      this.profiles.delete(train);
+    } else {
+      this.profiles.set(train, profile);
+    }
+  }
+
+  /**
+   * How much later than now (s) the train runs at `along` than at its last report, by ZSR's
+   * estimates: 0 without them. Between two estimated points the change is spread evenly.
+   */
+  private delayChange(train: string, journey: Journey, floor: number, along: number): number {
+    const profile = this.profiles.get(train);
+    if (!profile) {
+      return 0;
+    }
+    const points = profile
+      .map((point) => ({ along: journey.at[point.index] ?? null, delay: point.delay }))
+      .filter((point): point is { along: number; delay: number } => point.along != null)
+      .sort((a, b) => a.along - b.along);
+    if (points.length === 0) {
+      return 0;
+    }
+    const at = (x: number) => {
+      if (x <= points[0].along) return points[0].delay;
+      for (let i = 1; i < points.length; i += 1) {
+        if (x <= points[i].along) {
+          const a = points[i - 1];
+          const b = points[i];
+          const span = b.along - a.along;
+          return span > 0 ? a.delay + ((b.delay - a.delay) * (x - a.along)) / span : b.delay;
+        }
+      }
+      return points[points.length - 1].delay;
+    };
+    return at(along) - at(floor);
+  }
+
+  /**
+   * Where timetable + delay puts the train at `tSeconds`, the delay following ZSR's estimates
+   * ahead (it differs from point to point): solved by a few rounds of "where would it be, so
+   * what is the delay there".
+   */
+  private scheduledAlongAt(train: string, journey: Journey, state: TrainModelState, tSeconds: number): number | null {
+    let along = alongAtTime(journey, tSeconds - state.delaySeconds);
+    if (!this.profiles.has(train)) {
+      return along;
+    }
+    for (let round = 0; round < 4 && along != null; round += 1) {
+      const delay = state.delaySeconds + this.delayChange(train, journey, state.floor, Math.max(along, state.floor));
+      along = alongAtTime(journey, tSeconds - delay);
+    }
+    return along;
+  }
 
   setEstimate(train: string, delaySeconds: number | null) {
     if (delaySeconds == null) {
@@ -852,10 +949,44 @@ export class JourneyAnimator {
       const next = journey.stops.find((stop) => stop.kind !== 'pass' && stop.along > state.floor + STOP_AHEAD_METERS);
       return next ? Math.min(run, next.along) : run;
     }
-    const scheduled = alongAtTime(journey, nowMs / 1000 - state.delaySeconds - grace);
+    const scheduled = this.scheduledAlongAt(train, journey, state, nowMs / 1000 - grace);
     const along = scheduled ?? state.floor;
     const target = Math.max(state.floor, along);
     return state.live ? Math.min(target, state.floor + LIVE_MAX_LEAD_METERS) : target;
+  }
+
+  /** The delay (s) the train currently runs on, as reported (feed or the panel's estimate). */
+  reportedDelay(train: string): number | null {
+    const state = this.states.get(train);
+    return state?.active ? state.reportedDelay : null;
+  }
+
+  /**
+   * True when the drawn train stands still only because the model is waiting: it is shown
+   * further on than timetable + delay allows (a raised delay), or held at its last reported
+   * spot until the next report. Not true for a normal timetable stop.
+   */
+  isWaiting(train: string, nowMs = Date.now()): boolean {
+    const journey = this.journeys.get(train);
+    const state = this.states.get(train);
+    if (!journey || !state?.active || state.sched != null) {
+      return false;
+    }
+    if (state.hold) {
+      return true;
+    }
+    const target = this.target(train, nowMs);
+    if (target == null) {
+      return false;
+    }
+    if (state.shownAlong != null && state.shownAlong > target + 30) {
+      return true;
+    }
+    // Timetable + delay puts it behind the last report: it stands there until that catches up.
+    const grace = state.unconfirmed ? UNCONFIRMED_GRACE_SECONDS : 0;
+    const scheduled = this.scheduledAlongAt(train, journey, state, nowMs / 1000 - grace);
+    const last = journey.stops[journey.stops.length - 1];
+    return scheduled != null && scheduled < state.floor - 30 && state.floor < last.along - 30;
   }
 
   /** Metres along its line where the timetable model puts the train now (not the eased drawn spot). */

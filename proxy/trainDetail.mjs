@@ -133,9 +133,11 @@ export function classifyStops(stops, gtfsStops = null, memory = null) {
       if (remembered) {
         return { ...stop, kind: remembered };
       }
-      if (gtfsStops && gtfsStops.size > 0) {
-        return { ...stop, kind: gtfsStops.has(normalizeStationName(stop.name)) ? 'stop' : 'pass' };
-      }
+    }
+    if (!dwells && gtfsStops && gtfsStops.size > 0) {
+      // One time and no stand: a timing point it may just run through (EC 279 at Devínska Nová
+      // Ves, 15:49/15:49). The timetable's own call list says whether it stops.
+      return { ...stop, kind: gtfsStops.has(normalizeStationName(stop.name)) ? 'stop' : 'pass' };
     }
     return { ...stop, kind: 'stop' };
   });

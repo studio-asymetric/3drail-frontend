@@ -124,3 +124,48 @@ export function abbreviationSteps(name: string): string[] {
   }
   return steps;
 }
+
+/** Station words written out in full, and their usual short forms. */
+// Word edges by hand:  does not count "ú" or "á" as letters.
+const word = (text: string) => new RegExp(`(?<=^|[ -])${text}(?=$|[ -])`, 'i');
+const STATION_SHORT: Array<[RegExp, string]> = [
+  [word('hlavná stanica'), 'hl. st.'],
+  [word('hlavné nádražie'), 'hl. n.'],
+  [word('hlavní nádraží'), 'hl. n.'],
+  [word('nákladná stanica'), 'nákl. st.'],
+  [word('ústredná'), 'ústr.'],
+  [word('zastávka'), 'zast.'],
+  [word('stanica'), 'st.'],
+];
+
+/** The two cities with many stations: their stops are known as "BA-…", "KE-…". */
+const CITY_SHORT: Array<[RegExp, string]> = [
+  [/^Bratislava(?=[\s-])/, 'BA'],
+  [/^Košice(?=[\s-])/, 'KE'],
+];
+
+/**
+ * A station name short enough for one line ("Bratislava hlavná stanica" -> "Bratislava hl. st.",
+ * "Bratislava-Petržalka" -> "BA-Petržalka", "Nové Mesto nad Váhom" -> "Nové Mesto n. V."):
+ * each step only when the name is still longer than `max` characters.
+ */
+export function shortStationName(name: string, max = 18): string {
+  let out = name.trim().replace(/\s+/g, ' ');
+  if (out.length <= max) {
+    return out;
+  }
+  for (const [pattern, short] of STATION_SHORT) {
+    out = out.replace(pattern, short);
+  }
+  if (out.length <= max) {
+    return out;
+  }
+  for (const [pattern, short] of CITY_SHORT) {
+    out = out.replace(pattern, short);
+  }
+  if (out.length <= max) {
+    return out;
+  }
+  const steps = abbreviationSteps(out);
+  return steps.find((step) => step.length <= max) ?? steps[steps.length - 1];
+}

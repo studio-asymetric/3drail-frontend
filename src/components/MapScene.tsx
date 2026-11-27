@@ -58,6 +58,7 @@ import { closeRailGaps } from '../data/railStitch';
 import { FOLLOW_FRAME_MS, LITE_MODE, RENDER_PIXEL_RATIO, TRAIN_FRAME_MS } from '../perf';
 import { decodePolyline, encodePolyline, fetchTrainRoute } from '../data/routeService';
 import {
+  estimatedDelayProfile,
   estimatedDelaySeconds,
   fetchJourneys,
   journeysBuilding,
@@ -317,6 +318,10 @@ type TrainPillPoint = {
 const JOURNEY_SMOOTH_ZOOM = 9;
 /** Longest the loading card waits for the train timetables before showing the map anyway. */
 const JOURNEYS_WAIT_MS = 12_000;
+/** A delay rise this big (s) on the open train is worth a notice if it stops the pill… */
+const DELAY_RISE_SECONDS = 60;
+/** …as long as the pill stops within this long of the rise (ms). */
+const DELAY_HOLD_WINDOW_MS = 60_000;
 /** Zoom the camera moves to when a train is opened (close enough for smooth motion). */
 const TRAIN_FOCUS_ZOOM = 12;
 /** Extra pixels around a station dot that still hover or select it. */
@@ -1389,6 +1394,8 @@ interface MapSceneProps {
   onFollowCorrection?: (correction: { train: string; meters: number }) => void;
   /** The opened train's position changed a lot at once (a newer report): it is moving to the latest. */
   onPositionUpdating?: (update: { train: string; meters: number }) => void;
+  /** The open train's delay went up and its pill now stands, waiting for the timetable to catch up. */
+  onDelayHold?: (update: { train: string; delayMinutes: number }) => void;
   onTrainClick?: (trainNumber: string) => void;
   onStationClick?: (station: { id: string; name: string; lat: number; lng: number }) => void;
   onBackgroundClick?: () => void;
@@ -1421,6 +1428,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   onTimelineProgress,
   onFollowCorrection,
   onPositionUpdating,
+  onDelayHold,
   onTrainClick,
   onStationClick,
   onBackgroundClick,
@@ -1500,6 +1508,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
   onFollowCorrectionRef.current = onFollowCorrection;
   const onPositionUpdatingRef = useRef(onPositionUpdating);
   onPositionUpdatingRef.current = onPositionUpdating;
+  const onDelayHoldRef = useRef(onDelayHold);
+  onDelayHoldRef.current = onDelayHold;
+  /** The open train's last seen delay, and a raised one waiting to see whether the pill stops. */
+  const delayWatchRef = useRef<{ train: string; delay: number; rise: { delay: number; until: number } | null } | null>(null);
   const journeyStopsRef = useRef(journeyStops);
   journeyStopsRef.current = journeyStops;
   const lastTimelineRef = useRef('');
@@ -2859,6 +2871,10 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     }
     const before = animator.modelAlong(focusedTrainNumber);
     animator.setEstimate(focusedTrainNumber, estimatedDelaySeconds(journeyStops));
+    // ZSR's estimates at every station and passing point ahead: the map follows them.
+    animator.setEstimateProfile(focusedTrainNumber, estimatedDelayProfile(journeyStops));
+    // The panel's own estimate is not news: measure delay rises from here.
+    delayWatchRef.current = null;
     animator.update(trainsRef.current);
     // Opening a train re-runs it on the delay its panel shows: if that moves it, say so.
     const after = animator.modelAlong(focusedTrainNumber);
@@ -2867,6 +2883,7 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
     }
     return () => {
       animator.setEstimate(focusedTrainNumber, null);
+      animator.setEstimateProfile(focusedTrainNumber, null);
     };
   }, [focusedTrainNumber, journeyStatus, journeyStops]);
 
@@ -2981,11 +2998,39 @@ export const MapScene: React.FC<MapSceneProps> = React.memo(({
       if (changed) {
         publishTrainMarkersRef.current();
       }
+      let focusedCorrected = false;
       for (const correction of animator.takeCorrections()) {
+        if (correction.train === focusedId) {
+          focusedCorrected = true;
+        }
         if (correction.train === followed && Math.abs(correction.meters) > 1500) {
           onFollowCorrectionRef.current?.(correction);
         } else if (correction.train === focusedId && Math.abs(correction.meters) > POSITION_UPDATE_METERS) {
           onPositionUpdatingRef.current?.(correction);
+        }
+      }
+      // The open train's delay went up: if that leaves its pill standing, say why (once per rise).
+      // A big rise slides the pill back instead, and the correction notice above covers that.
+      if (focusedId) {
+        const delay = animator.reportedDelay(focusedId);
+        const watch = delayWatchRef.current;
+        if (delay == null) {
+          // nothing to compare against
+        } else if (!watch || watch.train !== focusedId) {
+          delayWatchRef.current = { train: focusedId, delay, rise: null };
+        } else {
+          if (delay >= watch.delay + DELAY_RISE_SECONDS) {
+            watch.rise = { delay, until: now + DELAY_HOLD_WINDOW_MS };
+          } else if (delay < watch.delay) {
+            watch.rise = null;
+          }
+          watch.delay = delay;
+          if (watch.rise && (focusedCorrected || now > watch.rise.until)) {
+            watch.rise = null;
+          } else if (watch.rise && animator.isWaiting(focusedId, now)) {
+            onDelayHoldRef.current?.({ train: focusedId, delayMinutes: Math.round(watch.rise.delay / 60) });
+            watch.rise = null;
+          }
         }
       }
     };

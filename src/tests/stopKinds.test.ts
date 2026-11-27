@@ -4,7 +4,7 @@ import { aheadKinds, classifyStops, isNonStopName, normalizeStationName, parseTr
 // @ts-expect-error plain ESM module from the proxy, no type declarations
 import { withForeignStops } from '../../proxy/foreignStops.mjs';
 import { indexJourneyRows } from '../data/trainService';
-import { alongAtTime, buildJourney, JourneyAnimator } from '../data/journeyService';
+import { alongAtTime, buildJourney, estimatedDelayProfile, JourneyAnimator } from '../data/journeyService';
 import { encodePolyline } from '../data/routeService';
 
 type Row = {
@@ -190,6 +190,112 @@ describe('JourneyAnimator glitches', () => {
     const shown = animator.peek('7', later + 2000)!.along;
     expect(shown).toBeLessThan(before - 1000);
     expect(shown).toBeGreaterThan(target + 1000);
+  });
+});
+
+describe('JourneyAnimator isWaiting', () => {
+  const t0 = 1_800_000_000;
+  const raw = {
+    n: '9',
+    sig: 'w',
+    line: encodePolyline([
+      { lat: 48.0, lng: 17.0 },
+      { lat: 48.5, lng: 17.0 },
+    ]),
+    ok: true,
+    at: [0, 50000] as Array<number | null>,
+    stops: [
+      [0, null, t0, 0, 1],
+      [50000, t0 + 3600, null, 1, 1],
+    ] as Array<[number, number | null, number | null, number, number?]>,
+  };
+  const running = (delayMinutes: number) => ({
+    trainNumber: '9',
+    delayMinutes,
+    rosterOrderCurrentStation: 0,
+    departureConfirmed: true,
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('is false for a train running on its timetable', () => {
+    const now = (t0 + 1800) * 1000;
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const animator = new JourneyAnimator();
+    animator.setJourneys(new Map([['9', buildJourney(raw)!]]));
+    animator.update([running(0)]);
+    animator.position('9', now);
+    expect(animator.isWaiting('9', now)).toBe(false);
+  });
+
+  it('is true when a small delay rise leaves the pill standing ahead of the model', () => {
+    const now = (t0 + 1800) * 1000;
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const animator = new JourneyAnimator();
+    animator.setJourneys(new Map([['9', buildJourney(raw)!]]));
+    animator.update([running(0)]);
+    animator.position('9', now);
+    const before = animator.peek('9', now)!.along;
+    // +3 min: about 2.5 km behind, under the slide-back distance, so the pill just stands.
+    animator.update([running(3)]);
+    animator.position('9', now + 1000);
+    expect(animator.peek('9', now + 1000)!.along).toBeCloseTo(before, 0);
+    expect(animator.isWaiting('9', now + 1000)).toBe(true);
+    expect(animator.reportedDelay('9')).toBe(180);
+  });
+});
+
+describe('JourneyAnimator follows ZSR estimates ahead', () => {
+  // Report at A (0 m, 12 min late); ZSR estimates B (20 km) 14 min late and C (40 km) 16 min late.
+  const t0 = 1_800_000_000;
+  const raw = {
+    n: '5',
+    sig: 'e',
+    line: encodePolyline([
+      { lat: 48.0, lng: 17.0 },
+      { lat: 48.5, lng: 17.0 },
+    ]),
+    ok: true,
+    at: [0, 20000, 40000] as Array<number | null>,
+    stops: [
+      [0, null, t0, 0, 0],
+      [20000, t0 + 1200, t0 + 1200, 1, 0],
+      [40000, t0 + 2400, null, 2, 1],
+    ] as Array<[number, number | null, number | null, number, number?]>,
+  };
+  const rows = [
+    { state: 'current', index: 0, scheduledArrival: '', scheduledDeparture: '10:00', arrival: '', departure: '10:12' },
+    { state: 'ahead', index: 1, scheduledArrival: '10:20', scheduledDeparture: '10:20', arrival: '10:34', departure: '10:34' },
+    { state: 'ahead', index: 2, scheduledArrival: '10:40', scheduledDeparture: '', arrival: '10:56', departure: '' },
+  ];
+
+  afterEach(() => vi.useRealTimers());
+
+  it('reads the delay at every point ahead', () => {
+    expect(estimatedDelayProfile(rows)).toEqual([
+      { index: 0, delay: 720 },
+      { index: 1, delay: 840 },
+      { index: 2, delay: 960 },
+    ]);
+  });
+
+  it('reaches each point at its estimated time, not the last report plus a fixed delay', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(t0 * 1000);
+    const animator = new JourneyAnimator();
+    animator.setJourneys(new Map([['5', buildJourney(raw)!]]));
+    animator.setEstimate('5', 720);
+    animator.update([{ trainNumber: '5', delayMinutes: 12, rosterOrderCurrentStation: 0, departureConfirmed: true }]);
+    // Planned at B at t0+1200; on 12 min it would be there by t0+1920, by the estimate at t0+2040.
+    const plain = animator.target('5', (t0 + 1990) * 1000)!;
+    animator.setEstimateProfile('5', estimatedDelayProfile(rows));
+    const followed = animator.target('5', (t0 + 1990) * 1000)!;
+    expect(plain).toBeGreaterThan(20000);
+    expect(followed).toBeLessThan(20000);
+    // and it gets to B about when ZSR says (less the model's small optimism)
+    expect(animator.target('5', (t0 + 2100) * 1000)!).toBeGreaterThanOrEqual(20000);
   });
 });
 

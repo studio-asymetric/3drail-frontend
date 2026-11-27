@@ -111,6 +111,9 @@ export type Copy = {
   toastPositionCorrected: (km: string, back: boolean) => string;
   toastTrainEnded: (trainNumber: string) => string;
   toastPositionUpdating: string;
+  toastDelayHold: (minutes: number) => string;
+  freshnessUpdated: (seconds: number) => string;
+  freshnessOffline: string;
   alertsPill: string;
   trainCompositionButton: string;
   toastFeedLost: string;
@@ -222,6 +225,9 @@ const sk: Copy = {
     `Poloha vlaku upravená podľa nového hlásenia ŽSR (${km} km ${back ? 'späť' : 'dopredu'})`,
   toastTrainEnded: (trainNumber) => `Vlak ${trainNumber} dokončil jazdu, sledovanie skončilo`,
   toastPositionUpdating: 'Poloha vlaku sa aktualizuje na najnovšiu',
+  toastDelayHold: (minutes) => `Meškanie stúplo na ${minutes} min, vlak na mape počká na novú polohu`,
+  freshnessUpdated: (s) => (s < 60 ? `Aktualizované pred ${s} s` : `Aktualizované pred ${Math.round(s / 60)} min`),
+  freshnessOffline: 'Bez spojenia, zobrazujú sa posledné údaje',
   alertsPill: 'ZSSK',
   trainCompositionButton: 'Radenie',
   toastFeedLost: 'Živé dáta nie sú dostupné. Zobrazujú sa posledné známe polohy.',
@@ -334,6 +340,9 @@ const en: Copy = {
     `Train position corrected after a new ŽSR report (${km} km ${back ? 'back' : 'ahead'})`,
   toastTrainEnded: (trainNumber) => `Train ${trainNumber} finished its journey. Following stopped.`,
   toastPositionUpdating: "Updating the train's position to the latest",
+  toastDelayHold: (minutes) => `Delay rose to ${minutes} min, the train waits on the map for its next position`,
+  freshnessUpdated: (s) => (s < 60 ? `Updated ${s} s ago` : `Updated ${Math.round(s / 60)} min ago`),
+  freshnessOffline: 'No connection, showing the last data',
   alertsPill: 'ZSSK',
   trainCompositionButton: 'Composition',
   toastFeedLost: 'Live data unavailable. Showing the last known positions.',
@@ -450,6 +459,9 @@ const cs: Copy = {
     `Poloha vlaku upravena podle nového hlášení ŽSR (${km} km ${back ? 'zpět' : 'dopředu'})`,
   toastTrainEnded: (trainNumber) => `Vlak ${trainNumber} dokončil jízdu, sledování skončilo`,
   toastPositionUpdating: 'Poloha vlaku se aktualizuje na nejnovější',
+  toastDelayHold: (minutes) => `Zpoždění stouplo na ${minutes} min, vlak na mapě počká na novou polohu`,
+  freshnessUpdated: (s) => (s < 60 ? `Aktualizováno před ${s} s` : `Aktualizováno před ${Math.round(s / 60)} min`),
+  freshnessOffline: 'Bez spojení, zobrazují se poslední data',
   alertsPill: 'ZSSK',
   trainCompositionButton: 'Řazení',
   toastFeedLost: 'Živá data nejsou dostupná. Zobrazují se poslední známé polohy.',

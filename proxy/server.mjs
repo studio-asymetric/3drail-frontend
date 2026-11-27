@@ -61,7 +61,9 @@ const staticRoot = process.env.STATIC_ROOT
   : '';
 
 const detailCache = new Map();
-const DETAIL_CACHE_MS = 60_000;
+// A train's page carries every point it passes and ZSR's estimates ahead, newer than the position
+// feed: an open train asks every 20 s, so keep it no longer than that (else estimates lag a minute).
+const DETAIL_CACHE_MS = 15_000;
 const stationBoardCache = new Map();
 const STATION_BOARD_CACHE_MS = 45_000;
 

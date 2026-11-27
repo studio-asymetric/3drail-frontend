@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { MapScene } from './components/MapScene';
-import { abbreviationSteps, townOf } from './data/placeName';
+import { abbreviationSteps, shortStationName, townOf } from './data/placeName';
 import { applySeo } from './seo';
 import { vagonwebTrainUrl } from './data/vagonweb';
 import { DisruptionsPanel, describeDisruption } from './components/DisruptionsPanel';
@@ -31,6 +31,7 @@ import {
 import { REGION_ID, readStoredModes, regionsQuery, storeModes, vehicleModeOf, type VehicleMode } from './region';
 import { MainMenu } from './components/MainMenu';
 import { MetroLogo } from './components/MetroLogo';
+import { FreshnessPosition } from './components/FreshnessPosition';
 import { fetchTransitLines } from './data/transitLines';
 import { fetchTransitStops, stopKindsOf, type TransitStop } from './data/transitStops';
 import type { FeatureCollection } from 'geojson';
@@ -415,6 +416,12 @@ async function loadGtfsDataset(): Promise<GtfsDataset> {
   });
 }
 
+/** How often the live feed is fetched: a region's moves every 15 s (Brno's every few), Slovakia's source is slower. */
+const LIVE_REFRESH_MS = REGION_ID === 'sk' ? 45_000 : REGION_ID === 'jmk' ? 5_000 : 10_000;
+/** With a train open (or followed) the feed comes at least this often. */
+const LIVE_REFRESH_FOCUSED_MS = Math.min(LIVE_REFRESH_MS, 20_000);
+
+
 /** The header clock, ticking on its own so the rest of the page does not re-render each second. */
 function ClockLabel({ locale }: { locale: AppLocale }) {
   const [now, setNow] = useState(() => new Date());
@@ -527,25 +534,11 @@ const ClockIcon: React.FC = () => (
   </svg>
 );
 
-const InfoIcon: React.FC = () => (
-  <svg className="dock__status-icon" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-    <circle cx="7" cy="7" r="5.6" stroke="currentColor" strokeWidth="1.2" />
-    <path d="M7 6.3v3.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-    <circle cx="7" cy="4.5" r="0.75" fill="currentColor" />
-  </svg>
-);
-
 /** "5 min meškanie": the amount stands out, the rest is lighter. */
 function delayView(text: string): React.ReactNode {
+  // "+13 min": the clock and the colour already say it is a delay, the word only made the line long.
   const match = text.match(/^(\d+\s*min)(\s.*)?$/i);
-  return match ? (
-    <>
-      <strong>{match[1]}</strong>
-      {match[2] ?? ''}
-    </>
-  ) : (
-    text
-  );
+  return match ? <strong title={text}>+{match[1]}</strong> : text;
 }
 
 // The About article is only needed when opened: load it on demand.
@@ -617,6 +610,17 @@ const App: React.FC = () => {
   const stationBoardAbortRef = useRef<AbortController | null>(null);
   const bootPanelLoadRef = useRef(false);
   const [clock, setClock] = useState(() => new Date());
+  /** When the live feed last arrived, and whether the latest attempts failed (the freshness ring). */
+  const [feedFetchedAt, setFeedFetchedAt] = useState<number | null>(null);
+  const [feedOffline, setFeedOffline] = useState(false);
+  const [feedFetching, setFeedFetching] = useState(false);
+  /** When the next regular fetch of the live feed is due (the countdown on the live dot). */
+  const [feedNextAt, setFeedNextAt] = useState<number | null>(null);
+  const feedIntervalMs = focusedTrainNumber ? LIVE_REFRESH_FOCUSED_MS : LIVE_REFRESH_MS;
+  const feedIntervalRef = useRef(feedIntervalMs);
+  feedIntervalRef.current = feedIntervalMs;
+  /** Re-arms the feed timer when the interval changes (a train opened or closed). */
+  const rescheduleFeedRef = useRef<() => void>(() => undefined);
   const [following, setFollowing] = useState(false);
   const [searchHistory, setSearchHistory] = useState<SearchRef[]>(readSearchHistory);
   useEffect(() => {
@@ -827,7 +831,18 @@ const App: React.FC = () => {
     let requestId = 0;
     let haveTrains = false;
     let feedDown = false;
+    // The live dot turns into a spinner while the feed is being fetched.
     const refresh = async () => {
+      setFeedFetching(true);
+      try {
+        await load();
+      } finally {
+        if (mounted) {
+          setFeedFetching(false);
+        }
+      }
+    };
+    const load = async () => {
       const id = ++requestId;
       if (!haveTrains) {
         setStatusKind('loading');
@@ -847,6 +862,8 @@ const App: React.FC = () => {
             }
             const shown = live.filter((train) => modesRef.current.includes(vehicleModeOf(train.mode)));
             setTrains((current) => mergeTrainList(current, shown));
+            setFeedFetchedAt(Date.now());
+            setFeedOffline(false);
             setStatusMessage(t.trainsCount(shown.length));
             setStatusKind('success');
             setLoading(false);
@@ -865,6 +882,7 @@ const App: React.FC = () => {
       setLoading(false);
       if (haveTrains) {
         setStatusKind('success');
+        setFeedOffline(true);
         if (!feedDown) {
           feedDown = true;
           pushToast(t.toastFeedLost, 'feed-lost', 60_000);
@@ -880,9 +898,27 @@ const App: React.FC = () => {
     const early = REGION_ID === 'sk' ? [] : [2_500, 5_500].map((ms) => setTimeout(refresh, ms));
     // a region's live feed moves every 15 s (Brno's every few seconds); Slovakia's source is slower
     // a tab nobody looks at does not download the feed; coming back brings it up to date at once
-    const interval = setInterval(() => {
-      if (!document.hidden) refresh();
-    }, REGION_ID === 'sk' ? 45_000 : REGION_ID === 'jmk' ? 5_000 : 10_000);
+    // Its own timer, re-armed after each turn: the turn is shorter while a train is open.
+    let timer = 0;
+    let dueAt = 0;
+    const arm = (at: number) => {
+      window.clearTimeout(timer);
+      dueAt = at;
+      setFeedNextAt(at);
+      timer = window.setTimeout(() => {
+        // the next turn counts from when this fetch starts
+        arm(Date.now() + feedIntervalRef.current);
+        if (!document.hidden) refresh();
+      }, Math.max(0, at - Date.now()));
+    };
+    arm(Date.now() + feedIntervalRef.current);
+    rescheduleFeedRef.current = () => {
+      // a shorter turn now: the next fetch comes no later than one new turn from now
+      const sooner = Date.now() + feedIntervalRef.current;
+      if (sooner < dueAt) {
+        arm(sooner);
+      }
+    };
     const onVisible = () => {
       if (!document.hidden) refresh();
     };
@@ -890,10 +926,15 @@ const App: React.FC = () => {
     return () => {
       mounted = false;
       early.forEach(clearTimeout);
-      clearInterval(interval);
+      window.clearTimeout(timer);
+      rescheduleFeedRef.current = () => undefined;
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [service, t, useLiveApi, pushToast]);
+
+  useEffect(() => {
+    rescheduleFeedRef.current();
+  }, [feedIntervalMs]);
 
   const stopJourneyLoad = useCallback(() => {
     journeyAbortRef.current?.abort();
@@ -956,7 +997,7 @@ const App: React.FC = () => {
             }
           })
           .catch(() => undefined);
-      }, following ? 20_000 : 45_000);
+      }, 20_000);
     },
     [following, stopJourneyLoad]
   );
@@ -1422,6 +1463,12 @@ const App: React.FC = () => {
     },
     [locale, pushToast, t]
   );
+  const handleDelayHold = useCallback(
+    ({ train, delayMinutes }: { train: string; delayMinutes: number }) => {
+      pushToast(t.toastDelayHold(delayMinutes), `delayhold:${train}:${delayMinutes}`, 60_000);
+    },
+    [pushToast, t]
+  );
   const handlePositionUpdating = useCallback(
     ({ train }: { train: string; meters: number }) => {
       pushToast(t.toastPositionUpdating, `updating:${train}`, 25_000);
@@ -1466,6 +1513,10 @@ const App: React.FC = () => {
   const displayAbout =
     !displayAlerts && (aboutOpen || Boolean(leaveSnap?.about && !leaveSnap.train && !leaveSnap.station));
   const displayTrain = displayAbout || displayAlerts ? null : focusedTrain ?? leaveSnap?.train ?? null;
+  const freshnessLabels = useMemo(
+    () => ({ updated: t.freshnessUpdated, offline: t.freshnessOffline }),
+    [t]
+  );
   const displayStation =
     displayAbout || displayAlerts || displayTrain != null
       ? null
@@ -1621,10 +1672,10 @@ const App: React.FC = () => {
           centerOnTrainPosition();
         }}
       >
-        {displayTrain.currentStation}
+        {shortStationName(displayTrain.currentStation)}
       </button>
     ) : (
-      displayTrain.currentStation
+      shortStationName(displayTrain.currentStation)
     )
   ) : null;
   const followButton = focusedTrain ? (
@@ -1763,6 +1814,7 @@ const App: React.FC = () => {
           onTimelineProgress={setTimelineProgress}
           onFollowCorrection={handleFollowCorrection}
           onPositionUpdating={handlePositionUpdating}
+          onDelayHold={handleDelayHold}
           focusedTrainNumber={focusedTrainNumber}
           focusedRouteCursor={focusedTrain ? cursor : null}
           onTrainClick={handleTrainClick}
@@ -2180,10 +2232,21 @@ const App: React.FC = () => {
                   {lastPositionLink && (
                     <>
                       <span className="dock__status-dash" aria-hidden="true" />
-                      <span className="dock__last-position" title={t.lastPosition}>
-                        <InfoIcon />
+                      <FreshnessPosition
+                        fetchedAt={feedFetchedAt}
+                        intervalMs={feedIntervalMs}
+                        offline={feedOffline}
+                        fetching={feedFetching}
+                        nextAt={feedNextAt}
+                        labels={freshnessLabels}
+                        fullName={
+                          displayTrain.currentStation && shortStationName(displayTrain.currentStation) !== displayTrain.currentStation
+                            ? displayTrain.currentStation
+                            : undefined
+                        }
+                      >
                         {lastPositionLink}
-                      </span>
+                      </FreshnessPosition>
                     </>
                   )}
                 </p>
