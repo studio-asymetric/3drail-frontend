@@ -103,8 +103,13 @@ const EASE_BACK_SECONDS = 4;
  * Better to leave on time and be eased back if the train really is still standing.
  */
 const UNCONFIRMED_GRACE_SECONDS = 0;
-/** Margin taken off a delay read from ZSR's estimated station times (minute-rounded). */
-const ESTIMATE_OPTIMISM_SECONDS = 40;
+/**
+ * Margin taken off a delay read from ZSR's estimated station times. None: the map follows those
+ * estimates point by point, and a pill that left Bratislava-Rača 40 s before its estimated
+ * 16:39 read as "a minute early" (R 10722). Times still sit early in their minute (see
+ * DEPART_AFTER_SECONDS).
+ */
+const ESTIMATE_OPTIMISM_SECONDS = 0;
 /**
  * A train standing at a station (departure not confirmed) leaves no sooner than its real
  * arrival (timetable arrival + the reported delay) plus this short stay. ZSR sometimes keeps

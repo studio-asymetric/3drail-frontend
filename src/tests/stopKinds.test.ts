@@ -299,6 +299,39 @@ describe('JourneyAnimator follows ZSR estimates ahead', () => {
   });
 });
 
+describe('a station is not left before the estimated departure', () => {
+  // R 10722 at Bratislava-Rača: planned 16:04, estimated 16:39 (35 min late).
+  const t0 = 1_800_000_000;
+  const raw = {
+    n: '6',
+    sig: 'r',
+    line: encodePolyline([
+      { lat: 48.0, lng: 17.0 },
+      { lat: 48.5, lng: 17.0 },
+    ]),
+    ok: true,
+    at: [0, 20000] as Array<number | null>,
+    stops: [
+      [0, t0 - 60, t0, 0, 1],
+      [20000, t0 + 1200, null, 1, 1],
+    ] as Array<[number, number | null, number | null, number, number?]>,
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  it('stands until the estimated minute, then leaves', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(t0 * 1000);
+    const animator = new JourneyAnimator();
+    animator.setJourneys(new Map([['6', buildJourney(raw)!]]));
+    animator.setEstimate('6', 35 * 60);
+    animator.update([{ trainNumber: '6', delayMinutes: 34, rosterOrderCurrentStation: 0, departureConfirmed: false }]);
+    const departs = t0 + 35 * 60;
+    expect(animator.target('6', (departs - 20) * 1000)).toBe(0);
+    expect(animator.target('6', (departs + 30) * 1000)!).toBeGreaterThan(0);
+  });
+});
+
 describe('a train that arrived late and still stands at its station', () => {
   const t0 = 1_800_000_000;
   const raw = {
